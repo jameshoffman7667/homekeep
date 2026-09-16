@@ -1,0 +1,12 @@
+# Used only with: docker compose --profile https up
+#
+# Replace "homekeep.example.com" with your own domain name, pointed at
+# this machine's public IP (A/AAAA record). Caddy will automatically
+# request and renew a free HTTPS certificate for it via Let's Encrypt —
+# no manual certificate setup needed.
+#
+# Remember to also set COOKIE_SECURE=true in your .env once this is live.
+
+homekeep.example.com {
+    reverse_proxy homekeep:8080
+}
