@@ -11,7 +11,7 @@ services:
     container_name: homekeep
     restart: unless-stopped
     environment:
-      - PORT=8080
+      - PORT=${COOKIE_SECURE:8080}
       - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in your .env file (or in Portainer's stack environment variables) — see .env.example}
       # Leave COOKIE_SECURE unset/false for plain-HTTP local access.
       # Set to "true" once served over HTTPS (e.g. via the caddy profile
