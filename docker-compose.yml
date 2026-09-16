@@ -6,7 +6,7 @@ services:
     # `build:` is kept as a local fallback: if the image above hasn't
     # been pulled yet, `docker compose up --build` will build it from
     # the Dockerfile in this repo instead.
-    image: ghcr.io/OWNER/REPO:latest
+    image: ghcr.io/jameshoffman7667/homekeep:latest
     build: .
     container_name: homekeep
     restart: unless-stopped
