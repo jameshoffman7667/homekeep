@@ -21,7 +21,7 @@ services:
       - homekeep_data:/data
     ports:
       # Local web portal access: http://<this-machine's-LAN-IP>:8080
-      - "8080:8080"
+      - "4040:8080"
 
   # Optional: automatic-HTTPS reverse proxy for remote access (needed for
   # a fully installable Android PWA outside your own LAN). Only starts
