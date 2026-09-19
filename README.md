@@ -81,6 +81,7 @@ cd homekeep
 cp .env.example .env
 # Edit .env and set JWT_SECRET to a long random string, e.g.:
 #   openssl rand -hex 32
+# PORT defaults to 8080 — change it in .env if that port is already in use.
 
 docker compose up -d --build
 ```
@@ -94,7 +95,9 @@ The first build takes a few minutes (installing dependencies, compiling
 
 Open **http://localhost:8080** — or, from another device on the same
 Wi-Fi/LAN, **http://\<this-machine's-LAN-IP\>:8080** (find the IP with
-`ip addr` / `ifconfig` on Linux/macOS or `ipconfig` on Windows).
+`ip addr` / `ifconfig` on Linux/macOS or `ipconfig` on Windows). If you
+set a different `PORT` in `.env`, use that instead of 8080 throughout
+this document.
 
 The first time you open it, you'll be asked to create the **Owner**
 account. After that, sign in from any device on the network.
@@ -114,6 +117,7 @@ know where to pull it from — it doesn't need to build anything itself.
 5. Under **Environment variables**, add:
    - `JWT_SECRET` → a long random string (e.g. output of `openssl rand -hex 32`)
    - `COOKIE_SECURE` → `false` for LAN-only access, `true` if this stack sits behind HTTPS
+   - `PORT` → optional, defaults to `8080` if omitted; set this if that port is already in use on the host
 6. Click **Deploy the stack**. Portainer pulls
    `ghcr.io/OWNER/REPO:latest` (the value you set in
    `docker-compose.yml`) and starts the container.

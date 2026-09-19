@@ -6,12 +6,12 @@ services:
     # `build:` is kept as a local fallback: if the image above hasn't
     # been pulled yet, `docker compose up --build` will build it from
     # the Dockerfile in this repo instead.
-    image: ghcr.io/jameshoffman7667/homekeep
+    image: ghcr.io/OWNER/REPO:latest
     build: .
     container_name: homekeep
     restart: unless-stopped
     environment:
-      - PORT=8080
+      - PORT=${PORT:-8080}
       - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in your .env file (or in Portainer's stack environment variables) — see .env.example}
       # Leave COOKIE_SECURE unset/false for plain-HTTP local access.
       # Set to "true" once served over HTTPS (e.g. via the caddy profile
@@ -20,8 +20,10 @@ services:
     volumes:
       - homekeep_data:/data
     ports:
-      # Local web portal access: http://<this-machine's-LAN-IP>:8080
-      - "8080:8080"
+      # Set PORT in your .env (or Portainer's stack environment variables)
+      # to change this — both the host and container side move together.
+      # Local web portal access: http://<this-machine's-LAN-IP>:${PORT:-8080}
+      - "${PORT:-8080}:${PORT:-8080}"
 
   # Optional: automatic-HTTPS reverse proxy for remote access (needed for
   # a fully installable Android PWA outside your own LAN). Only starts
@@ -34,6 +36,9 @@ services:
     profiles: ["https"]
     depends_on:
       - homekeep
+    environment:
+      # Caddy substitutes {$PORT} inside Caddyfile using this.
+      - PORT=${PORT:-8080}
     ports:
       - "80:80"
       - "443:443"

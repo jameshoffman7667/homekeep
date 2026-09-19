@@ -8,5 +8,5 @@
 # Remember to also set COOKIE_SECURE=true in your .env once this is live.
 
 homekeep.example.com {
-    reverse_proxy homekeep:8080
+    reverse_proxy homekeep:{$PORT}
 }

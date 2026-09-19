@@ -28,10 +28,10 @@ module.exports = {
     { id: "pm_ignitor", assetId: "a_furnace", bomNodeId: "b_ignitor", title: "Inspect / replace ignitor", freqType: "Time-based", interval: "5", unit: "years", nextDue: "2029-10-02", estCost: "60", notes: "" },
   ],
   workRequests: [
-    { id: "wr_1", title: "Furnace ignitor clicking, won't light", description: "Hear repeated clicking from the utility room, furnace never actually lights.", assetId: "a_furnace", bomNodeId: "b_ignitor", locationId: "loc_util", requestedBy: "Jamie", dateSubmitted: "2026-09-05", priority: "Urgent", status: "Under Review", reviewNote: "", workOrderId: null },
+    { id: "wr_1", number: 1, title: "Furnace ignitor clicking, won't light", description: "Hear repeated clicking from the utility room, furnace never actually lights.", assetId: "a_furnace", bomNodeId: "b_ignitor", locationId: "loc_util", requestedBy: "Jamie", dateSubmitted: "2026-09-05", priority: "Urgent", status: "Under Review", reviewNote: "", workOrderId: null },
   ],
   workOrders: [
-    { id: "wo_1", title: "Replace furnace filter", type: "PM", status: "Completed", assetId: "a_furnace", bomNodeId: null, locationId: "loc_util", description: "Quarterly filter swap.", sourceRequestId: null, sourceBenchmarkId: null, scheduledDate: "2026-06-20", completedDate: "2026-06-20", cost: "19", vendorId: null, notes: "Used 16x25x1 pleated filter." },
+    { id: "wo_1", number: 1, title: "Replace furnace filter", type: "PM", status: "Completed", assetId: "a_furnace", bomNodeId: null, locationId: "loc_util", description: "Quarterly filter swap.", sourceRequestId: null, sourceBenchmarkId: null, sourcePmBaseId: null, sourceFixedDate: null, scheduledDate: "2026-06-20", requiredByDate: "2026-06-25", completedDate: "2026-06-20", cost: "19", vendorId: null, notes: "Used 16x25x1 pleated filter." },
   ],
   benchmarks: [
     { id: "bm_repaint", title: "Bedroom repaint", checklist: "Patch holes; sand; prime; two coats; reinstall outlet covers", estCost: "220", estTime: "6", notes: "Behr Marquee eggshell held up best last time.", vendorId: null, version: 1 },
@@ -42,4 +42,5 @@ module.exports = {
   inventory: [
     { id: "inv_filter", name: "16x25x1 Furnace Filter", assetId: "a_furnace", bomNodeId: null, qty: 2, reorderAt: 1 },
   ],
+  counters: { wo: 1, wr: 1 },
 };

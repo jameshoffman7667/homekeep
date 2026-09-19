@@ -27,6 +27,13 @@ COPY --from=frontend-build /app/frontend/dist ./public
 ENV DATA_DIR=/data
 RUN mkdir -p /data
 
-EXPOSE 8080
-ENV PORT=8080
+# Default port if none is supplied at runtime. docker-compose.yml passes
+# PORT as an environment variable at `docker compose up` time, which
+# overrides this — that's the normal way to change it. This ARG only
+# matters if you build/run the image directly without compose and want
+# a different built-in default (--build-arg PORT=3000).
+ARG PORT=8080
+ENV PORT=$PORT
+EXPOSE $PORT
+
 CMD ["node", "server.js"]
