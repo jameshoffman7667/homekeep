@@ -183,25 +183,116 @@ Two levels of access:
 
 If you want to use HomeKeep from outside your home (e.g. household
 members checking work requests while out), you need HTTPS and a way for
-traffic to reach your server. Two common options:
+traffic to reach your server.
 
-**Option A — you own a domain name and can forward ports 80/443:**
+### Option A — dedicated (sub)domain, e.g. `homekeep.hoffmanhouse.ca`
 
-1. Point an A/AAAA DNS record at your home's public IP (or use a
-   dynamic-DNS service if your IP changes).
-2. Forward ports 80 and 443 on your router to this machine.
-3. Edit `Caddyfile` and replace `homekeep.example.com` with your domain.
+The simplest path — no frontend rebuild needed, works with the default
+image as-is.
+
+1. In your DNS provider, add an A (and/or AAAA) record for
+   `homekeep.hoffmanhouse.ca` pointing at your home's public IP (or use a
+   dynamic-DNS service if your IP isn't static).
+2. On your router, forward ports 80 and 443 to the machine running Docker.
+3. In `Caddyfile`, uncomment **Pattern A** and set it to your subdomain:
+   ```
+   homekeep.hoffmanhouse.ca {
+       reverse_proxy homekeep:{$PORT}
+   }
+   ```
 4. In `.env`, set `COOKIE_SECURE=true`.
-5. Start with the HTTPS profile enabled:
+5. Start everything, including the reverse proxy:
    ```bash
    docker compose --profile https up -d --build
    ```
    Caddy automatically requests and renews a free HTTPS certificate via
    Let's Encrypt — no manual certificate handling.
 
-**Option B — no domain / don't want to open ports:** use a tunneling
-service such as [Tailscale](https://tailscale.com/) (puts your phone and
-server on a private encrypted network — simplest for a household) or a
+### Option B — a subpath on an existing domain, e.g. `hoffmanhouse.ca/homekeep`
+
+This is what you want if `hoffmanhouse.ca` already hosts (or will host)
+other things and you'd rather not use a subdomain. It needs one extra
+step compared to Option A: **a single-page app has to be told it's being
+served from a subpath**, or it tries to load its files from the domain
+root and breaks (blank page, missing icons, failed logins). This repo's
+build already supports this via the `VITE_BASE_PATH` setting — you just
+need to turn it on and rebuild.
+
+**Step by step:**
+
+1. **Point DNS at your home server.** In your DNS provider (wherever
+   `hoffmanhouse.ca` is registered/managed), add an A record (and AAAA if
+   you have an IPv6 address) for `hoffmanhouse.ca` — or the subdomain
+   you're actually using for your main site — pointing at your home's
+   public IP address. If your ISP doesn't give you a static IP, use a
+   dynamic-DNS updater instead of a plain A record.
+
+2. **Forward ports on your router.** Forward external ports **80** and
+   **443** to the internal IP address of the machine running Docker.
+   Both are required — port 80 for the initial Let's Encrypt
+   verification, port 443 for HTTPS traffic itself.
+
+3. **Build the image with the subpath baked in.** In `.env`, add:
+   ```
+   VITE_BASE_PATH=/homekeep/
+   ```
+   (leading *and* trailing slash matter). Then build — note `build`,
+   not just `up`, so the frontend actually gets rebuilt with this setting:
+   ```bash
+   docker compose build homekeep
+   ```
+
+4. **Configure Caddy for the subpath.** Edit `Caddyfile`: uncomment
+   **Pattern B** and set your real domain:
+   ```
+   hoffmanhouse.ca {
+       handle_path /homekeep/* {
+           reverse_proxy homekeep:{$PORT}
+       }
+       # ...anything else you host at hoffmanhouse.ca goes here...
+   }
+   ```
+   `handle_path` strips the `/homekeep` prefix before forwarding to the
+   container, so the app (now built knowing it lives under `/homekeep/`)
+   and the container agree on where things are.
+
+5. **Set `COOKIE_SECURE=true`** in `.env`, since this will now be served
+   over HTTPS.
+
+6. **Start everything:**
+   ```bash
+   docker compose --profile https up -d
+   ```
+   (You already built the image with the right base path in step 3, so
+   no `--build` needed here — just don't run a plain `docker compose
+   build` again without `VITE_BASE_PATH` set, or it'll silently rebuild
+   back to a root-path image.)
+
+7. **Verify:** visit `https://hoffmanhouse.ca/homekeep/` in a browser.
+   Caddy will obtain a certificate automatically on first request (this
+   can take a few seconds). Check `docker compose logs caddy` if it
+   doesn't come up right away.
+
+**If you later want to remove the subpath and go back to root or a
+subdomain:** just unset `VITE_BASE_PATH` (or set it back to `/`) and
+run `docker compose build homekeep` again — nothing else in the app
+needs to change either way.
+
+**If you're deploying this via Portainer** (see §4) rather than plain
+Docker Compose on the command line: the image published to GHCR is
+always built with the default root path, so a subpath deployment needs
+Portainer to build the image itself rather than pull it. When adding
+the stack, set the build method to build from the Dockerfile (not just
+pull `image:`), and add `VITE_BASE_PATH=/homekeep/` as a build argument
+if your Portainer version exposes that option — otherwise, build the
+image once on the command line as in step 3 above, push it to your own
+registry, and point Portainer's `image:` at that instead.
+
+### Option C — no domain, or don't want to open ports
+
+Use a tunneling service such as [Tailscale](https://tailscale.com/) (puts
+your phone and server on a private encrypted network — simplest for a
+household) or a
 [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
 pointed at `http://localhost:8080`. Either gives you a stable HTTPS URL
 without router configuration. Set `COOKIE_SECURE=true` once traffic

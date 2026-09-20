@@ -71,9 +71,12 @@ app.get("/api/auth/me", requireAuth, (req, res) => {
 });
 
 /* -------------------------------------------------------------
-   Household member management (Owner only)
+   Household member management. Listing is open to any
+   authenticated user (work orders need to offer an Executor
+   picker built from this list); creating/removing accounts stays
+   Owner-only — that UI only lives on the Owner Tools page anyway.
 ------------------------------------------------------------- */
-app.get("/api/users", requireAuth, requireOwner, (req, res) => {
+app.get("/api/users", requireAuth, (req, res) => {
   res.json(db.prepare("SELECT id, username, role, created_at FROM users ORDER BY created_at").all());
 });
 
@@ -82,8 +85,8 @@ app.post("/api/users", requireAuth, requireOwner, (req, res) => {
   if (!username || !password || password.length < 6) {
     return res.status(400).json({ error: "Username and a password of at least 6 characters are required" });
   }
-  if (!["Owner", "Household Member"].includes(role)) {
-    return res.status(400).json({ error: "Role must be Owner or Household Member" });
+  if (!["Owner", "Manager", "Executor", "Guest"].includes(role)) {
+    return res.status(400).json({ error: "Role must be Owner, Manager, Executor, or Guest" });
   }
   const existing = db.prepare("SELECT id FROM users WHERE username = ?").get(username.trim());
   if (existing) return res.status(400).json({ error: "That username is already taken" });

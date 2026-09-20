@@ -1,5 +1,14 @@
+// Vite injects BASE_URL from the `base` config value at build time (always
+// ends with a trailing slash — "/" for a normal root deploy, "/homekeep/"
+// for a subpath deploy). Every API path below is written as "/api/..." for
+// readability and rewritten to sit under that base here, in one place.
+const BASE_URL = import.meta.env.BASE_URL;
+function withBase(path) {
+  return BASE_URL + path.replace(/^\//, "");
+}
+
 async function request(path, options) {
-  const res = await fetch(path, {
+  const res = await fetch(withBase(path), {
     credentials: "include",
     headers: { "Content-Type": "application/json" },
     ...options,

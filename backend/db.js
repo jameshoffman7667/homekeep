@@ -15,7 +15,7 @@ db.exec(`
     id TEXT PRIMARY KEY,
     username TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
-    role TEXT NOT NULL CHECK(role IN ('Owner','Household Member')),
+    role TEXT NOT NULL CHECK(role IN ('Owner','Manager','Executor','Guest')),
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
@@ -24,5 +24,15 @@ db.exec(`
     data TEXT NOT NULL
   );
 `);
+
+// Migration: the "Household Member" role was renamed to "Executor".
+// SQLite CHECK constraints only apply to new writes, so existing rows
+// with the old role name would otherwise sit there un-selectable by any
+// UI that only offers the new role names.
+try {
+  db.prepare("UPDATE users SET role = 'Executor' WHERE role = 'Household Member'").run();
+} catch (e) {
+  // ignore — harmless if the column/table doesn't have any such rows yet
+}
 
 module.exports = db;

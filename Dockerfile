@@ -4,6 +4,11 @@ WORKDIR /app/frontend
 COPY frontend/package.json ./
 RUN npm install
 COPY frontend/ ./
+# Leave unset for a normal root deployment. Set to something like
+# "/homekeep/" (leading AND trailing slash) to build the app for serving
+# under a subpath behind a reverse proxy — see README.md.
+ARG VITE_BASE_PATH=/
+ENV VITE_BASE_PATH=$VITE_BASE_PATH
 RUN npm run build
 
 # ---- Stage 2: backend + built frontend, single runnable image ----

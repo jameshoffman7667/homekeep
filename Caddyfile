@@ -1,12 +1,27 @@
 # Used only with: docker compose --profile https up
 #
-# Replace "homekeep.example.com" with your own domain name, pointed at
-# this machine's public IP (A/AAAA record). Caddy will automatically
-# request and renew a free HTTPS certificate for it via Let's Encrypt —
-# no manual certificate setup needed.
-#
-# Remember to also set COOKIE_SECURE=true in your .env once this is live.
+# Two common patterns — use whichever matches how you want to expose
+# the app, and delete the other. See README.md for the full walkthrough.
 
-homekeep.example.com {
-    reverse_proxy homekeep:{$PORT}
-}
+# ---- Pattern A: a dedicated (sub)domain, e.g. homekeep.example.com ----
+# Simplest option — no frontend rebuild needed. Caddy automatically
+# requests and renews a free HTTPS certificate via Let's Encrypt.
+#
+# homekeep.example.com {
+#     reverse_proxy homekeep:{$PORT}
+# }
+
+# ---- Pattern B: a subpath on an existing domain, e.g. example.com/homekeep ----
+# Requires building the image with VITE_BASE_PATH=/homekeep/ set in .env
+# first (see README.md) — an SPA built for the root path won't load its
+# assets correctly from a subpath otherwise. handle_path strips the
+# "/homekeep" prefix before forwarding, so the container itself still
+# just sees plain requests, same as a root deployment.
+#
+# example.com {
+#     handle_path /homekeep/* {
+#         reverse_proxy homekeep:{$PORT}
+#     }
+#     # ...your other site content/routes can go here...
+# }
+

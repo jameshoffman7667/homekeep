@@ -5,9 +5,13 @@ services:
     # Replace OWNER/REPO with your actual GitHub owner/repo (lowercase).
     # `build:` is kept as a local fallback: if the image above hasn't
     # been pulled yet, `docker compose up --build` will build it from
-    # the Dockerfile in this repo instead.
-    image: ghcr.io/jameshoffman7667/homekeep
-    build: .
+    # the Dockerfile in this repo instead. It's also how you build a
+    # subpath-deployment image — see VITE_BASE_PATH in .env.example.
+    image: ghcr.io/OWNER/REPO:latest
+    build:
+      context: .
+      args:
+        VITE_BASE_PATH: ${VITE_BASE_PATH:-/}
     container_name: homekeep
     restart: unless-stopped
     environment:

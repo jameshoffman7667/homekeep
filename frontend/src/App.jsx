@@ -4,16 +4,13 @@ import {
   Users, DollarSign, Plus, ChevronRight, ChevronDown, X,
   Check, AlertTriangle, Bell, Menu, Trash2, Pencil, ArrowRight,
   Layers, Search, Boxes, ChevronLeft, Loader2, LogOut, UserPlus, Shield,
-  Calendar, FileDown, FileUp,
+  Calendar, FileDown, FileUp, Info, Archive, Link as LinkIcon,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { api } from "./api.js";
 
 /* ============================================================
-   DESIGN TOKENS — a field-service / toolbox identity: a
-   blueprint navy for structure, tool-orange for action and
-   urgency, a brass-olive for completed/verified states, on a
-   cool utility-room backdrop.
+   DESIGN TOKENS
 ============================================================ */
 const C = {
   bg: "#E5E8E2",
@@ -52,15 +49,17 @@ const inputStyle = {
   background: "#fff",
   outline: "none",
 };
-const labelStyle = {
-  display: "block",
-  fontFamily: FONT_BODY,
-  fontSize: 11.5,
-  fontWeight: 600,
-  color: C.inkSoft,
-  marginBottom: 4,
-  letterSpacing: "0.01em",
-};
+function fieldLabelStyle(required) {
+  return {
+    display: "block",
+    fontFamily: FONT_BODY,
+    fontSize: 11.5,
+    fontWeight: required ? 700 : 400,
+    color: required ? C.rust : C.ink,
+    marginBottom: 4,
+    letterSpacing: "0.01em",
+  };
+}
 
 const GlobalStyle = () => (
   <style>{`
@@ -73,26 +72,23 @@ const GlobalStyle = () => (
     .hk-btn:hover { filter: brightness(0.94); }
     .hk-row:hover { background: ${C.panelAlt}; }
     .hk-nav-item:hover { background: rgba(255,255,255,0.08); }
+    .hk-link:hover { text-decoration: underline; }
   `}</style>
 );
 
 /* ============================================================
-   NOTE: sample/seed data lives on the backend (backend/seed.js)
-   and is written to the database the first time an Owner
-   completes setup. The frontend has no copy of its own.
-============================================================ */
-
-/* ============================================================
-   HELPERS
+   HELPERS & CONSTANTS
 ============================================================ */
 const LOCATION_LEVELS = ["Property", "Structure", "Floor", "Room", "Area", "Sub-area"];
 const BOM_LEVELS = ["Component", "Sub-component", "Part"];
 const WO_TYPES = ["PM", "PM Base", "Benchmark", "Corrective", "Unplanned"];
 const WO_STATUSES = ["Open", "In Progress", "Completed", "Verified"];
-const PRIORITIES = ["Urgent", "Soon", "When convenient"];
+const PRIORITIES = ["High", "Medium", "Low"];
 const FREQUENCY_UNITS = ["days", "weeks", "months", "years"];
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const ROLES = ["Owner", "Manager", "Executor", "Guest"];
+const VERIFIED_ARCHIVE_DAYS = 30;
 
 const WR_STATUS_COLORS = {
   Submitted: C.navy, "Under Review": C.gold, Approved: C.olive,
@@ -100,6 +96,20 @@ const WR_STATUS_COLORS = {
 };
 const WO_TYPE_COLORS = { PM: C.navy, "PM Base": C.teal, Benchmark: C.gold, Corrective: C.orange, Unplanned: C.rust };
 const WO_STATUS_COLORS = { Open: C.orange, "In Progress": C.gold, Completed: C.olive, Verified: C.navy, Active: C.teal };
+const PRIORITY_COLORS = { High: C.rust, Medium: C.gold, Low: C.inkSoft };
+const PRIORITY_SOFT = { High: C.rustSoft, Medium: C.goldSoft, Low: C.panelAlt };
+
+function isAdmin(role) {
+  return role === "Owner" || role === "Manager";
+}
+function canWrite(role) {
+  return role !== "Guest";
+}
+function canDelete(role, item, currentUser) {
+  if (role === "Owner") return true;
+  if (role === "Manager") return !!item && item.createdBy === currentUser;
+  return false;
+}
 
 function uid(prefix) {
   return prefix + "_" + Math.random().toString(36).slice(2, 9);
@@ -146,9 +156,6 @@ function nameOf(list, id) {
   const f = list.find((x) => x.id === id);
   return f ? f.name : null;
 }
-
-// Depth of a location node (0 = top level). Passing a falsy id (no
-// parent) returns -1, so a brand-new top-level node comes out at depth 0.
 function depthOf(locations, id) {
   if (!id) return -1;
   const map = Object.fromEntries(locations.map((l) => [l.id, l]));
@@ -162,14 +169,10 @@ function depthOf(locations, id) {
   }
   return depth;
 }
-// The level a new location should default to, based on how deep its
-// parent sits: top level → Property, its children → Structure, then
-// Floor, Room, Area, Sub-area (and Sub-area again for anything deeper).
 function defaultLevelForParent(locations, parentId) {
   const childDepth = depthOf(locations, parentId) + 1;
   return LOCATION_LEVELS[Math.min(childDepth, LOCATION_LEVELS.length - 1)];
 }
-// Every location id "at or below" rootId in the hierarchy (root included).
 function descendantIds(locations, rootId) {
   const result = new Set([rootId]);
   let changed = true;
@@ -185,14 +188,10 @@ function descendantIds(locations, rootId) {
   return result;
 }
 
-function formatWoNum(n) {
-  return "WO-" + String(n || 0).padStart(4, "0");
-}
-function formatWrNum(n) {
-  return "WR-" + String(n || 0).padStart(4, "0");
-}
+function formatWoNum(n) { return "WO-" + String(n || 0).padStart(4, "0"); }
+function formatWrNum(n) { return "WR-" + String(n || 0).padStart(4, "0"); }
+function formatPartNum(n) { return "PT-" + String(n || 0).padStart(4, "0"); }
 
-// Date arithmetic for PM Base generation.
 function addInterval(dateISO, value, unit) {
   const d = new Date((dateISO || todayISO()) + "T00:00:00");
   const n = Number(value) || 0;
@@ -202,8 +201,6 @@ function addInterval(dateISO, value, unit) {
   else if (unit === "years") d.setFullYear(d.getFullYear() + n);
   return d.toISOString().slice(0, 10);
 }
-// Next calendar occurrence of month/day on/after fromISO (this year if
-// it hasn't happened yet, otherwise next year).
 function nextFixedOccurrence(month, day, fromISO) {
   const from = new Date((fromISO || todayISO()) + "T00:00:00");
   let year = from.getFullYear();
@@ -219,43 +216,39 @@ function sameDateNextYear(dateISO) {
   d.setFullYear(d.getFullYear() + 1);
   return d.toISOString().slice(0, 10);
 }
-
-// Push a new PM work order copied from a PM Base template.
 function spawnPmInstance(d, base, opts) {
   const afterDateISO = opts.afterDateISO;
   const fixedDate = opts.fixedDate;
   const requiredByDate = fixedDate
     ? nextFixedOccurrence(fixedDate.month, fixedDate.day, afterDateISO)
     : addInterval(afterDateISO, base.frequencyValue, base.frequencyUnit);
-  d.counters = d.counters || { wo: 0, wr: 0 };
+  d.counters = d.counters || { wo: 0, wr: 0, part: 0 };
   d.counters.wo += 1;
   d.workOrders.push({
     id: uid("wo"), number: d.counters.wo, title: base.title, type: "PM", status: "Open",
     assetId: base.assetId, bomNodeId: base.bomNodeId, locationId: base.locationId,
     description: base.description, sourceRequestId: null, sourceBenchmarkId: null,
     sourcePmBaseId: base.id, sourceFixedDate: fixedDate || null,
-    scheduledDate: "", requiredByDate, completedDate: null,
-    cost: "", vendorId: base.vendorId || null, notes: "",
+    priority: base.priority || "Medium", executorId: base.executorId || "",
+    scheduledDate: "", requiredByDate, completedDate: null, verifiedDate: null,
+    cost: "", vendorId: base.vendorId || null, notes: "", partIds: [], createdBy: base.createdBy || null,
   });
 }
-// Called when a PM generated from a base is marked Completed — spawns
-// the next occurrence. Fixed-schedule PMs advance exactly one year from
-// their own required date ("regardless of when the last was completed");
-// non-fixed PMs count the frequency forward from the completion date.
 function regeneratePmAfterCompletion(d, completedWO) {
   const base = d.workOrders.find((w) => w.id === completedWO.sourcePmBaseId && w.type === "PM Base");
   if (!base) return;
   if (base.pmMode === "Fixed" && completedWO.sourceFixedDate) {
     const requiredByDate = sameDateNextYear(completedWO.requiredByDate || todayISO());
-    d.counters = d.counters || { wo: 0, wr: 0 };
+    d.counters = d.counters || { wo: 0, wr: 0, part: 0 };
     d.counters.wo += 1;
     d.workOrders.push({
       id: uid("wo"), number: d.counters.wo, title: base.title, type: "PM", status: "Open",
       assetId: base.assetId, bomNodeId: base.bomNodeId, locationId: base.locationId,
       description: base.description, sourceRequestId: null, sourceBenchmarkId: null,
       sourcePmBaseId: base.id, sourceFixedDate: completedWO.sourceFixedDate,
-      scheduledDate: "", requiredByDate, completedDate: null,
-      cost: "", vendorId: base.vendorId || null, notes: "",
+      priority: base.priority || "Medium", executorId: base.executorId || "",
+      scheduledDate: "", requiredByDate, completedDate: null, verifiedDate: null,
+      cost: "", vendorId: base.vendorId || null, notes: "", partIds: [], createdBy: base.createdBy || null,
     });
   } else {
     spawnPmInstance(d, base, { afterDateISO: completedWO.completedDate || todayISO(), fixedDate: null });
@@ -265,10 +258,10 @@ function regeneratePmAfterCompletion(d, completedWO) {
 /* ============================================================
    SMALL UI PRIMITIVES
 ============================================================ */
-function Field({ label, children }) {
+function Field({ label, required, children }) {
   return (
     <div style={{ marginBottom: 12 }}>
-      <label style={labelStyle}>{label}</label>
+      <label style={fieldLabelStyle(required)}>{label}{required ? " *" : ""}</label>
       {children}
     </div>
   );
@@ -278,16 +271,9 @@ function Tag({ text, color, soft }) {
   return (
     <span
       style={{
-        display: "inline-block",
-        fontFamily: FONT_BODY,
-        fontSize: 11,
-        fontWeight: 700,
-        padding: "3px 8px",
-        borderRadius: 3,
-        color,
-        background: soft,
-        whiteSpace: "nowrap",
-        letterSpacing: "0.01em",
+        display: "inline-block", fontFamily: FONT_BODY, fontSize: 11, fontWeight: 700,
+        padding: "3px 8px", borderRadius: 3, color, background: soft,
+        whiteSpace: "nowrap", letterSpacing: "0.01em",
       }}
     >
       {text}
@@ -297,16 +283,9 @@ function Tag({ text, color, soft }) {
 
 function Btn({ children, onClick, variant, small, type, disabled, title }) {
   const base = {
-    fontFamily: FONT_BODY,
-    fontWeight: 600,
-    fontSize: small ? 12.5 : 13.5,
-    padding: small ? "6px 10px" : "9px 14px",
-    borderRadius: 3,
-    border: "1px solid transparent",
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 6,
-    opacity: disabled ? 0.5 : 1,
+    fontFamily: FONT_BODY, fontWeight: 600, fontSize: small ? 12.5 : 13.5,
+    padding: small ? "6px 10px" : "9px 14px", borderRadius: 3, border: "1px solid transparent",
+    display: "inline-flex", alignItems: "center", gap: 6, opacity: disabled ? 0.5 : 1,
   };
   let style;
   if (variant === "primary") style = { ...base, background: C.orange, color: "#fff" };
@@ -315,11 +294,8 @@ function Btn({ children, onClick, variant, small, type, disabled, title }) {
   else style = { ...base, background: C.navy, color: "#fff" };
   return (
     <button
-      title={title}
-      type={type || "button"}
-      disabled={disabled}
-      onClick={disabled ? undefined : onClick}
-      className="hk-btn"
+      title={title} type={type || "button"} disabled={disabled}
+      onClick={disabled ? undefined : onClick} className="hk-btn"
       style={{ ...style, cursor: disabled ? "not-allowed" : "pointer" }}
     >
       {children}
@@ -351,9 +327,7 @@ function Modal({ title, onClose, children, wide }) {
 }
 
 /* ============================================================
-   DIALOG SYSTEM — in-app confirm/alert/prompt replacements,
-   used everywhere instead of the native browser dialogs so the
-   look stays consistent.
+   DIALOG SYSTEM
 ============================================================ */
 const DialogContext = createContext(null);
 function useDialog() {
@@ -383,13 +357,23 @@ function DialogHost({ dialog, onResult }) {
       </Modal>
     );
   }
+  if (dialog.type === "saveExit") {
+    return (
+      <Modal title="Unsaved changes" onClose={() => onResult("cancel")}>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, color: C.ink, marginBottom: 16 }}>{dialog.message}</div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
+          <Btn variant="ghost" onClick={() => onResult("cancel")}>Cancel</Btn>
+          <Btn variant="danger" onClick={() => onResult("discard")}>Discard changes</Btn>
+          <Btn variant="primary" onClick={() => onResult("save")}>Save</Btn>
+        </div>
+      </Modal>
+    );
+  }
   return (
     <Modal title="Name it" onClose={() => onResult(null)}>
       <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, color: C.ink, marginBottom: 10 }}>{dialog.message}</div>
       <input
-        style={inputStyle}
-        autoFocus
-        value={text}
+        style={inputStyle} autoFocus value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => { if (e.key === "Enter") onResult(text); }}
       />
@@ -421,6 +405,7 @@ function DialogProvider({ children }) {
     confirm: (message) => open("confirm", message),
     alertMsg: (message) => open("alert", message),
     promptMsg: (message, def) => open("prompt", message, def),
+    saveExit: (message) => open("saveExit", message),
   };
 
   return (
@@ -431,6 +416,17 @@ function DialogProvider({ children }) {
   );
 }
 
+// Shared helper for "close a dirty form" behavior: pass the modal's close
+// handler through this instead of calling it directly.
+function useCloseGuard(dialog) {
+  return async (isDirty, onSave, onDiscard) => {
+    if (!isDirty) { onDiscard(); return; }
+    const choice = await dialog.saveExit("You have unsaved changes. Save them before closing?");
+    if (choice === "save") await onSave();
+    else if (choice === "discard") onDiscard();
+  };
+}
+
 function Panel({ children, style }) {
   return (
     <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 4, ...style }}>
@@ -439,14 +435,44 @@ function Panel({ children, style }) {
   );
 }
 
-function SectionHeader({ title, subtitle, action }) {
+function InfoBlock({ label, text, items }) {
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ fontFamily: FONT_HEAD, fontSize: 12, fontWeight: 700, color: C.navy, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>{label}</div>
+      {text && <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.ink, lineHeight: 1.5 }}>{text}</div>}
+      {items && (
+        <ul style={{ margin: 0, paddingLeft: 18, fontFamily: FONT_BODY, fontSize: 13, color: C.ink, lineHeight: 1.6 }}>
+          {items.map((it, i) => <li key={i}>{it}</li>)}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function SectionHeader({ title, subtitle, action, info }) {
+  const [showInfo, setShowInfo] = useState(false);
   return (
     <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
       <div>
-        <h2 style={{ fontFamily: FONT_HEAD, fontSize: 22, fontWeight: 700, color: C.ink, margin: 0 }}>{title}</h2>
+        <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+          <h2 style={{ fontFamily: FONT_HEAD, fontSize: 22, fontWeight: 700, color: C.ink, margin: 0 }}>{title}</h2>
+          {info && (
+            <button onClick={() => setShowInfo(true)} title={`About ${title}`} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkFaint, display: "flex", padding: 2 }}>
+              <Info size={16} />
+            </button>
+          )}
+        </div>
         {subtitle && <p style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.inkSoft, margin: "4px 0 0" }}>{subtitle}</p>}
       </div>
       {action}
+      {showInfo && info && (
+        <Modal title={`About ${title}`} onClose={() => setShowInfo(false)}>
+          <InfoBlock label="Purpose" text={info.purpose} />
+          <InfoBlock label="Workflow" text={info.workflow} />
+          <InfoBlock label="Permissions" text={info.permissions} />
+          <InfoBlock label="Features" items={info.features} />
+        </Modal>
+      )}
     </div>
   );
 }
@@ -460,12 +486,77 @@ function Empty({ text }) {
 }
 
 /* ============================================================
-   LOCATION HIERARCHY NAV — a reusable, expandable location tree
-   used to filter Assets, Work Orders, and Work Requests by
-   location-or-below.
+   PAGE INFO CONTENT
 ============================================================ */
-function LocationNavTree({ data, selectedId, onSelect, title }) {
-  const [expanded, setExpanded] = useState(() => new Set(data.locations.map((l) => l.id)));
+const PAGE_INFO = {
+  dashboard: {
+    purpose: "A single, at-a-glance summary of what needs attention across the household — open work, pending requests, and what's coming up.",
+    workflow: "Numbers and lists update live as work requests and orders change status. Click a stat card or list item to jump straight to the matching filtered view.",
+    permissions: "Everyone sees the same dashboard — nothing here is hidden by role.",
+    features: ["Stat cards for open work, pending requests, overdue work, and work due in 30 days", "Upcoming Work Orders list", "Work requests awaiting review", "7-day look-ahead strip", "Warranty-expiration warnings"],
+  },
+  locations: {
+    purpose: "The physical map of the household — every building, floor, room, and area — that everything else in HomeKeep is organized around.",
+    workflow: "Build the tree top-down: a Property contains Structures, which contain Floors, Rooms, Areas, and Sub-areas. A new node defaults to the next level down from wherever you clicked +, though you can change it.",
+    permissions: "Owners and Managers can add, rename, and remove locations. Everyone can view and use the tree to filter other pages.",
+    features: ["Expandable/collapsible hierarchy tree with expand-all/collapse-all", "Depth-aware default level when adding a node", "Asset counts per location", "Guards against deleting a location that still has children or assets"],
+  },
+  assets: {
+    purpose: "A registry of everything in the home worth maintaining, and — for the ones worth tracking in detail — the components and parts that make them up.",
+    workflow: "Add an asset and assign it a location, then optionally build out its Bill of Materials: components, sub-components, and parts, each with its own manufacturer, model, and install date.",
+    permissions: "Owners and Managers can add, edit, and archive assets. Owners, Managers, and Executors can edit BOM details. Everyone can browse.",
+    features: ["Location hierarchy filter with expand/collapse", "Full Bill of Materials tree per asset", "Linked PM tasks and work order history", "Warranty and purchase tracking"],
+  },
+  requests: {
+    purpose: "The inbox for anything in the household that needs attention, before it becomes scheduled work.",
+    workflow: "Anyone submits a request describing the issue and when it's needed by; an Owner or Manager reviews it and converts it into a work order, merges it into an existing one, asks for more detail, or declines it.",
+    permissions: "Everyone can submit a request and edit their own while it's awaiting review. Owners and Managers can edit or delete any request and can review, convert, merge, or decline.",
+    features: ["Required-by date and priority", "Suggested work order type and suggested parts", "Location hierarchy, priority, and status filters", "Search by title or number"],
+  },
+  orders: {
+    purpose: "The record of all maintenance work in the household — planned, recurring, and reactive — from the moment it's opened to the moment it's verified done.",
+    workflow: "Work orders move through Open, In Progress, Completed, and Verified. They're created directly, converted from an approved request, or generated automatically from a PM Base template.",
+    permissions: "Owners, Managers, and Executors can create and update work orders. Owners can delete any; Managers can delete ones they created.",
+    features: ["Kanban board by status, with a 30-day verified archive", "PM Base templates for recurring maintenance", "Parts attachment with location/component-scoped search", "Executor assignment", "Location, priority, and text search filters"],
+  },
+  schedule: {
+    purpose: "A calendar view of when maintenance work is planned to happen, so you can see what's coming up at a glance.",
+    workflow: "Work orders with a scheduled date appear on that date. Click one to jump to its details.",
+    permissions: "Everyone can view the schedule.",
+    features: ["Month navigation", "Location hierarchy filter", "Color-coded by work order type", "Click-through to work order detail"],
+  },
+  vendors: {
+    purpose: "The contractors and service providers you actually call on, kept in one place instead of scattered across texts and receipts.",
+    workflow: "Add a vendor once; reference them from any work order or benchmark from then on.",
+    permissions: "Owners and Managers can add, edit, and remove vendors. Everyone can view and select them.",
+    features: ["Contact info and specialty", "Optional website link", "Referenced directly from work orders and benchmarks"],
+  },
+  parts: {
+    purpose: "Every spare part and consumable you keep on hand, and what asset or component it belongs to.",
+    workflow: "Add a part with its own part number, then track quantity on hand and a reorder threshold. Parts can be attached to work orders and suggested on work requests.",
+    permissions: "Owners and Managers can add, edit, and remove parts. Everyone can view and adjust quantity on hand.",
+    features: ["Unique part numbers", "Manufacturer and manufacturer part number", "Cost and purchase link", "Low-stock flagging", "Search by number, name, or manufacturer when attaching to work"],
+  },
+  budget: {
+    purpose: "What the household's upkeep is actually costing, broken down by category, drawn straight from logged work order costs.",
+    workflow: "Costs logged on work orders roll up automatically — there's nothing separate to maintain here.",
+    permissions: "Everyone can view the budget.",
+    features: ["Total logged spend", "Spend by asset category", "Always current, no manual entry"],
+  },
+  owner: {
+    purpose: "Administrative controls for the household that shouldn't be scattered through the rest of the app — accounts, backups, and record clean-up.",
+    workflow: "Manage who has access and what role they hold, export or import the full household record, and remove a work order or request that was created in error.",
+    permissions: "Owners only. Managers have elevated rights elsewhere in the app, but not on this page.",
+    features: ["Add/remove household member accounts and set roles", "Export/import the full household to Excel", "Delete a work order or work request by number"],
+  },
+};
+
+/* ============================================================
+   LOCATION HIERARCHY NAV
+============================================================ */
+function LocationNavTree({ data, selectedId, onSelect }) {
+  const allIds = useMemo(() => new Set(data.locations.map((l) => l.id)), [data.locations]);
+  const [expanded, setExpanded] = useState(() => new Set(allIds));
   const toggle = (id) => {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -512,11 +603,10 @@ function LocationNavTree({ data, selectedId, onSelect, title }) {
 
   return (
     <Panel style={{ padding: 6, alignSelf: "start" }}>
-      {title && (
-        <div style={{ fontFamily: FONT_BODY, fontSize: 10.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: "0.03em", padding: "6px 6px 4px" }}>
-          {title}
-        </div>
-      )}
+      <div style={{ display: "flex", gap: 10, padding: "4px 6px 6px", borderBottom: `1px solid ${C.lineSoft}`, marginBottom: 4 }}>
+        <span className="hk-link" onClick={() => setExpanded(new Set(allIds))} style={{ fontFamily: FONT_BODY, fontSize: 10.5, fontWeight: 700, color: C.navy, cursor: "pointer" }}>Expand all</span>
+        <span className="hk-link" onClick={() => setExpanded(new Set())} style={{ fontFamily: FONT_BODY, fontSize: 10.5, fontWeight: 700, color: C.navy, cursor: "pointer" }}>Collapse all</span>
+      </div>
       <div
         onClick={() => onSelect(null)}
         className="hk-row"
@@ -540,7 +630,7 @@ const NAV = [
   { id: "orders", label: "Work Orders", icon: Wrench },
   { id: "schedule", label: "Schedule", icon: Calendar },
   { id: "vendors", label: "Vendors", icon: Users },
-  { id: "inventory", label: "Inventory", icon: Package },
+  { id: "parts", label: "Parts Catalogue", icon: Package },
   { id: "budget", label: "Budget", icon: DollarSign },
   { id: "owner", label: "Owner Tools", icon: Shield, ownerOnly: true },
 ];
@@ -549,19 +639,7 @@ function Sidebar({ tab, setTab, open, role, counts }) {
   const items = NAV.filter((n) => !n.ownerOnly || role === "Owner");
   return (
     <div
-      style={{
-        width: 216,
-        flexShrink: 0,
-        background: C.navy,
-        color: "#fff",
-        display: open ? "flex" : "none",
-        flexDirection: "column",
-        position: "fixed",
-        top: 0,
-        bottom: 0,
-        left: 0,
-        zIndex: 40,
-      }}
+      style={{ width: 216, flexShrink: 0, background: C.navy, color: "#fff", display: open ? "flex" : "none", flexDirection: "column", position: "fixed", top: 0, bottom: 0, left: 0, zIndex: 40 }}
       className="hk-scroll"
     >
       <div style={{ padding: "20px 18px 14px" }}>
@@ -580,36 +658,22 @@ function Sidebar({ tab, setTab, open, role, counts }) {
           const badge = counts[n.id];
           return (
             <div
-              key={n.id}
-              onClick={() => setTab(n.id)}
-              className="hk-nav-item"
+              key={n.id} onClick={() => setTab(n.id)} className="hk-nav-item"
               style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                padding: "9px 10px",
-                borderRadius: 3,
-                cursor: "pointer",
-                marginBottom: 2,
+                display: "flex", alignItems: "center", gap: 10, padding: "9px 10px", borderRadius: 3, cursor: "pointer", marginBottom: 2,
                 background: active ? "rgba(255,255,255,0.14)" : "transparent",
                 borderLeft: active ? `3px solid ${C.orange}` : "3px solid transparent",
               }}
             >
               <Icon size={16} color={active ? "#fff" : "#B7C3CF"} />
-              <span style={{ fontFamily: FONT_BODY, fontSize: 13.5, fontWeight: active ? 600 : 500, color: active ? "#fff" : "#D3DBE2", flex: 1 }}>
-                {n.label}
-              </span>
-              {!!badge && (
-                <span style={{ background: C.orange, color: "#fff", fontSize: 10.5, fontWeight: 700, borderRadius: 10, padding: "1px 6px" }}>
-                  {badge}
-                </span>
-              )}
+              <span style={{ fontFamily: FONT_BODY, fontSize: 13.5, fontWeight: active ? 600 : 500, color: active ? "#fff" : "#D3DBE2", flex: 1 }}>{n.label}</span>
+              {!!badge && <span style={{ background: C.orange, color: "#fff", fontSize: 10.5, fontWeight: 700, borderRadius: 10, padding: "1px 6px" }}>{badge}</span>}
             </div>
           );
         })}
       </div>
       <div style={{ padding: 14, borderTop: "1px solid rgba(255,255,255,0.12)", fontFamily: FONT_BODY, fontSize: 11, color: "#8FA0AF" }}>
-        v1.4 · matches the HomeKeep functional spec
+        v1.5 · matches the HomeKeep functional spec
       </div>
     </div>
   );
@@ -618,86 +682,125 @@ function Sidebar({ tab, setTab, open, role, counts }) {
 /* ============================================================
    DASHBOARD
 ============================================================ */
-function Dashboard({ data, setTab, role }) {
+function WeekLookahead({ data, goToOrder }) {
+  const days = Array.from({ length: 7 }).map((_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() + i);
+    return d.toISOString().slice(0, 10);
+  });
+  const byDay = {};
+  data.workOrders.forEach((w) => {
+    if (w.type === "PM Base" || !w.scheduledDate) return;
+    if (days.includes(w.scheduledDate)) (byDay[w.scheduledDate] = byDay[w.scheduledDate] || []).push(w);
+  });
+  return (
+    <Panel style={{ padding: 16, marginTop: 16 }}>
+      <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 10 }}>Next 7 days</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6 }}>
+        {days.map((d) => {
+          const dt = new Date(d + "T00:00:00");
+          const items = byDay[d] || [];
+          const isToday = d === todayISO();
+          return (
+            <div key={d} style={{ border: `1px solid ${C.lineSoft}`, borderRadius: 3, padding: 6, minHeight: 78, background: isToday ? C.orangeSoft : "#fff" }}>
+              <div style={{ fontFamily: FONT_BODY, fontSize: 10.5, fontWeight: 700, color: isToday ? C.orange : C.inkFaint }}>
+                {dt.toLocaleDateString(undefined, { weekday: "short", day: "numeric" })}
+              </div>
+              {items.slice(0, 2).map((w) => (
+                <div
+                  key={w.id} onClick={() => goToOrder(w.id)} title={`${formatWoNum(w.number)} ${w.title}`}
+                  style={{ fontFamily: FONT_BODY, fontSize: 10, fontWeight: 600, color: "#fff", background: WO_TYPE_COLORS[w.type], borderRadius: 2, padding: "2px 4px", marginTop: 4, cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                >
+                  {formatWoNum(w.number)}
+                </div>
+              ))}
+              {items.length > 2 && <div style={{ fontFamily: FONT_BODY, fontSize: 9.5, color: C.inkFaint, marginTop: 2 }}>+{items.length - 2} more</div>}
+            </div>
+          );
+        })}
+      </div>
+    </Panel>
+  );
+}
+
+function Dashboard({ data, setTab, role, applyFilter, goToOrder, goToRequest }) {
   const openWO = data.workOrders.filter((w) => w.status === "Open" || w.status === "In Progress");
   const pendingWR = data.workRequests.filter((w) => w.status === "Submitted" || w.status === "Under Review");
-  const overduePM = data.pmTemplates.filter((p) => daysUntil(p.nextDue) !== null && daysUntil(p.nextDue) < 0);
-  const upcomingPM = data.pmTemplates.filter((p) => {
-    const d = daysUntil(p.nextDue);
-    return d !== null && d >= 0 && d <= 30;
+  const nonBaseOpenWO = data.workOrders.filter((w) => w.type !== "PM Base" && w.status !== "Completed" && w.status !== "Verified");
+  const overdueWO = nonBaseOpenWO.filter((w) => w.requiredByDate && daysUntil(w.requiredByDate) < 0);
+  const dueSoonWO = nonBaseOpenWO.filter((w) => {
+    const rd = w.requiredByDate ? daysUntil(w.requiredByDate) : null;
+    const sd = w.scheduledDate ? daysUntil(w.scheduledDate) : null;
+    const inRange = (v) => v !== null && v >= 0 && v <= 30;
+    return inRange(rd) || inRange(sd);
   });
   const warrantySoon = data.assets.filter((a) => {
     const d = daysUntil(a.warrantyEnd);
     return d !== null && d >= 0 && d <= 90;
   });
 
-  const stat = (label, value, color) => (
-    <Panel style={{ padding: "16px 18px", flex: "1 1 150px" }}>
-      <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, fontWeight: 600, color: C.inkSoft, letterSpacing: "0.02em" }}>{label}</div>
-      <div style={{ fontFamily: FONT_HEAD, fontSize: 30, fontWeight: 700, color: color || C.ink, marginTop: 4 }}>{value}</div>
+  const stat = (label, value, color, onClick) => (
+    <Panel style={{ padding: "16px 18px", flex: "1 1 150px", cursor: onClick ? "pointer" : "default" }} >
+      <div onClick={onClick} style={{}}>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, fontWeight: 600, color: C.inkSoft, letterSpacing: "0.02em" }}>{label}</div>
+        <div style={{ fontFamily: FONT_HEAD, fontSize: 30, fontWeight: 700, color: color || C.ink, marginTop: 4 }}>{value}</div>
+      </div>
     </Panel>
   );
 
   return (
     <div>
-      <SectionHeader title="Dashboard" subtitle={`Logged in as ${role}`} />
+      <SectionHeader title="Dashboard" subtitle="Your household's maintenance activity at a glance." info={PAGE_INFO.dashboard} />
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 22 }}>
-        {stat("Open work orders", openWO.length, C.orange)}
-        {stat("Pending requests", pendingWR.length, C.gold)}
-        {stat("Overdue PM tasks", overduePM.length, overduePM.length ? C.rust : C.ink)}
-        {stat("Due within 30 days", upcomingPM.length)}
+        {stat("Open work orders", openWO.length, C.orange, () => applyFilter("orders", {}))}
+        {stat("Pending requests", pendingWR.length, C.gold, () => applyFilter("requests", { status: "pending" }))}
+        {stat("Overdue work orders", overdueWO.length, overdueWO.length ? C.rust : C.ink, () => applyFilter("orders", { due: "overdue" }))}
+        {stat("Due within 30 days", dueSoonWO.length, undefined, () => applyFilter("orders", { due: "30" }))}
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <Panel style={{ padding: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
             <h3 style={{ fontFamily: FONT_HEAD, fontSize: 15, margin: 0, color: C.ink }}>Work requests awaiting review</h3>
-            <span onClick={() => setTab("requests")} style={{ cursor: "pointer", color: C.navy, fontSize: 12.5, fontFamily: FONT_BODY, fontWeight: 600 }}>
-              View all →
-            </span>
+            <span onClick={() => setTab("requests")} style={{ cursor: "pointer", color: C.navy, fontSize: 12.5, fontFamily: FONT_BODY, fontWeight: 600 }}>View all →</span>
           </div>
           {pendingWR.length === 0 && <Empty text="Nothing waiting on review." />}
           {pendingWR.map((wr) => (
-            <div key={wr.id} style={{ padding: "9px 0", borderTop: `1px solid ${C.lineSoft}` }}>
+            <div key={wr.id} onClick={() => goToRequest(wr.id)} className="hk-row" style={{ padding: "9px 4px", borderTop: `1px solid ${C.lineSoft}`, cursor: "pointer" }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
                 <span style={{ fontFamily: FONT_BODY, fontSize: 13, fontWeight: 600, color: C.ink }}>{formatWrNum(wr.number)} · {wr.title}</span>
-                <Tag text={wr.priority} color={wr.priority === "Urgent" ? C.rust : C.inkSoft} soft={wr.priority === "Urgent" ? C.rustSoft : C.panelAlt} />
+                <Tag text={wr.priority} color={PRIORITY_COLORS[wr.priority]} soft={PRIORITY_SOFT[wr.priority]} />
               </div>
-              <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint, marginTop: 2 }}>
-                {locationPath(data.locations, wr.locationId)}
-              </div>
+              <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint, marginTop: 2 }}>{locationPath(data.locations, wr.locationId)}</div>
             </div>
           ))}
         </Panel>
 
         <Panel style={{ padding: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-            <h3 style={{ fontFamily: FONT_HEAD, fontSize: 15, margin: 0, color: C.ink }}>Preventive maintenance</h3>
-            <span onClick={() => setTab("assets")} style={{ cursor: "pointer", color: C.navy, fontSize: 12.5, fontFamily: FONT_BODY, fontWeight: 600 }}>
-              View assets →
-            </span>
+            <h3 style={{ fontFamily: FONT_HEAD, fontSize: 15, margin: 0, color: C.ink }}>Upcoming Work Orders</h3>
+            <span onClick={() => setTab("orders")} style={{ cursor: "pointer", color: C.navy, fontSize: 12.5, fontFamily: FONT_BODY, fontWeight: 600 }}>View all →</span>
           </div>
-          {overduePM.concat(upcomingPM).length === 0 && <Empty text="Nothing due in the next 30 days." />}
-          {overduePM.map((p) => (
-            <div key={p.id} style={{ padding: "9px 0", borderTop: `1px solid ${C.lineSoft}`, display: "flex", justifyContent: "space-between" }}>
-              <div>
-                <div style={{ fontFamily: FONT_BODY, fontSize: 13, fontWeight: 600, color: C.ink }}>{p.title}</div>
-                <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint }}>{nameOf(data.assets, p.assetId)}</div>
+          {dueSoonWO.length === 0 && <Empty text="Nothing scheduled or due in the next 30 days." />}
+          {dueSoonWO.map((w) => {
+            const rd = w.requiredByDate ? daysUntil(w.requiredByDate) : null;
+            const overdue = rd !== null && rd < 0;
+            return (
+              <div key={w.id} onClick={() => goToOrder(w.id)} className="hk-row" style={{ padding: "9px 4px", borderTop: `1px solid ${C.lineSoft}`, cursor: "pointer", display: "flex", justifyContent: "space-between" }}>
+                <div>
+                  <div style={{ fontFamily: FONT_BODY, fontSize: 13, fontWeight: 600, color: C.ink }}>{formatWoNum(w.number)} · {w.title}</div>
+                  <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint }}>
+                    {w.scheduledDate ? `Scheduled ${fmtDate(w.scheduledDate)}` : w.requiredByDate ? `Required by ${fmtDate(w.requiredByDate)}` : ""}
+                  </div>
+                </div>
+                <Tag text={overdue ? "Overdue" : w.type} color={overdue ? C.rust : WO_TYPE_COLORS[w.type]} soft={overdue ? C.rustSoft : C.panelAlt} />
               </div>
-              <Tag text={`Overdue ${Math.abs(daysUntil(p.nextDue))}d`} color={C.rust} soft={C.rustSoft} />
-            </div>
-          ))}
-          {upcomingPM.map((p) => (
-            <div key={p.id} style={{ padding: "9px 0", borderTop: `1px solid ${C.lineSoft}`, display: "flex", justifyContent: "space-between" }}>
-              <div>
-                <div style={{ fontFamily: FONT_BODY, fontSize: 13, fontWeight: 600, color: C.ink }}>{p.title}</div>
-                <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint }}>{nameOf(data.assets, p.assetId)}</div>
-              </div>
-              <Tag text={`Due in ${daysUntil(p.nextDue)}d`} color={C.gold} soft={C.goldSoft} />
-            </div>
-          ))}
+            );
+          })}
         </Panel>
       </div>
+
+      <WeekLookahead data={data} goToOrder={goToOrder} />
 
       {warrantySoon.length > 0 && (
         <Panel style={{ padding: 16, marginTop: 16 }}>
@@ -719,22 +822,27 @@ function Dashboard({ data, setTab, role }) {
 ============================================================ */
 function LocationsView({ data, update, role }) {
   const dialog = useDialog();
-  const [modal, setModal] = useState(null); // {mode, parentId} or {mode, node}
+  const closeGuard = useCloseGuard(dialog);
+  const [modal, setModal] = useState(null);
   const [form, setForm] = useState({ name: "", level: "Property" });
+  const initial = useRef(null);
+  const isDirty = modal && JSON.stringify(form) !== initial.current;
 
   const openAdd = (parentId) => {
-    setForm({ name: "", level: defaultLevelForParent(data.locations, parentId) });
+    const f = { name: "", level: defaultLevelForParent(data.locations, parentId) };
+    setForm(f); initial.current = JSON.stringify(f);
     setModal({ mode: "add", parentId });
   };
   const openEdit = (node) => {
-    setForm({ name: node.name, level: node.level });
+    const f = { name: node.name, level: node.level };
+    setForm(f); initial.current = JSON.stringify(f);
     setModal({ mode: "edit", node });
   };
   const save = () => {
     if (!form.name.trim()) return;
     update((d) => {
       if (modal.mode === "add") {
-        d.locations.push({ id: uid("loc"), name: form.name.trim(), level: form.level, parentId: modal.parentId || null });
+        d.locations.push({ id: uid("loc"), name: form.name.trim(), level: form.level, parentId: modal.parentId || null, createdBy: null });
       } else {
         const n = d.locations.find((l) => l.id === modal.node.id);
         n.name = form.name.trim();
@@ -747,16 +855,10 @@ function LocationsView({ data, update, role }) {
   const remove = async (node) => {
     const hasChildren = data.locations.some((l) => l.parentId === node.id);
     const hasAssets = data.assets.some((a) => a.locationId === node.id);
-    if (hasChildren || hasAssets) {
-      await dialog.alertMsg("Move or remove child locations and linked assets first.");
-      return;
-    }
+    if (hasChildren || hasAssets) { await dialog.alertMsg("Move or remove child locations and linked assets first."); return; }
     const ok = await dialog.confirm(`Delete "${node.name}"?`);
     if (!ok) return;
-    update((d) => {
-      d.locations = d.locations.filter((l) => l.id !== node.id);
-      return d;
-    });
+    update((d) => { d.locations = d.locations.filter((l) => l.id !== node.id); return d; });
   };
 
   const rows = flattenTree(data.locations, "parentId", null);
@@ -765,8 +867,9 @@ function LocationsView({ data, update, role }) {
     <div>
       <SectionHeader
         title="Location Hierarchy"
-        subtitle="Every asset, work request, and work order is tied to a node here."
-        action={role === "Owner" && <Btn variant="primary" onClick={() => openAdd(null)}><Plus size={15} /> Add top-level location</Btn>}
+        subtitle="The physical map of the household that everything else is organized around."
+        info={PAGE_INFO.locations}
+        action={isAdmin(role) && <Btn variant="primary" onClick={() => openAdd(null)}><Plus size={15} /> Add top-level location</Btn>}
       />
       <Panel>
         {rows.length === 0 && <Empty text="No locations yet." />}
@@ -779,7 +882,7 @@ function LocationsView({ data, update, role }) {
               <span style={{ fontFamily: FONT_BODY, fontSize: 13.5, fontWeight: 600, color: C.ink, flex: 1 }}>{item.name}</span>
               <Tag text={item.level} color={C.navy} soft={C.navySoft} />
               {assetCount > 0 && <span style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint }}>{assetCount} asset{assetCount > 1 ? "s" : ""}</span>}
-              {role === "Owner" && (
+              {isAdmin(role) && (
                 <div style={{ display: "flex", gap: 6 }}>
                   <button title="Add child" onClick={() => openAdd(item.id)} style={{ background: "none", border: "none", cursor: "pointer", color: C.navy }}><Plus size={15} /></button>
                   <button title="Edit" onClick={() => openEdit(item)} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkSoft }}><Pencil size={14} /></button>
@@ -792,8 +895,8 @@ function LocationsView({ data, update, role }) {
       </Panel>
 
       {modal && (
-        <Modal title={modal.mode === "add" ? "Add location" : "Edit location"} onClose={() => setModal(null)}>
-          <Field label="Name">
+        <Modal title={modal.mode === "add" ? "Add location" : "Edit location"} onClose={() => closeGuard(isDirty, save, () => setModal(null))}>
+          <Field label="Name" required>
             <input style={inputStyle} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Primary Bathroom" autoFocus />
           </Field>
           <Field label="Level">
@@ -807,7 +910,7 @@ function LocationsView({ data, update, role }) {
             </div>
           )}
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
-            <Btn variant="ghost" onClick={() => setModal(null)}>Cancel</Btn>
+            <Btn variant="ghost" onClick={() => closeGuard(isDirty, save, () => setModal(null))}>Cancel</Btn>
             <Btn variant="primary" onClick={save}>Save</Btn>
           </div>
         </Modal>
@@ -819,7 +922,7 @@ function LocationsView({ data, update, role }) {
 /* ============================================================
    ASSETS + BOM
 ============================================================ */
-function BomTree({ data, update, assetId }) {
+function BomTree({ data, update, assetId, role }) {
   const dialog = useDialog();
   const nodes = data.bomNodes.filter((n) => n.assetId === assetId);
   const rows = flattenTree(nodes, "parentId", null);
@@ -854,17 +957,14 @@ function BomTree({ data, update, assetId }) {
     if (hasChildren) { await dialog.alertMsg("Remove or move its child nodes first."); return; }
     const ok = await dialog.confirm(`Remove "${node.name}" from the BOM?`);
     if (!ok) return;
-    update((d) => {
-      d.bomNodes = d.bomNodes.filter((n) => n.id !== node.id);
-      return d;
-    });
+    update((d) => { d.bomNodes = d.bomNodes.filter((n) => n.id !== node.id); return d; });
   };
 
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
         <div style={{ fontFamily: FONT_HEAD, fontSize: 14, fontWeight: 600, color: C.ink }}>Bill of Materials</div>
-        <Btn small variant="ghost" onClick={() => openAdd(null)}><Plus size={13} /> Add component</Btn>
+        {canWrite(role) && <Btn small variant="ghost" onClick={() => openAdd(null)}><Plus size={13} /> Add component</Btn>}
       </div>
       {rows.length === 0 && <Empty text="No components recorded yet — break this asset down into components, sub-components, and parts." />}
       {rows.map(({ item, depth }) => (
@@ -875,15 +975,19 @@ function BomTree({ data, update, assetId }) {
           <Tag text={item.level} color={C.olive} soft={C.oliveSoft} />
           {item.model && <span style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint }}>#{item.model}</span>}
           <div style={{ flex: 1 }} />
-          <button title="Add child" onClick={() => openAdd(item.id)} style={{ background: "none", border: "none", cursor: "pointer", color: C.navy }}><Plus size={13} /></button>
-          <button title="Edit" onClick={() => openEdit(item)} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkSoft }}><Pencil size={12} /></button>
-          <button title="Remove" onClick={() => remove(item)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rust }}><Trash2 size={12} /></button>
+          {canWrite(role) && (
+            <>
+              <button title="Add child" onClick={() => openAdd(item.id)} style={{ background: "none", border: "none", cursor: "pointer", color: C.navy }}><Plus size={13} /></button>
+              <button title="Edit" onClick={() => openEdit(item)} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkSoft }}><Pencil size={12} /></button>
+              <button title="Remove" onClick={() => remove(item)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rust }}><Trash2 size={12} /></button>
+            </>
+          )}
         </div>
       ))}
 
       {modal && (
         <Modal title={modal.mode === "add" ? "Add BOM node" : "Edit BOM node"} onClose={() => setModal(null)}>
-          <Field label="Name">
+          <Field label="Name" required>
             <input style={inputStyle} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Ignitor" autoFocus />
           </Field>
           <Field label="Level">
@@ -915,25 +1019,28 @@ function BomTree({ data, update, assetId }) {
 
 function AssetsView({ data, update, role, goToOrder }) {
   const dialog = useDialog();
+  const closeGuard = useCloseGuard(dialog);
   const [locFilter, setLocFilter] = useState(null);
   const [selected, setSelected] = useState(data.assets[0]?.id || null);
   const [modal, setModal] = useState(null);
   const blank = { name: "", category: "", locationId: data.locations[0]?.id || "", manufacturer: "", model: "", serial: "", purchaseDate: "", warrantyEnd: "", notes: "" };
   const [form, setForm] = useState(blank);
+  const initial = useRef(null);
+  const isDirty = modal && JSON.stringify(form) !== initial.current;
 
   const allowedLocs = locFilter ? descendantIds(data.locations, locFilter) : null;
   const filteredAssets = data.assets.filter((a) => !allowedLocs || allowedLocs.has(a.locationId));
 
   const asset = data.assets.find((a) => a.id === selected);
 
-  const openAdd = () => { setForm(blank); setModal("add"); };
-  const openEdit = () => { setForm({ ...asset }); setModal("edit"); };
+  const openAdd = () => { setForm(blank); initial.current = JSON.stringify(blank); setModal("add"); };
+  const openEdit = () => { const f = { ...asset }; setForm(f); initial.current = JSON.stringify(f); setModal("edit"); };
   const save = () => {
     if (!form.name.trim()) return;
     update((d) => {
       if (modal === "add") {
         const id = uid("a");
-        d.assets.push({ id, ...form, name: form.name.trim() });
+        d.assets.push({ id, ...form, name: form.name.trim(), createdBy: null });
         setSelected(id);
       } else {
         Object.assign(d.assets.find((a) => a.id === asset.id), form, { name: form.name.trim() });
@@ -946,10 +1053,7 @@ function AssetsView({ data, update, role, goToOrder }) {
     const ok = await dialog.confirm(`Archive "${asset.name}"? Its BOM and history stay in the record but it's removed from the active list.`);
     if (!ok) return;
     const remaining = data.assets.filter((a) => a.id !== asset.id);
-    update((d) => {
-      d.assets = d.assets.filter((a) => a.id !== asset.id);
-      return d;
-    });
+    update((d) => { d.assets = d.assets.filter((a) => a.id !== asset.id); return d; });
     setSelected(remaining[0]?.id || null);
   };
 
@@ -960,25 +1064,16 @@ function AssetsView({ data, update, role, goToOrder }) {
     <div>
       <SectionHeader
         title="Assets & Bill of Materials"
-        subtitle="Each asset can be broken down into components, sub-components, and parts."
-        action={role === "Owner" && <Btn variant="primary" onClick={openAdd}><Plus size={15} /> Add asset</Btn>}
+        subtitle="A registry of everything worth maintaining, broken into the parts that make it up."
+        info={PAGE_INFO.assets}
+        action={isAdmin(role) && <Btn variant="primary" onClick={openAdd}><Plus size={15} /> Add asset</Btn>}
       />
       <div style={{ display: "grid", gridTemplateColumns: "200px 240px 1fr", gap: 16 }}>
         <LocationNavTree data={data} selectedId={locFilter} onSelect={setLocFilter} />
 
         <Panel style={{ padding: 6, alignSelf: "start" }}>
           {filteredAssets.map((a) => (
-            <div
-              key={a.id}
-              onClick={() => setSelected(a.id)}
-              className="hk-row"
-              style={{
-                padding: "9px 10px",
-                borderRadius: 3,
-                cursor: "pointer",
-                background: selected === a.id ? C.navySoft : "transparent",
-              }}
-            >
+            <div key={a.id} onClick={() => setSelected(a.id)} className="hk-row" style={{ padding: "9px 10px", borderRadius: 3, cursor: "pointer", background: selected === a.id ? C.navySoft : "transparent" }}>
               <div style={{ fontFamily: FONT_BODY, fontSize: 13, fontWeight: 600, color: C.ink }}>{a.name}</div>
               <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint }}>{locationPath(data.locations, a.locationId)}</div>
             </div>
@@ -994,7 +1089,7 @@ function AssetsView({ data, update, role, goToOrder }) {
                   <div style={{ fontFamily: FONT_HEAD, fontSize: 20, fontWeight: 700, color: C.ink }}>{asset.name}</div>
                   <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkFaint, marginTop: 2 }}>{locationPath(data.locations, asset.locationId)}</div>
                 </div>
-                {role === "Owner" && (
+                {isAdmin(role) && (
                   <div style={{ display: "flex", gap: 6 }}>
                     <Btn small variant="ghost" onClick={openEdit}><Pencil size={12} /> Edit</Btn>
                     <Btn small variant="danger" onClick={removeAsset}><Trash2 size={12} /> Archive</Btn>
@@ -1003,12 +1098,9 @@ function AssetsView({ data, update, role, goToOrder }) {
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginTop: 16 }}>
                 {[
-                  ["Category", asset.category || "—"],
-                  ["Manufacturer", asset.manufacturer || "—"],
-                  ["Model", asset.model || "—"],
-                  ["Serial", asset.serial || "—"],
-                  ["Purchased", fmtDate(asset.purchaseDate)],
-                  ["Warranty ends", fmtDate(asset.warrantyEnd)],
+                  ["Category", asset.category || "—"], ["Manufacturer", asset.manufacturer || "—"],
+                  ["Model", asset.model || "—"], ["Serial", asset.serial || "—"],
+                  ["Purchased", fmtDate(asset.purchaseDate)], ["Warranty ends", fmtDate(asset.warrantyEnd)],
                 ].map(([k, v]) => (
                   <div key={k}>
                     <div style={{ fontFamily: FONT_BODY, fontSize: 10.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: "0.03em" }}>{k}</div>
@@ -1020,7 +1112,7 @@ function AssetsView({ data, update, role, goToOrder }) {
             </Panel>
 
             <Panel style={{ padding: 16, marginBottom: 14 }}>
-              <BomTree data={data} update={update} assetId={asset.id} />
+              <BomTree data={data} update={update} assetId={asset.id} role={role} />
             </Panel>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
@@ -1058,11 +1150,11 @@ function AssetsView({ data, update, role, goToOrder }) {
       </div>
 
       {modal && (
-        <Modal title={modal === "add" ? "Add asset" : "Edit asset"} onClose={() => setModal(null)} wide>
+        <Modal title={modal === "add" ? "Add asset" : "Edit asset"} onClose={() => closeGuard(isDirty, save, () => setModal(null))} wide>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <Field label="Name"><input style={inputStyle} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} autoFocus /></Field>
+            <Field label="Name" required><input style={inputStyle} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} autoFocus /></Field>
             <Field label="Category"><input style={inputStyle} value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} placeholder="HVAC, Appliance, Vehicle…" /></Field>
-            <Field label="Location">
+            <Field label="Location" required>
               <select style={inputStyle} value={form.locationId} onChange={(e) => setForm({ ...form, locationId: e.target.value })}>
                 {flattenTree(data.locations, "parentId", null).map(({ item, depth }) => (
                   <option key={item.id} value={item.id}>{"—".repeat(depth) + " " + item.name}</option>
@@ -1077,7 +1169,7 @@ function AssetsView({ data, update, role, goToOrder }) {
           </div>
           <Field label="Notes"><textarea style={{ ...inputStyle, minHeight: 60 }} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-            <Btn variant="ghost" onClick={() => setModal(null)}>Cancel</Btn>
+            <Btn variant="ghost" onClick={() => closeGuard(isDirty, save, () => setModal(null))}>Cancel</Btn>
             <Btn variant="primary" onClick={save}>Save</Btn>
           </div>
         </Modal>
@@ -1087,19 +1179,19 @@ function AssetsView({ data, update, role, goToOrder }) {
 }
 
 /* ============================================================
-   LOCATION / ASSET / BOM PICKER (shared control)
+   PICKERS: asset/BOM link, and parts attachment
 ============================================================ */
 function AssetBomPicker({ data, assetId, bomNodeId, onChange }) {
   const bomOptions = assetId ? flattenTree(data.bomNodes.filter((n) => n.assetId === assetId), "parentId", null) : [];
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-      <Field label="Asset (optional)">
+      <Field label="Asset">
         <select style={inputStyle} value={assetId || ""} onChange={(e) => onChange({ assetId: e.target.value || null, bomNodeId: null })}>
           <option value="">— none —</option>
           {data.assets.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </select>
       </Field>
-      <Field label="BOM component (optional)">
+      <Field label="BOM component">
         <select style={inputStyle} value={bomNodeId || ""} disabled={!assetId} onChange={(e) => onChange({ assetId, bomNodeId: e.target.value || null })}>
           <option value="">— whole asset —</option>
           {bomOptions.map(({ item, depth }) => <option key={item.id} value={item.id}>{"—".repeat(depth) + " " + item.name}</option>)}
@@ -1109,56 +1201,276 @@ function AssetBomPicker({ data, assetId, bomNodeId, onChange }) {
   );
 }
 
+function PartEditModal({ data, update, part, currentUser, onClose, onSaved }) {
+  const dialog = useDialog();
+  const closeGuard = useCloseGuard(dialog);
+  const blank = { name: "", description: "", manufacturer: "", manufacturerPartNumber: "", cost: "", link: "", assetId: null, bomNodeId: null, qty: 1, reorderAt: 1 };
+  const [form, setForm] = useState(part ? { ...part } : blank);
+  const initial = useRef(JSON.stringify(part ? { ...part } : blank));
+  const isDirty = JSON.stringify(form) !== initial.current;
+
+  const save = () => {
+    if (!form.name.trim()) return;
+    if (part) {
+      update((d) => { Object.assign(d.inventory.find((i) => i.id === part.id), form, { name: form.name.trim() }); return d; });
+      onClose();
+    } else {
+      const id = uid("inv");
+      update((d) => {
+        d.counters = d.counters || { wo: 0, wr: 0, part: 0 };
+        d.counters.part = (d.counters.part || 0) + 1;
+        d.inventory.push({ id, partNumber: d.counters.part, ...form, name: form.name.trim(), qty: Number(form.qty) || 0, reorderAt: Number(form.reorderAt) || 0, createdBy: currentUser });
+        return d;
+      });
+      onSaved && onSaved(id);
+      onClose();
+    }
+  };
+
+  return (
+    <Modal title={part ? `Edit ${formatPartNum(part.partNumber)}` : "New part"} onClose={() => closeGuard(isDirty, save, onClose)} wide>
+      <Field label="Name" required><input style={inputStyle} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. 16x25x1 Furnace Filter" autoFocus /></Field>
+      <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 50 }} value={form.description || ""} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
+      <AssetBomPicker data={data} assetId={form.assetId} bomNodeId={form.bomNodeId} onChange={({ assetId, bomNodeId }) => setForm({ ...form, assetId, bomNodeId })} />
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <Field label="Manufacturer"><input style={inputStyle} value={form.manufacturer || ""} onChange={(e) => setForm({ ...form, manufacturer: e.target.value })} /></Field>
+        <Field label="Manufacturer part #"><input style={inputStyle} value={form.manufacturerPartNumber || ""} onChange={(e) => setForm({ ...form, manufacturerPartNumber: e.target.value })} /></Field>
+        <Field label="Cost ($)"><input style={inputStyle} value={form.cost || ""} onChange={(e) => setForm({ ...form, cost: e.target.value })} /></Field>
+        <Field label="Web link"><input style={inputStyle} value={form.link || ""} onChange={(e) => setForm({ ...form, link: e.target.value })} placeholder="https://…" /></Field>
+        <Field label="Quantity on hand"><input type="number" style={inputStyle} value={form.qty} onChange={(e) => setForm({ ...form, qty: e.target.value })} /></Field>
+        <Field label="Reorder at"><input type="number" style={inputStyle} value={form.reorderAt} onChange={(e) => setForm({ ...form, reorderAt: e.target.value })} /></Field>
+      </div>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <Btn variant="ghost" onClick={() => closeGuard(isDirty, save, onClose)}>Cancel</Btn>
+        <Btn variant="primary" onClick={save}>Save</Btn>
+      </div>
+    </Modal>
+  );
+}
+
+function PartsPicker({ data, update, value, onChange, defaultLocationId, currentUser }) {
+  const [locFilter, setLocFilter] = useState(defaultLocationId || null);
+  const [bomFilter, setBomFilter] = useState(null);
+  const [search, setSearch] = useState("");
+  const [newPartOpen, setNewPartOpen] = useState(false);
+
+  const allowedLocs = locFilter ? descendantIds(data.locations, locFilter) : null;
+  const scopedAssetIds = new Set(data.assets.filter((a) => !allowedLocs || allowedLocs.has(a.locationId)).map((a) => a.id));
+  const bomOptions = data.bomNodes.filter((n) => scopedAssetIds.has(n.assetId));
+
+  const searchLower = search.trim().toLowerCase();
+  const candidates = data.inventory
+    .filter((p) => !value.includes(p.id))
+    .filter((p) => !allowedLocs || !p.assetId || scopedAssetIds.has(p.assetId))
+    .filter((p) => !bomFilter || p.bomNodeId === bomFilter)
+    .filter((p) => {
+      if (!searchLower) return true;
+      const hay = [formatPartNum(p.partNumber), p.name, p.manufacturer, p.manufacturerPartNumber].filter(Boolean).join(" ").toLowerCase();
+      return hay.includes(searchLower);
+    })
+    .slice(0, 12);
+
+  const attached = value.map((id) => data.inventory.find((p) => p.id === id)).filter(Boolean);
+
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <label style={fieldLabelStyle(false)}>Parts</label>
+      {attached.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 8 }}>
+          {attached.map((p) => (
+            <div key={p.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 8px", background: C.panelAlt, borderRadius: 3 }}>
+              <span style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink }}>{formatPartNum(p.partNumber)} · {p.name}</span>
+              <button onClick={() => onChange(value.filter((x) => x !== p.id))} style={{ background: "none", border: "none", cursor: "pointer", color: C.rust }}><X size={13} /></button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+        <select style={inputStyle} value={locFilter || ""} onChange={(e) => { setLocFilter(e.target.value || null); setBomFilter(null); }}>
+          <option value="">All locations</option>
+          {flattenTree(data.locations, "parentId", null).map(({ item, depth }) => (
+            <option key={item.id} value={item.id}>{"—".repeat(depth) + " " + item.name}</option>
+          ))}
+        </select>
+        <select style={inputStyle} value={bomFilter || ""} onChange={(e) => setBomFilter(e.target.value || null)}>
+          <option value="">All components</option>
+          {bomOptions.map((n) => <option key={n.id} value={n.id}>{nameOf(data.assets, n.assetId)} — {n.name}</option>)}
+        </select>
+      </div>
+      <input style={{ ...inputStyle, marginBottom: 8 }} placeholder="Search by part #, name, or manufacturer…" value={search} onChange={(e) => setSearch(e.target.value)} />
+      <div className="hk-scroll" style={{ maxHeight: 160, overflowY: "auto", border: `1px solid ${C.lineSoft}`, borderRadius: 3 }}>
+        {candidates.length === 0 && <div style={{ padding: 10, fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint }}>No matching parts.</div>}
+        {candidates.map((p) => (
+          <div key={p.id} className="hk-row" onClick={() => onChange([...value, p.id])} style={{ display: "flex", justifyContent: "space-between", padding: "7px 8px", borderTop: `1px solid ${C.lineSoft}`, cursor: "pointer" }}>
+            <span style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink }}>{formatPartNum(p.partNumber)} · {p.name}{p.manufacturer ? ` (${p.manufacturer})` : ""}</span>
+            <Plus size={13} color={C.navy} />
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: 8 }}>
+        <Btn small variant="ghost" onClick={() => setNewPartOpen(true)}><Plus size={12} /> New part</Btn>
+      </div>
+      {newPartOpen && (
+        <PartEditModal
+          data={data} update={update} part={null} currentUser={currentUser}
+          onClose={() => setNewPartOpen(false)}
+          onSaved={(id) => onChange([...value, id])}
+        />
+      )}
+    </div>
+  );
+}
+
 /* ============================================================
    WORK REQUESTS
 ============================================================ */
-function WorkRequestsView({ data, update, role, currentUser, goToOrder }) {
+function PmBaseFields({ form, setForm }) {
+  const addFixedDate = () => setForm((f) => ({ ...f, fixedDates: [...(f.fixedDates || []), { month: 1, day: 1 }] }));
+  const removeFixedDate = (i) => setForm((f) => ({ ...f, fixedDates: f.fixedDates.filter((_, idx) => idx !== i) }));
+  const updateFixedDate = (i, patch) => setForm((f) => ({ ...f, fixedDates: f.fixedDates.map((fd, idx) => (idx === i ? { ...fd, ...patch } : fd)) }));
+
+  return (
+    <>
+      <Field label="PM mode">
+        <select style={inputStyle} value={form.pmMode} onChange={(e) => setForm({ ...form, pmMode: e.target.value })}>
+          <option value="Non-fixed">Non-fixed (repeats on a frequency)</option>
+          <option value="Fixed">Fixed (same date(s) every year)</option>
+        </select>
+      </Field>
+      {form.pmMode === "Non-fixed" ? (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <Field label="Every"><input type="number" min="1" style={inputStyle} value={form.frequencyValue} onChange={(e) => setForm({ ...form, frequencyValue: e.target.value })} /></Field>
+          <Field label="Unit">
+            <select style={inputStyle} value={form.frequencyUnit} onChange={(e) => setForm({ ...form, frequencyUnit: e.target.value })}>
+              {FREQUENCY_UNITS.map((u) => <option key={u} value={u}>{u}</option>)}
+            </select>
+          </Field>
+        </div>
+      ) : (
+        <div style={{ marginBottom: 12 }}>
+          <label style={fieldLabelStyle(false)}>Fixed date(s) of year</label>
+          {(form.fixedDates || []).map((fd, i) => (
+            <div key={i} style={{ display: "flex", gap: 8, marginBottom: 6, alignItems: "center" }}>
+              <select style={{ ...inputStyle, width: 150 }} value={fd.month} onChange={(e) => updateFixedDate(i, { month: Number(e.target.value) })}>
+                {MONTH_NAMES.map((m, idx) => <option key={m} value={idx + 1}>{m}</option>)}
+              </select>
+              <input type="number" min="1" max="31" style={{ ...inputStyle, width: 80 }} value={fd.day} onChange={(e) => updateFixedDate(i, { day: Number(e.target.value) })} />
+              <button onClick={() => removeFixedDate(i)} style={{ background: "none", border: "none", color: C.rust, cursor: "pointer" }}><X size={16} /></button>
+            </div>
+          ))}
+          <Btn small variant="ghost" onClick={addFixedDate}><Plus size={12} /> Add date</Btn>
+        </div>
+      )}
+      <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 12 }}>
+        A PM Base is never scheduled or completed itself — it's a template. Creating it immediately generates the first PM work order(s) copied from it.
+      </div>
+    </>
+  );
+}
+
+function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingFilter, consumeFilter }) {
   const dialog = useDialog();
-  const [modal, setModal] = useState(null); // 'new' | {action, wr}
+  const closeGuard = useCloseGuard(dialog);
+  const [modal, setModal] = useState(null);
   const [locFilter, setLocFilter] = useState(null);
   const [search, setSearch] = useState("");
-  const blank = { title: "", description: "", assetId: null, bomNodeId: null, locationId: "", priority: "When convenient" };
+  const [priorityFilter, setPriorityFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState(pendingFilter?.status || "all");
+  const blank = { title: "", description: "", assetId: null, bomNodeId: null, locationId: "", priority: "Medium", requiredByDate: "", suggestedType: "Corrective", suggestedPartIds: [] };
   const [form, setForm] = useState(blank);
+  const initial = useRef(null);
   const [reviewForm, setReviewForm] = useState({});
 
-  const openNew = () => { setForm({ ...blank, locationId: data.locations[0]?.id || "" }); setModal("new"); };
+  useEffect(() => { if (pendingFilter) consumeFilter(); }, []); // eslint-disable-line
+
+  const isFormOpen = modal === "new" || (modal && modal.action === "editRequest");
+  const isDirty = isFormOpen && JSON.stringify(form) !== initial.current;
+
+  const openNew = () => {
+    const f = { ...blank, locationId: data.locations[0]?.id || "" };
+    setForm(f); initial.current = JSON.stringify(f);
+    setModal("new");
+  };
+  const openEditRequest = (wr) => {
+    const f = { title: wr.title, description: wr.description, assetId: wr.assetId, bomNodeId: wr.bomNodeId, locationId: wr.locationId, priority: wr.priority, requiredByDate: wr.requiredByDate || "", suggestedType: wr.suggestedType || "Corrective", suggestedPartIds: wr.suggestedPartIds || [] };
+    setForm(f); initial.current = JSON.stringify(f);
+    setModal({ action: "editRequest", wr });
+  };
   const submitRequest = async () => {
-    if (!form.title.trim() || !form.locationId) { await dialog.alertMsg("Title and a location are required."); return; }
+    if (!form.title.trim() || !form.locationId || !form.requiredByDate) { await dialog.alertMsg("Title, location, and a required-by date are required."); return; }
     update((d) => {
-      d.counters = d.counters || { wo: 0, wr: 0 };
+      d.counters = d.counters || { wo: 0, wr: 0, part: 0 };
       d.counters.wr += 1;
       d.workRequests.push({
         id: uid("wr"), number: d.counters.wr, ...form, title: form.title.trim(),
         requestedBy: currentUser, dateSubmitted: todayISO(),
-        status: "Submitted", reviewNote: "", workOrderId: null,
+        status: "Submitted", reviewNote: "", workOrderId: null, createdBy: currentUser,
       });
+      return d;
+    });
+    setModal(null);
+  };
+  const saveEditRequest = async () => {
+    if (!form.title.trim() || !form.locationId || !form.requiredByDate) { await dialog.alertMsg("Title, location, and a required-by date are required."); return; }
+    update((d) => {
+      const req = d.workRequests.find((r) => r.id === modal.wr.id);
+      Object.assign(req, form, { title: form.title.trim() });
       return d;
     });
     setModal(null);
   };
 
   const openReview = (wr, action) => {
-    setReviewForm({ type: "Corrective", scheduledDate: todayISO(), requiredByDate: "", reason: "", mergeInto: "" });
+    setReviewForm({
+      type: wr.suggestedType && wr.suggestedType !== "Unplanned" ? wr.suggestedType : "Corrective",
+      scheduledDate: todayISO(), requiredByDate: wr.requiredByDate || "", reason: "", mergeInto: "",
+      pmMode: "Non-fixed", frequencyValue: "3", frequencyUnit: "months", fixedDates: [],
+    });
     setModal({ action, wr });
   };
 
   const doConvert = () => {
     const wr = modal.wr;
     update((d) => {
-      d.counters = d.counters || { wo: 0, wr: 0 };
-      d.counters.wo += 1;
-      const woId = uid("wo");
-      d.workOrders.push({
-        id: woId, number: d.counters.wo, title: wr.title, type: reviewForm.type, status: "Open",
-        assetId: wr.assetId, bomNodeId: wr.bomNodeId, locationId: wr.locationId,
-        description: wr.description, sourceRequestId: wr.id, sourceBenchmarkId: null,
-        sourcePmBaseId: null, sourceFixedDate: null,
-        scheduledDate: reviewForm.scheduledDate, requiredByDate: reviewForm.requiredByDate || "", completedDate: null,
-        cost: "", vendorId: null, notes: "",
-      });
-      const req = d.workRequests.find((r) => r.id === wr.id);
-      req.status = "Approved";
-      req.workOrderId = woId;
+      d.counters = d.counters || { wo: 0, wr: 0, part: 0 };
+      if (reviewForm.type === "PM Base") {
+        d.counters.wo += 1;
+        const baseId = uid("wo");
+        const base = {
+          id: baseId, number: d.counters.wo, title: wr.title, type: "PM Base", status: "Active",
+          assetId: wr.assetId, bomNodeId: wr.bomNodeId, locationId: wr.locationId,
+          description: wr.description, sourceRequestId: wr.id, sourceBenchmarkId: null,
+          sourcePmBaseId: null, sourceFixedDate: null, priority: wr.priority || "Medium", executorId: "",
+          scheduledDate: "", requiredByDate: "", completedDate: null, verifiedDate: null,
+          cost: "", vendorId: null, notes: "", partIds: wr.suggestedPartIds || [], createdBy: currentUser,
+          pmMode: reviewForm.pmMode,
+        };
+        if (reviewForm.pmMode === "Non-fixed") {
+          base.frequencyValue = Number(reviewForm.frequencyValue);
+          base.frequencyUnit = reviewForm.frequencyUnit;
+        } else {
+          base.fixedDates = (reviewForm.fixedDates || []).map((f) => ({ month: Number(f.month), day: Number(f.day) }));
+        }
+        d.workOrders.push(base);
+        if (base.pmMode === "Non-fixed") spawnPmInstance(d, base, { afterDateISO: todayISO(), fixedDate: null });
+        else base.fixedDates.forEach((fd) => spawnPmInstance(d, base, { afterDateISO: todayISO(), fixedDate: fd }));
+        const req = d.workRequests.find((r) => r.id === wr.id);
+        req.status = "Approved"; req.workOrderId = baseId;
+      } else {
+        d.counters.wo += 1;
+        const woId = uid("wo");
+        d.workOrders.push({
+          id: woId, number: d.counters.wo, title: wr.title, type: reviewForm.type, status: "Open",
+          assetId: wr.assetId, bomNodeId: wr.bomNodeId, locationId: wr.locationId,
+          description: wr.description, sourceRequestId: wr.id, sourceBenchmarkId: null,
+          sourcePmBaseId: null, sourceFixedDate: null, priority: wr.priority || "Medium", executorId: "",
+          scheduledDate: reviewForm.scheduledDate, requiredByDate: reviewForm.requiredByDate || wr.requiredByDate || "",
+          completedDate: null, verifiedDate: null, cost: "", vendorId: null,
+          notes: "", partIds: wr.suggestedPartIds || [], createdBy: currentUser,
+        });
+        const req = d.workRequests.find((r) => r.id === wr.id);
+        req.status = "Approved"; req.workOrderId = woId;
+      }
       return d;
     });
     setModal(null);
@@ -1167,8 +1479,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder }) {
     if (!reviewForm.reason.trim()) { await dialog.alertMsg("A reason is required."); return; }
     update((d) => {
       const req = d.workRequests.find((r) => r.id === modal.wr.id);
-      req.status = "Declined";
-      req.reviewNote = reviewForm.reason.trim();
+      req.status = "Declined"; req.reviewNote = reviewForm.reason.trim();
       return d;
     });
     setModal(null);
@@ -1177,8 +1488,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder }) {
     if (!reviewForm.mergeInto) { await dialog.alertMsg("Choose a work order to merge into."); return; }
     update((d) => {
       const req = d.workRequests.find((r) => r.id === modal.wr.id);
-      req.status = "Merged";
-      req.workOrderId = reviewForm.mergeInto;
+      req.status = "Merged"; req.workOrderId = reviewForm.mergeInto;
       return d;
     });
     setModal(null);
@@ -1191,11 +1501,18 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder }) {
     });
     setModal(null);
   };
+  const deleteRequest = async (wr) => {
+    const ok = await dialog.confirm(`Permanently delete ${formatWrNum(wr.number)} — "${wr.title}"? This cannot be undone.`);
+    if (!ok) return;
+    update((d) => { d.workRequests = d.workRequests.filter((r) => r.id !== wr.id); return d; });
+  };
 
   const allowedLocs = locFilter ? descendantIds(data.locations, locFilter) : null;
   const searchLower = search.trim().toLowerCase();
-  const visible = (role === "Owner" ? data.workRequests : data.workRequests.filter((w) => w.requestedBy === currentUser))
+  const visible = (role === "Owner" || role === "Manager" ? data.workRequests : data.workRequests.filter((w) => w.requestedBy === currentUser))
     .filter((wr) => !allowedLocs || allowedLocs.has(wr.locationId))
+    .filter((wr) => priorityFilter === "all" || wr.priority === priorityFilter)
+    .filter((wr) => statusFilter !== "pending" || wr.status === "Submitted" || wr.status === "Under Review")
     .filter((wr) => !searchLower || wr.title.toLowerCase().includes(searchLower) || formatWrNum(wr.number).toLowerCase().includes(searchLower));
   const openWOOptions = data.workOrders.filter((w) => w.status !== "Completed" && w.status !== "Verified" && w.type !== "PM Base");
 
@@ -1203,15 +1520,26 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder }) {
     <div>
       <SectionHeader
         title="Work Requests"
-        subtitle="Anyone can flag an issue. Owners review and convert into a work order."
-        action={<Btn variant="primary" onClick={openNew}><Plus size={15} /> Submit request</Btn>}
+        subtitle="The inbox for anything that needs attention, before it becomes scheduled work."
+        info={PAGE_INFO.requests}
+        action={canWrite(role) && <Btn variant="primary" onClick={openNew}><Plus size={15} /> Submit request</Btn>}
       />
       <div style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 16 }}>
         <LocationNavTree data={data} selectedId={locFilter} onSelect={setLocFilter} />
         <div>
-          <div style={{ position: "relative", maxWidth: 340, marginBottom: 12 }}>
-            <Search size={14} color={C.inkFaint} style={{ position: "absolute", left: 10, top: 10 }} />
-            <input style={{ ...inputStyle, paddingLeft: 30 }} placeholder="Search by title or number…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
+            <div style={{ position: "relative", maxWidth: 300, flex: 1 }}>
+              <Search size={14} color={C.inkFaint} style={{ position: "absolute", left: 10, top: 10 }} />
+              <input style={{ ...inputStyle, paddingLeft: 30 }} placeholder="Search by title or number…" value={search} onChange={(e) => setSearch(e.target.value)} />
+            </div>
+            <select style={{ ...inputStyle, width: "auto" }} value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)}>
+              <option value="all">All priorities</option>
+              {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+            <select style={{ ...inputStyle, width: "auto" }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              <option value="all">All statuses</option>
+              <option value="pending">Awaiting review</option>
+            </select>
           </div>
           <Panel>
             {visible.length === 0 && <Empty text="No matching work requests." />}
@@ -1221,13 +1549,12 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder }) {
                   <div>
                     <div style={{ fontFamily: FONT_BODY, fontSize: 14, fontWeight: 700, color: C.ink }}>{formatWrNum(wr.number)} · {wr.title}</div>
                     <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint, marginTop: 2 }}>
-                      {locationPath(data.locations, wr.locationId)}
-                      {wr.bomNodeId && ` · ${nameOf(data.bomNodes, wr.bomNodeId)}`}
-                      {" · by "}{wr.requestedBy}{" · "}{fmtDate(wr.dateSubmitted)}
+                      {locationPath(data.locations, wr.locationId)}{wr.bomNodeId && ` · ${nameOf(data.bomNodes, wr.bomNodeId)}`}
+                      {" · by "}{wr.requestedBy}{" · "}{fmtDate(wr.dateSubmitted)}{wr.requiredByDate && ` · required by ${fmtDate(wr.requiredByDate)}`}
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
-                    <Tag text={wr.priority} color={wr.priority === "Urgent" ? C.rust : C.inkSoft} soft={wr.priority === "Urgent" ? C.rustSoft : C.panelAlt} />
+                    <Tag text={wr.priority} color={PRIORITY_COLORS[wr.priority]} soft={PRIORITY_SOFT[wr.priority]} />
                     <Tag text={wr.status} color={WR_STATUS_COLORS[wr.status]} soft={C.panelAlt} />
                   </div>
                 </div>
@@ -1238,27 +1565,35 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder }) {
                     View linked work order <ArrowRight size={12} />
                   </div>
                 )}
-                {role === "Owner" && (wr.status === "Submitted" || wr.status === "Under Review") && (
-                  <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-                    <Btn small variant="primary" onClick={() => openReview(wr, "convert")}><Check size={12} /> Convert to work order</Btn>
-                    <Btn small variant="ghost" onClick={() => openReview(wr, "merge")}>Merge into existing</Btn>
-                    <Btn small variant="ghost" onClick={() => openReview(wr, "info")}>Request more info</Btn>
-                    <Btn small variant="danger" onClick={() => openReview(wr, "decline")}>Decline</Btn>
-                  </div>
-                )}
+                <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                  {canWrite(role) && (wr.status === "Submitted" || wr.status === "Under Review") && (isAdmin(role) || wr.requestedBy === currentUser) && (
+                    <Btn small variant="ghost" onClick={() => openEditRequest(wr)}><Pencil size={12} /> Edit</Btn>
+                  )}
+                  {(wr.status === "Submitted" || wr.status === "Under Review") && isAdmin(role) && (
+                    <>
+                      <Btn small variant="primary" onClick={() => openReview(wr, "convert")}><Check size={12} /> Convert to work order</Btn>
+                      <Btn small variant="ghost" onClick={() => openReview(wr, "merge")}>Merge into existing</Btn>
+                      <Btn small variant="ghost" onClick={() => openReview(wr, "info")}>Request more info</Btn>
+                      <Btn small variant="danger" onClick={() => openReview(wr, "decline")}>Decline</Btn>
+                    </>
+                  )}
+                  {canDelete(role, wr, currentUser) && (
+                    <Btn small variant="danger" onClick={() => deleteRequest(wr)}><Trash2 size={12} /> Delete</Btn>
+                  )}
+                </div>
               </div>
             ))}
           </Panel>
         </div>
       </div>
 
-      {modal === "new" && (
-        <Modal title="Submit a work request" onClose={() => setModal(null)} wide>
-          <Field label="Title"><input style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="What needs attention?" autoFocus /></Field>
+      {isFormOpen && (
+        <Modal title={modal === "new" ? "Submit a work request" : "Edit work request"} onClose={() => closeGuard(isDirty, modal === "new" ? submitRequest : saveEditRequest, () => setModal(null))} wide>
+          <Field label="Title" required><input style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="What needs attention?" autoFocus /></Field>
           <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 70 }} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
           <AssetBomPicker data={data} assetId={form.assetId} bomNodeId={form.bomNodeId} onChange={({ assetId, bomNodeId }) => setForm({ ...form, assetId, bomNodeId, locationId: assetId ? data.assets.find((a) => a.id === assetId).locationId : form.locationId })} />
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <Field label="Location (required)">
+            <Field label="Location" required>
               <select style={inputStyle} value={form.locationId} onChange={(e) => setForm({ ...form, locationId: e.target.value })}>
                 {flattenTree(data.locations, "parentId", null).map(({ item, depth }) => (
                   <option key={item.id} value={item.id}>{"—".repeat(depth) + " " + item.name}</option>
@@ -1271,29 +1606,46 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder }) {
               </select>
             </Field>
           </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <Field label="Required by" required><input type="date" style={inputStyle} value={form.requiredByDate} onChange={(e) => setForm({ ...form, requiredByDate: e.target.value })} /></Field>
+            <Field label="Suggested work order type">
+              <select style={inputStyle} value={form.suggestedType} onChange={(e) => setForm({ ...form, suggestedType: e.target.value })}>
+                <option value="PM">PM</option>
+                <option value="PM Base">PM Base</option>
+                <option value="Benchmark">Benchmark</option>
+                <option value="Corrective">Corrective</option>
+              </select>
+            </Field>
+          </div>
+          <PartsPicker data={data} update={update} value={form.suggestedPartIds} onChange={(v) => setForm({ ...form, suggestedPartIds: v })} defaultLocationId={form.locationId} currentUser={currentUser} />
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-            <Btn variant="ghost" onClick={() => setModal(null)}>Cancel</Btn>
-            <Btn variant="primary" onClick={submitRequest}>Submit</Btn>
+            <Btn variant="ghost" onClick={() => closeGuard(isDirty, modal === "new" ? submitRequest : saveEditRequest, () => setModal(null))}>Cancel</Btn>
+            <Btn variant="primary" onClick={modal === "new" ? submitRequest : saveEditRequest}>{modal === "new" ? "Submit" : "Save changes"}</Btn>
           </div>
         </Modal>
       )}
 
       {modal && modal.action === "convert" && (
-        <Modal title="Convert to work order" onClose={() => setModal(null)}>
+        <Modal title="Convert to work order" onClose={() => setModal(null)} wide>
           <Field label="Work order type">
             <select style={inputStyle} value={reviewForm.type} onChange={(e) => setReviewForm({ ...reviewForm, type: e.target.value })}>
               <option value="PM">PM</option>
+              <option value="PM Base">PM Base</option>
               <option value="Benchmark">Benchmark</option>
               <option value="Corrective">Corrective</option>
             </select>
           </Field>
           <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 12 }}>
-            A request can never become an Unplanned or PM Base work order — those are always created directly.
+            A request can never become an Unplanned work order — that type is always created directly.
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <Field label="Scheduled date"><input type="date" style={inputStyle} value={reviewForm.scheduledDate} onChange={(e) => setReviewForm({ ...reviewForm, scheduledDate: e.target.value })} /></Field>
-            <Field label="Required by (optional)"><input type="date" style={inputStyle} value={reviewForm.requiredByDate} onChange={(e) => setReviewForm({ ...reviewForm, requiredByDate: e.target.value })} /></Field>
-          </div>
+          {reviewForm.type === "PM Base" ? (
+            <PmBaseFields form={reviewForm} setForm={setReviewForm} />
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <Field label="Scheduled date"><input type="date" style={inputStyle} value={reviewForm.scheduledDate} onChange={(e) => setReviewForm({ ...reviewForm, scheduledDate: e.target.value })} /></Field>
+              <Field label="Required by"><input type="date" style={inputStyle} value={reviewForm.requiredByDate} onChange={(e) => setReviewForm({ ...reviewForm, requiredByDate: e.target.value })} /></Field>
+            </div>
+          )}
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
             <Btn variant="ghost" onClick={() => setModal(null)}>Cancel</Btn>
             <Btn variant="primary" onClick={doConvert}>Create work order</Btn>
@@ -1302,7 +1654,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder }) {
       )}
       {modal && modal.action === "decline" && (
         <Modal title="Decline request" onClose={() => setModal(null)}>
-          <Field label="Reason (shown to the submitter)"><textarea style={{ ...inputStyle, minHeight: 70 }} value={reviewForm.reason} onChange={(e) => setReviewForm({ ...reviewForm, reason: e.target.value })} autoFocus /></Field>
+          <Field label="Reason (shown to the submitter)" required><textarea style={{ ...inputStyle, minHeight: 70 }} value={reviewForm.reason} onChange={(e) => setReviewForm({ ...reviewForm, reason: e.target.value })} autoFocus /></Field>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
             <Btn variant="ghost" onClick={() => setModal(null)}>Cancel</Btn>
             <Btn variant="danger" onClick={doDecline}>Decline request</Btn>
@@ -1311,7 +1663,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder }) {
       )}
       {modal && modal.action === "info" && (
         <Modal title="Request more info" onClose={() => setModal(null)}>
-          <Field label="What do you need to know?"><textarea style={{ ...inputStyle, minHeight: 70 }} value={reviewForm.reason} onChange={(e) => setReviewForm({ ...reviewForm, reason: e.target.value })} autoFocus /></Field>
+          <Field label="What do you need to know?" required><textarea style={{ ...inputStyle, minHeight: 70 }} value={reviewForm.reason} onChange={(e) => setReviewForm({ ...reviewForm, reason: e.target.value })} autoFocus /></Field>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
             <Btn variant="ghost" onClick={() => setModal(null)}>Cancel</Btn>
             <Btn variant="primary" onClick={doRequestInfo}>Send</Btn>
@@ -1320,7 +1672,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder }) {
       )}
       {modal && modal.action === "merge" && (
         <Modal title="Merge into an existing work order" onClose={() => setModal(null)}>
-          <Field label="Existing work order">
+          <Field label="Existing work order" required>
             <select style={inputStyle} value={reviewForm.mergeInto} onChange={(e) => setReviewForm({ ...reviewForm, mergeInto: e.target.value })}>
               <option value="">— choose —</option>
               {openWOOptions.map((w) => <option key={w.id} value={w.id}>{formatWoNum(w.number)} · {w.title} ({w.type})</option>)}
@@ -1340,9 +1692,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder }) {
    WORK ORDERS
 ============================================================ */
 function PmBaseDetail({ data, base, onOpenInstance }) {
-  const linked = data.workOrders
-    .filter((w) => w.sourcePmBaseId === base.id)
-    .sort((a, b) => (a.requiredByDate || "").localeCompare(b.requiredByDate || ""));
+  const linked = data.workOrders.filter((w) => w.sourcePmBaseId === base.id).sort((a, b) => (a.requiredByDate || "").localeCompare(b.requiredByDate || ""));
   return (
     <div>
       <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.ink, marginBottom: 10 }}>
@@ -1363,37 +1713,83 @@ function PmBaseDetail({ data, base, onOpenInstance }) {
   );
 }
 
-function WorkOrdersView({ data, update, role, openId, setOpenId }) {
+function ArchiveModal({ data, onClose, goToOrder }) {
+  const [search, setSearch] = useState("");
+  const [locFilter, setLocFilter] = useState("");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const allowedLocs = locFilter ? descendantIds(data.locations, locFilter) : null;
+  const searchLower = search.trim().toLowerCase();
+  const items = data.workOrders
+    .filter((w) => w.status === "Verified")
+    .filter((w) => !allowedLocs || allowedLocs.has(w.locationId))
+    .filter((w) => typeFilter === "all" || w.type === typeFilter)
+    .filter((w) => !searchLower || w.title.toLowerCase().includes(searchLower) || formatWoNum(w.number).toLowerCase().includes(searchLower))
+    .sort((a, b) => (b.verifiedDate || "").localeCompare(a.verifiedDate || ""));
+
+  return (
+    <Modal title="Verified work order archive" onClose={onClose} wide>
+      <input style={{ ...inputStyle, marginBottom: 10 }} placeholder="Search by title or number…" value={search} onChange={(e) => setSearch(e.target.value)} />
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+        <select style={inputStyle} value={locFilter} onChange={(e) => setLocFilter(e.target.value)}>
+          <option value="">All locations</option>
+          {flattenTree(data.locations, "parentId", null).map(({ item, depth }) => (
+            <option key={item.id} value={item.id}>{"—".repeat(depth) + " " + item.name}</option>
+          ))}
+        </select>
+        <select style={inputStyle} value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+          <option value="all">All types</option>
+          {WO_TYPES.filter((t) => t !== "PM Base").map((t) => <option key={t} value={t}>{t}</option>)}
+        </select>
+      </div>
+      <div className="hk-scroll" style={{ maxHeight: 400, overflowY: "auto" }}>
+        {items.length === 0 && <Empty text="No verified work orders match." />}
+        {items.map((w) => (
+          <div key={w.id} onClick={() => { onClose(); goToOrder(w.id); }} className="hk-row" style={{ display: "flex", justifyContent: "space-between", padding: "9px 4px", borderTop: `1px solid ${C.lineSoft}`, cursor: "pointer" }}>
+            <span style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink }}>{formatWoNum(w.number)} · {w.title}</span>
+            <span style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint }}>verified {fmtDate(w.verifiedDate)}</span>
+          </div>
+        ))}
+      </div>
+    </Modal>
+  );
+}
+
+function WorkOrdersView({ data, update, role, currentUser, openId, setOpenId, pendingFilter, consumeFilter }) {
   const dialog = useDialog();
-  const [modal, setModal] = useState(null); // 'new'
+  const closeGuard = useCloseGuard(dialog);
+  const [modal, setModal] = useState(null);
   const [locFilter, setLocFilter] = useState(null);
   const [search, setSearch] = useState("");
+  const [priorityFilter, setPriorityFilter] = useState("all");
+  const [dueFilter, setDueFilter] = useState(pendingFilter?.due || "all");
+  const [showArchive, setShowArchive] = useState(false);
+  const [users, setUsers] = useState([]);
   const blank = {
     title: "", type: "Unplanned", assetId: null, bomNodeId: null, locationId: data.locations[0]?.id || "",
-    description: "", scheduledDate: todayISO(), requiredByDate: "", vendorId: "", benchmarkId: "",
-    pmMode: "Non-fixed", frequencyValue: "3", frequencyUnit: "months", fixedDates: [],
+    description: "", scheduledDate: todayISO(), requiredByDate: "", vendorId: "", benchmarkId: "", executorId: "",
+    priority: "Medium", pmMode: "Non-fixed", frequencyValue: "3", frequencyUnit: "months", fixedDates: [], partIds: [],
   };
   const [form, setForm] = useState(blank);
+  const initial = useRef(null);
+  const isDirty = modal === "new" && JSON.stringify(form) !== initial.current;
   const [detailEdits, setDetailEdits] = useState({});
+  const detailInitial = useRef(null);
+  const detailDirty = !!openId && JSON.stringify(detailEdits) !== detailInitial.current;
 
-  const openNew = () => { setForm(blank); setModal("new"); };
+  useEffect(() => { if (pendingFilter) consumeFilter(); }, []); // eslint-disable-line
+  useEffect(() => { api.listUsers().then(setUsers).catch(() => setUsers([])); }, []);
+  const assignableUsers = users.filter((u) => u.role === "Owner" || u.role === "Manager" || u.role === "Executor");
 
-  const addFixedDate = () => setForm((f) => ({ ...f, fixedDates: [...f.fixedDates, { month: 1, day: 1 }] }));
-  const removeFixedDate = (i) => setForm((f) => ({ ...f, fixedDates: f.fixedDates.filter((_, idx) => idx !== i) }));
-  const updateFixedDate = (i, patch) => setForm((f) => ({ ...f, fixedDates: f.fixedDates.map((fd, idx) => (idx === i ? { ...fd, ...patch } : fd)) }));
+  const openNew = () => { setForm(blank); initial.current = JSON.stringify(blank); setModal("new"); };
 
   const createWO = async () => {
     if (!form.title.trim() || !form.locationId) { await dialog.alertMsg("Title and location are required."); return; }
     if (form.type === "PM Base") {
-      if (form.pmMode === "Non-fixed" && (!form.frequencyValue || Number(form.frequencyValue) <= 0)) {
-        await dialog.alertMsg("Enter a frequency greater than zero."); return;
-      }
-      if (form.pmMode === "Fixed" && form.fixedDates.length === 0) {
-        await dialog.alertMsg("Add at least one fixed date."); return;
-      }
+      if (form.pmMode === "Non-fixed" && (!form.frequencyValue || Number(form.frequencyValue) <= 0)) { await dialog.alertMsg("Enter a frequency greater than zero."); return; }
+      if (form.pmMode === "Fixed" && form.fixedDates.length === 0) { await dialog.alertMsg("Add at least one fixed date."); return; }
     }
     update((d) => {
-      d.counters = d.counters || { wo: 0, wr: 0 };
+      d.counters = d.counters || { wo: 0, wr: 0, part: 0 };
       let checklist = "";
       if (form.type === "Corrective" && form.benchmarkId) {
         const bm = d.benchmarks.find((b) => b.id === form.benchmarkId);
@@ -1408,29 +1804,23 @@ function WorkOrdersView({ data, update, role, openId, setOpenId }) {
         description: form.description, sourceRequestId: null,
         sourceBenchmarkId: form.type === "Corrective" ? (form.benchmarkId || null) : null,
         sourcePmBaseId: null, sourceFixedDate: null,
+        priority: form.priority, executorId: form.executorId || "",
         scheduledDate: form.type === "PM Base" ? "" : form.scheduledDate,
         requiredByDate: form.type === "PM Base" ? "" : (form.requiredByDate || ""),
-        completedDate: null,
+        completedDate: null, verifiedDate: null,
         cost: "", vendorId: form.vendorId || null,
         notes: checklist ? "Checklist: " + checklist : "",
+        partIds: form.type === "PM Base" ? [] : form.partIds, createdBy: currentUser,
       };
       if (form.type === "PM Base") {
         wo.pmMode = form.pmMode;
-        if (form.pmMode === "Non-fixed") {
-          wo.frequencyValue = Number(form.frequencyValue);
-          wo.frequencyUnit = form.frequencyUnit;
-        } else {
-          wo.fixedDates = form.fixedDates.map((f) => ({ month: Number(f.month), day: Number(f.day) }));
-        }
+        if (form.pmMode === "Non-fixed") { wo.frequencyValue = Number(form.frequencyValue); wo.frequencyUnit = form.frequencyUnit; }
+        else wo.fixedDates = form.fixedDates.map((f) => ({ month: Number(f.month), day: Number(f.day) }));
       }
       d.workOrders.push(wo);
-
       if (form.type === "PM Base") {
-        if (wo.pmMode === "Non-fixed") {
-          spawnPmInstance(d, wo, { afterDateISO: todayISO(), fixedDate: null });
-        } else {
-          wo.fixedDates.forEach((fd) => spawnPmInstance(d, wo, { afterDateISO: todayISO(), fixedDate: fd }));
-        }
+        if (wo.pmMode === "Non-fixed") spawnPmInstance(d, wo, { afterDateISO: todayISO(), fixedDate: null });
+        else wo.fixedDates.forEach((fd) => spawnPmInstance(d, wo, { afterDateISO: todayISO(), fixedDate: fd }));
       }
       setOpenId(id);
       return d;
@@ -1439,13 +1829,13 @@ function WorkOrdersView({ data, update, role, openId, setOpenId }) {
   };
 
   const openWO = data.workOrders.find((w) => w.id === openId);
-  useEffect(() => { if (openWO) setDetailEdits({ ...openWO }); }, [openId]); // eslint-disable-line
+  useEffect(() => {
+    if (openWO) { const snap = { ...openWO }; setDetailEdits(snap); detailInitial.current = JSON.stringify(snap); }
+  }, [openId]); // eslint-disable-line
 
   const saveDetail = () => {
-    update((d) => {
-      Object.assign(d.workOrders.find((w) => w.id === openWO.id), detailEdits);
-      return d;
-    });
+    update((d) => { Object.assign(d.workOrders.find((w) => w.id === openWO.id), detailEdits); return d; });
+    detailInitial.current = JSON.stringify(detailEdits);
   };
   const setStatus = (status) => {
     update((d) => {
@@ -1453,9 +1843,8 @@ function WorkOrdersView({ data, update, role, openId, setOpenId }) {
       const wasTerminal = w.status === "Completed" || w.status === "Verified";
       w.status = status;
       if (status === "Completed" && !w.completedDate) w.completedDate = todayISO();
-      if (status === "Completed" && w.type === "PM" && w.sourcePmBaseId && !wasTerminal) {
-        regeneratePmAfterCompletion(d, w);
-      }
+      if (status === "Verified" && !w.verifiedDate) w.verifiedDate = todayISO();
+      if (status === "Completed" && w.type === "PM" && w.sourcePmBaseId && !wasTerminal) regeneratePmAfterCompletion(d, w);
       return d;
     });
   };
@@ -1475,16 +1864,39 @@ function WorkOrdersView({ data, update, role, openId, setOpenId }) {
     if (!title) return;
     update((d) => {
       const id = uid("bm");
-      d.benchmarks.push({ id, title, checklist: detailEdits.notes || "", estCost: detailEdits.cost || "", estTime: "", notes: "", vendorId: openWO.vendorId || null, version: 1 });
+      d.benchmarks.push({ id, title, checklist: detailEdits.notes || "", estCost: detailEdits.cost || "", estTime: "", notes: "", vendorId: openWO.vendorId || null, version: 1, createdBy: currentUser });
       return d;
     });
     await dialog.alertMsg("Saved as a new benchmark.");
+  };
+  const deleteWO = async () => {
+    const ok = await dialog.confirm(`Permanently delete ${formatWoNum(openWO.number)} — "${openWO.title}"? This cannot be undone.`);
+    if (!ok) return;
+    update((d) => {
+      d.workOrders = d.workOrders.filter((x) => x.id !== openWO.id);
+      d.workRequests.forEach((r) => { if (r.workOrderId === openWO.id) r.workOrderId = null; });
+      d.workOrders.forEach((x) => { if (x.sourcePmBaseId === openWO.id) x.sourcePmBaseId = null; });
+      return d;
+    });
+    setOpenId(null);
   };
 
   const allowedLocs = locFilter ? descendantIds(data.locations, locFilter) : null;
   const searchLower = search.trim().toLowerCase();
   const matchesFilters = (w) => {
     if (allowedLocs && !allowedLocs.has(w.locationId)) return false;
+    if (priorityFilter !== "all" && w.priority !== priorityFilter) return false;
+    if (dueFilter !== "all") {
+      const notDone = w.status !== "Completed" && w.status !== "Verified";
+      if (!notDone) return false;
+      const rd = w.requiredByDate ? daysUntil(w.requiredByDate) : null;
+      if (dueFilter === "overdue" && !(rd !== null && rd < 0)) return false;
+      if (dueFilter === "30") {
+        const sd = w.scheduledDate ? daysUntil(w.scheduledDate) : null;
+        const inRange = (v) => v !== null && v >= 0 && v <= 30;
+        if (!inRange(rd) && !inRange(sd)) return false;
+      }
+    }
     if (searchLower) {
       const num = formatWoNum(w.number).toLowerCase();
       if (!w.title.toLowerCase().includes(searchLower) && !num.includes(searchLower)) return false;
@@ -1496,22 +1908,38 @@ function WorkOrdersView({ data, update, role, openId, setOpenId }) {
   const pmBases = data.workOrders.filter((w) => w.type === "PM Base").filter(matchesFilters);
   const columns = WO_STATUSES.map((status) => ({
     status,
-    items: boardOrders.filter((w) => w.status === status),
+    items: boardOrders.filter((w) => {
+      if (w.status !== status) return false;
+      if (status === "Verified") return w.verifiedDate && daysUntil(w.verifiedDate) >= -VERIFIED_ARCHIVE_DAYS;
+      return true;
+    }),
   }));
 
   return (
     <div>
       <SectionHeader
         title="Work Orders"
-        subtitle="Created ad hoc for any type, or by converting an approved work request — except Unplanned and PM Base, which are always ad hoc."
-        action={<Btn variant="primary" onClick={openNew}><Plus size={15} /> New work order</Btn>}
+        subtitle="The record of all maintenance work, from open to verified."
+        info={PAGE_INFO.orders}
+        action={canWrite(role) && <Btn variant="primary" onClick={openNew}><Plus size={15} /> New work order</Btn>}
       />
       <div style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 16 }}>
         <LocationNavTree data={data} selectedId={locFilter} onSelect={setLocFilter} />
         <div>
-          <div style={{ position: "relative", maxWidth: 340, marginBottom: 14 }}>
-            <Search size={14} color={C.inkFaint} style={{ position: "absolute", left: 10, top: 10 }} />
-            <input style={{ ...inputStyle, paddingLeft: 30 }} placeholder="Search by title or number…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+            <div style={{ position: "relative", maxWidth: 300, flex: 1 }}>
+              <Search size={14} color={C.inkFaint} style={{ position: "absolute", left: 10, top: 10 }} />
+              <input style={{ ...inputStyle, paddingLeft: 30 }} placeholder="Search by title or number…" value={search} onChange={(e) => setSearch(e.target.value)} />
+            </div>
+            <select style={{ ...inputStyle, width: "auto" }} value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)}>
+              <option value="all">All priorities</option>
+              {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+            <select style={{ ...inputStyle, width: "auto" }} value={dueFilter} onChange={(e) => setDueFilter(e.target.value)}>
+              <option value="all">All due dates</option>
+              <option value="overdue">Overdue</option>
+              <option value="30">Due within 30 days</option>
+            </select>
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
@@ -1521,6 +1949,11 @@ function WorkOrdersView({ data, update, role, openId, setOpenId }) {
                   <span style={{ width: 8, height: 8, borderRadius: 8, background: WO_STATUS_COLORS[col.status] }} />
                   <span style={{ fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink }}>{col.status}</span>
                   <span style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint }}>({col.items.length})</span>
+                  {col.status === "Verified" && (
+                    <span onClick={() => setShowArchive(true)} className="hk-link" title="View all verified work orders" style={{ display: "flex", alignItems: "center", gap: 3, marginLeft: "auto", cursor: "pointer", color: C.navy }}>
+                      <Archive size={12} />
+                    </span>
+                  )}
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   {col.items.map((w) => {
@@ -1530,11 +1963,10 @@ function WorkOrdersView({ data, update, role, openId, setOpenId }) {
                       <Panel key={w.id} style={{ padding: "10px 12px", cursor: "pointer" }}>
                         <div onClick={() => setOpenId(w.id)}>
                           <div style={{ fontFamily: FONT_BODY, fontSize: 13, fontWeight: 700, color: C.ink }}>{formatWoNum(w.number)} · {w.title}</div>
-                          <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: 3 }}>
-                            {locationPath(data.locations, w.locationId)}
-                          </div>
+                          <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: 3 }}>{locationPath(data.locations, w.locationId)}</div>
                           <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
                             <Tag text={w.type} color={WO_TYPE_COLORS[w.type]} soft={C.panelAlt} />
+                            <Tag text={w.priority || "Medium"} color={PRIORITY_COLORS[w.priority || "Medium"]} soft={PRIORITY_SOFT[w.priority || "Medium"]} />
                             {notDone && du !== null && du < 0 && <Tag text="Overdue" color={C.rust} soft={C.rustSoft} />}
                             {notDone && du !== null && du >= 0 && du <= 7 && <Tag text={`Due ${du}d`} color={C.gold} soft={C.goldSoft} />}
                           </div>
@@ -1576,16 +2008,23 @@ function WorkOrdersView({ data, update, role, openId, setOpenId }) {
       </div>
 
       {modal === "new" && (
-        <Modal title="New work order" onClose={() => setModal(null)} wide>
-          <Field label="Title"><input style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} autoFocus /></Field>
-          <Field label="Type">
-            <select style={inputStyle} value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
-              {WO_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-            </select>
-          </Field>
+        <Modal title="New work order" onClose={() => closeGuard(isDirty, createWO, () => setModal(null))} wide>
+          <Field label="Title" required><input style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} autoFocus /></Field>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <Field label="Type">
+              <select style={inputStyle} value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
+                {WO_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </Field>
+            <Field label="Priority">
+              <select style={inputStyle} value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })}>
+                {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </Field>
+          </div>
 
           {form.type === "Corrective" && (
-            <Field label="Copy from benchmark (optional)">
+            <Field label="Copy from benchmark">
               <select style={inputStyle} value={form.benchmarkId} onChange={(e) => setForm({ ...form, benchmarkId: e.target.value })}>
                 <option value="">— start blank —</option>
                 {data.benchmarks.map((b) => <option key={b.id} value={b.id}>{b.title}</option>)}
@@ -1593,49 +2032,11 @@ function WorkOrdersView({ data, update, role, openId, setOpenId }) {
             </Field>
           )}
 
-          {form.type === "PM Base" && (
-            <>
-              <Field label="PM mode">
-                <select style={inputStyle} value={form.pmMode} onChange={(e) => setForm({ ...form, pmMode: e.target.value })}>
-                  <option value="Non-fixed">Non-fixed (repeats on a frequency)</option>
-                  <option value="Fixed">Fixed (same date(s) every year)</option>
-                </select>
-              </Field>
-              {form.pmMode === "Non-fixed" ? (
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                  <Field label="Every">
-                    <input type="number" min="1" style={inputStyle} value={form.frequencyValue} onChange={(e) => setForm({ ...form, frequencyValue: e.target.value })} />
-                  </Field>
-                  <Field label="Unit">
-                    <select style={inputStyle} value={form.frequencyUnit} onChange={(e) => setForm({ ...form, frequencyUnit: e.target.value })}>
-                      {FREQUENCY_UNITS.map((u) => <option key={u} value={u}>{u}</option>)}
-                    </select>
-                  </Field>
-                </div>
-              ) : (
-                <div style={{ marginBottom: 12 }}>
-                  <label style={labelStyle}>Fixed date(s) of year</label>
-                  {form.fixedDates.map((fd, i) => (
-                    <div key={i} style={{ display: "flex", gap: 8, marginBottom: 6, alignItems: "center" }}>
-                      <select style={{ ...inputStyle, width: 150 }} value={fd.month} onChange={(e) => updateFixedDate(i, { month: Number(e.target.value) })}>
-                        {MONTH_NAMES.map((m, idx) => <option key={m} value={idx + 1}>{m}</option>)}
-                      </select>
-                      <input type="number" min="1" max="31" style={{ ...inputStyle, width: 80 }} value={fd.day} onChange={(e) => updateFixedDate(i, { day: Number(e.target.value) })} />
-                      <button onClick={() => removeFixedDate(i)} style={{ background: "none", border: "none", color: C.rust, cursor: "pointer" }}><X size={16} /></button>
-                    </div>
-                  ))}
-                  <Btn small variant="ghost" onClick={addFixedDate}><Plus size={12} /> Add date</Btn>
-                </div>
-              )}
-              <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 12 }}>
-                A PM Base is never scheduled or completed itself — it's a template. Creating it immediately generates the first PM work order(s) copied from it.
-              </div>
-            </>
-          )}
+          {form.type === "PM Base" && <PmBaseFields form={form} setForm={setForm} />}
 
           <AssetBomPicker data={data} assetId={form.assetId} bomNodeId={form.bomNodeId} onChange={({ assetId, bomNodeId }) => setForm({ ...form, assetId, bomNodeId, locationId: assetId ? data.assets.find((a) => a.id === assetId).locationId : form.locationId })} />
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <Field label="Location (required)">
+            <Field label="Location" required>
               <select style={inputStyle} value={form.locationId} onChange={(e) => setForm({ ...form, locationId: e.target.value })}>
                 {flattenTree(data.locations, "parentId", null).map(({ item, depth }) => (
                   <option key={item.id} value={item.id}>{"—".repeat(depth) + " " + item.name}</option>
@@ -1647,27 +2048,39 @@ function WorkOrdersView({ data, update, role, openId, setOpenId }) {
             )}
           </div>
           {form.type !== "PM Base" && (
-            <Field label="Required by (optional)"><input type="date" style={inputStyle} value={form.requiredByDate} onChange={(e) => setForm({ ...form, requiredByDate: e.target.value })} /></Field>
+            <Field label="Required by"><input type="date" style={inputStyle} value={form.requiredByDate} onChange={(e) => setForm({ ...form, requiredByDate: e.target.value })} /></Field>
           )}
-          <Field label="Vendor (optional)">
-            <select style={inputStyle} value={form.vendorId} onChange={(e) => setForm({ ...form, vendorId: e.target.value })}>
-              <option value="">— none —</option>
-              {data.vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
-            </select>
-          </Field>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <Field label="Vendor">
+              <select style={inputStyle} value={form.vendorId} onChange={(e) => setForm({ ...form, vendorId: e.target.value })}>
+                <option value="">— none —</option>
+                {data.vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+              </select>
+            </Field>
+            <Field label="Executor">
+              <select style={inputStyle} value={form.executorId} onChange={(e) => setForm({ ...form, executorId: e.target.value })}>
+                <option value="">— unassigned —</option>
+                {assignableUsers.map((u) => <option key={u.id} value={u.id}>{u.username} ({u.role})</option>)}
+              </select>
+            </Field>
+          </div>
+          {form.type !== "PM Base" && (
+            <PartsPicker data={data} update={update} value={form.partIds} onChange={(v) => setForm({ ...form, partIds: v })} defaultLocationId={form.locationId} currentUser={currentUser} />
+          )}
           <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 60 }} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-            <Btn variant="ghost" onClick={() => setModal(null)}>Cancel</Btn>
+            <Btn variant="ghost" onClick={() => closeGuard(isDirty, createWO, () => setModal(null))}>Cancel</Btn>
             <Btn variant="primary" onClick={createWO}>Create</Btn>
           </div>
         </Modal>
       )}
 
       {openWO && (
-        <Modal title={`${formatWoNum(openWO.number)} · ${openWO.title}`} onClose={() => setOpenId(null)} wide>
+        <Modal title={`${formatWoNum(openWO.number)} · ${openWO.title}`} onClose={() => closeGuard(detailDirty, saveDetail, () => setOpenId(null))} wide>
           <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
             <Tag text={openWO.type} color={WO_TYPE_COLORS[openWO.type]} soft={C.panelAlt} />
             {openWO.type !== "PM Base" && <Tag text={openWO.status} color={WO_STATUS_COLORS[openWO.status]} soft={C.panelAlt} />}
+            {openWO.type !== "PM Base" && <Tag text={openWO.priority || "Medium"} color={PRIORITY_COLORS[openWO.priority || "Medium"]} soft={PRIORITY_SOFT[openWO.priority || "Medium"]} />}
           </div>
           <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkFaint, marginBottom: 12 }}>
             {locationPath(data.locations, openWO.locationId)}
@@ -1692,10 +2105,24 @@ function WorkOrdersView({ data, update, role, openId, setOpenId }) {
                   </select>
                 </Field>
               </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <Field label="Priority">
+                  <select style={inputStyle} value={detailEdits.priority || "Medium"} onChange={(e) => setDetailEdits({ ...detailEdits, priority: e.target.value })}>
+                    {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                </Field>
+                <Field label="Executor">
+                  <select style={inputStyle} value={detailEdits.executorId || ""} onChange={(e) => setDetailEdits({ ...detailEdits, executorId: e.target.value })}>
+                    <option value="">— unassigned —</option>
+                    {assignableUsers.map((u) => <option key={u.id} value={u.id}>{u.username} ({u.role})</option>)}
+                  </select>
+                </Field>
+              </div>
+              <PartsPicker data={data} update={update} value={detailEdits.partIds || []} onChange={(v) => setDetailEdits({ ...detailEdits, partIds: v })} defaultLocationId={openWO.locationId} currentUser={currentUser} />
               <Field label="Notes / checklist"><textarea style={{ ...inputStyle, minHeight: 80 }} value={detailEdits.notes || ""} onChange={(e) => setDetailEdits({ ...detailEdits, notes: e.target.value })} /></Field>
 
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6, flexWrap: "wrap", gap: 8 }}>
-                <div style={{ display: "flex", gap: 6 }}>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   {WO_STATUSES.map((s) => (
                     <Btn key={s} small variant={openWO.status === s ? "primary" : "ghost"} onClick={() => setStatus(s)}>{s}</Btn>
                   ))}
@@ -1720,8 +2147,16 @@ function WorkOrdersView({ data, update, role, openId, setOpenId }) {
               )}
             </>
           )}
+
+          {canDelete(role, openWO, currentUser) && (
+            <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${C.lineSoft}` }}>
+              <Btn small variant="danger" onClick={deleteWO}><Trash2 size={12} /> Delete this work order</Btn>
+            </div>
+          )}
         </Modal>
       )}
+
+      {showArchive && <ArchiveModal data={data} onClose={() => setShowArchive(false)} goToOrder={(id) => { setShowArchive(false); setOpenId(id); }} />}
     </div>
   );
 }
@@ -1729,18 +2164,21 @@ function WorkOrdersView({ data, update, role, openId, setOpenId }) {
 /* ============================================================
    VENDORS
 ============================================================ */
-function VendorsView({ data, update, role }) {
+function VendorsView({ data, update, role, currentUser }) {
   const dialog = useDialog();
+  const closeGuard = useCloseGuard(dialog);
   const [modal, setModal] = useState(null);
-  const blank = { name: "", specialty: "", contact: "", notes: "" };
+  const blank = { name: "", specialty: "", contact: "", link: "", notes: "" };
   const [form, setForm] = useState(blank);
+  const initial = useRef(null);
+  const isDirty = modal && JSON.stringify(form) !== initial.current;
 
-  const openAdd = () => { setForm(blank); setModal("add"); };
-  const openEdit = (v) => { setForm({ ...v }); setModal(v.id); };
+  const openAdd = () => { setForm(blank); initial.current = JSON.stringify(blank); setModal("add"); };
+  const openEdit = (v) => { const f = { ...v }; setForm(f); initial.current = JSON.stringify(f); setModal(v.id); };
   const save = () => {
     if (!form.name.trim()) return;
     update((d) => {
-      if (modal === "add") d.vendors.push({ id: uid("v"), ...form, name: form.name.trim() });
+      if (modal === "add") d.vendors.push({ id: uid("v"), ...form, name: form.name.trim(), createdBy: currentUser });
       else Object.assign(d.vendors.find((v) => v.id === modal), form, { name: form.name.trim() });
       return d;
     });
@@ -1754,7 +2192,12 @@ function VendorsView({ data, update, role }) {
 
   return (
     <div>
-      <SectionHeader title="Vendors & Service Providers" action={role === "Owner" && <Btn variant="primary" onClick={openAdd}><Plus size={15} /> Add vendor</Btn>} />
+      <SectionHeader
+        title="Vendors & Service Providers"
+        subtitle="The contractors and service providers you actually call on."
+        info={PAGE_INFO.vendors}
+        action={isAdmin(role) && <Btn variant="primary" onClick={openAdd}><Plus size={15} /> Add vendor</Btn>}
+      />
       <Panel>
         {data.vendors.length === 0 && <Empty text="No vendors saved yet." />}
         {data.vendors.map((v) => (
@@ -1762,25 +2205,27 @@ function VendorsView({ data, update, role }) {
             <div>
               <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, fontWeight: 700, color: C.ink }}>{v.name}</div>
               <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint }}>{v.specialty} · {v.contact}</div>
+              {v.link && <a href={v.link} target="_blank" rel="noreferrer" style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.navy, display: "inline-flex", alignItems: "center", gap: 3, marginTop: 2 }}><LinkIcon size={11} /> {v.link}</a>}
               {v.notes && <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkSoft, marginTop: 2 }}>{v.notes}</div>}
             </div>
-            {role === "Owner" && (
+            {isAdmin(role) && (
               <div style={{ display: "flex", gap: 6 }}>
                 <button onClick={() => openEdit(v)} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkSoft }}><Pencil size={14} /></button>
-                <button onClick={() => remove(v)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rust }}><Trash2 size={14} /></button>
+                {canDelete(role, v, currentUser) && <button onClick={() => remove(v)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rust }}><Trash2 size={14} /></button>}
               </div>
             )}
           </div>
         ))}
       </Panel>
       {modal && (
-        <Modal title={modal === "add" ? "Add vendor" : "Edit vendor"} onClose={() => setModal(null)}>
-          <Field label="Name"><input style={inputStyle} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} autoFocus /></Field>
+        <Modal title={modal === "add" ? "Add vendor" : "Edit vendor"} onClose={() => closeGuard(isDirty, save, () => setModal(null))}>
+          <Field label="Name" required><input style={inputStyle} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} autoFocus /></Field>
           <Field label="Specialty"><input style={inputStyle} value={form.specialty} onChange={(e) => setForm({ ...form, specialty: e.target.value })} /></Field>
           <Field label="Contact"><input style={inputStyle} value={form.contact} onChange={(e) => setForm({ ...form, contact: e.target.value })} /></Field>
+          <Field label="Web link"><input style={inputStyle} value={form.link} onChange={(e) => setForm({ ...form, link: e.target.value })} placeholder="https://…" /></Field>
           <Field label="Notes"><textarea style={{ ...inputStyle, minHeight: 60 }} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-            <Btn variant="ghost" onClick={() => setModal(null)}>Cancel</Btn>
+            <Btn variant="ghost" onClick={() => closeGuard(isDirty, save, () => setModal(null))}>Cancel</Btn>
             <Btn variant="primary" onClick={save}>Save</Btn>
           </div>
         </Modal>
@@ -1790,69 +2235,61 @@ function VendorsView({ data, update, role }) {
 }
 
 /* ============================================================
-   INVENTORY
+   PARTS CATALOGUE
 ============================================================ */
-function InventoryView({ data, update, role }) {
-  const [modal, setModal] = useState(null);
-  const blank = { name: "", assetId: null, bomNodeId: null, qty: 1, reorderAt: 1 };
-  const [form, setForm] = useState(blank);
+function PartsView({ data, update, role, currentUser }) {
+  const [editing, setEditing] = useState(null); // "new" | part object
 
-  const openAdd = () => { setForm(blank); setModal("add"); };
-  const save = () => {
-    if (!form.name.trim()) return;
-    update((d) => { d.inventory.push({ id: uid("inv"), ...form, name: form.name.trim(), qty: Number(form.qty) || 0, reorderAt: Number(form.reorderAt) || 0 }); return d; });
-    setModal(null);
-  };
-  const adjust = (item, delta) => {
+  const adjust = (item, delta, e) => {
+    e.stopPropagation();
     update((d) => {
       const it = d.inventory.find((i) => i.id === item.id);
       it.qty = Math.max(0, it.qty + delta);
       return d;
     });
   };
-  const remove = (item) => {
-    update((d) => { d.inventory = d.inventory.filter((i) => i.id !== item.id); return d; });
-  };
 
   return (
     <div>
-      <SectionHeader title="Inventory & Consumables" subtitle="Track parts and supplies tied to an asset or a specific BOM component." action={role === "Owner" && <Btn variant="primary" onClick={openAdd}><Plus size={15} /> Add item</Btn>} />
-      <Panel>
-        {data.inventory.length === 0 && <Empty text="No consumables tracked yet." />}
+      <SectionHeader
+        title="Parts Catalogue"
+        subtitle="Every spare part and consumable kept on hand, and what it belongs to."
+        info={PAGE_INFO.parts}
+        action={isAdmin(role) && <Btn variant="primary" onClick={() => setEditing("new")}><Plus size={15} /> Add part</Btn>}
+      />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
+        {data.inventory.length === 0 && <Empty text="No parts tracked yet." />}
         {data.inventory.map((item) => {
           const low = item.qty <= item.reorderAt;
           return (
-            <div key={item.id} className="hk-row" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 18px", borderTop: `1px solid ${C.lineSoft}` }}>
-              <div>
-                <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, fontWeight: 700, color: C.ink }}>{item.name}</div>
-                <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint }}>
+            <Panel key={item.id} style={{ padding: 14 }}>
+              <div onClick={() => canWrite(role) && setEditing(item)} style={{ cursor: canWrite(role) ? "pointer" : "default" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 6 }}>
+                  <span style={{ fontFamily: FONT_BODY, fontSize: 13, fontWeight: 700, color: C.ink }}>{formatPartNum(item.partNumber)} · {item.name}</span>
+                  {low && <Tag text="Reorder" color={C.rust} soft={C.rustSoft} />}
+                </div>
+                <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: 3 }}>
                   {item.assetId ? nameOf(data.assets, item.assetId) : "—"}{item.bomNodeId ? ` · ${nameOf(data.bomNodes, item.bomNodeId)}` : ""}
                 </div>
+                {item.manufacturer && <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint }}>{item.manufacturer}{item.manufacturerPartNumber ? ` · #${item.manufacturerPartNumber}` : ""}</div>}
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                {low && <Tag text="Reorder" color={C.rust} soft={C.rustSoft} />}
-                <button onClick={() => adjust(item, -1)} style={{ border: `1px solid ${C.line}`, background: "#fff", width: 26, height: 26, borderRadius: 3, cursor: "pointer" }}>−</button>
-                <span style={{ fontFamily: FONT_BODY, fontWeight: 700, width: 20, textAlign: "center" }}>{item.qty}</span>
-                <button onClick={() => adjust(item, 1)} style={{ border: `1px solid ${C.line}`, background: "#fff", width: 26, height: 26, borderRadius: 3, cursor: "pointer" }}>+</button>
-                {role === "Owner" && <button onClick={() => remove(item)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rust, marginLeft: 4 }}><Trash2 size={14} /></button>}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 10 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <button onClick={(e) => adjust(item, -1, e)} disabled={!canWrite(role)} style={{ border: `1px solid ${C.line}`, background: "#fff", width: 24, height: 24, borderRadius: 3, cursor: canWrite(role) ? "pointer" : "not-allowed", opacity: canWrite(role) ? 1 : 0.4 }}>−</button>
+                  <span style={{ fontFamily: FONT_BODY, fontWeight: 700, fontSize: 13, width: 20, textAlign: "center" }}>{item.qty}</span>
+                  <button onClick={(e) => adjust(item, 1, e)} disabled={!canWrite(role)} style={{ border: `1px solid ${C.line}`, background: "#fff", width: 24, height: 24, borderRadius: 3, cursor: canWrite(role) ? "pointer" : "not-allowed", opacity: canWrite(role) ? 1 : 0.4 }}>+</button>
+                </div>
+                {item.cost && <span style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint }}>${item.cost}</span>}
               </div>
-            </div>
+            </Panel>
           );
         })}
-      </Panel>
-      {modal && (
-        <Modal title="Add inventory item" onClose={() => setModal(null)}>
-          <Field label="Name"><input style={inputStyle} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. 16x25x1 Furnace Filter" autoFocus /></Field>
-          <AssetBomPicker data={data} assetId={form.assetId} bomNodeId={form.bomNodeId} onChange={({ assetId, bomNodeId }) => setForm({ ...form, assetId, bomNodeId })} />
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <Field label="Quantity on hand"><input type="number" style={inputStyle} value={form.qty} onChange={(e) => setForm({ ...form, qty: e.target.value })} /></Field>
-            <Field label="Reorder at"><input type="number" style={inputStyle} value={form.reorderAt} onChange={(e) => setForm({ ...form, reorderAt: e.target.value })} /></Field>
-          </div>
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-            <Btn variant="ghost" onClick={() => setModal(null)}>Cancel</Btn>
-            <Btn variant="primary" onClick={save}>Save</Btn>
-          </div>
-        </Modal>
+      </div>
+      {editing && (
+        <PartEditModal
+          data={data} update={update} part={editing === "new" ? null : editing} currentUser={currentUser}
+          onClose={() => setEditing(null)}
+        />
       )}
     </div>
   );
@@ -1873,7 +2310,7 @@ function BudgetView({ data }) {
 
   return (
     <div>
-      <SectionHeader title="Budget & Cost Tracking" subtitle="Computed from logged work order costs." />
+      <SectionHeader title="Budget & Cost Tracking" subtitle="What upkeep is actually costing, broken down by category." info={PAGE_INFO.budget} />
       <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
         <Panel style={{ padding: 18, flex: 1 }}>
           <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, fontWeight: 600, color: C.inkSoft }}>TOTAL LOGGED SPEND</div>
@@ -1903,22 +2340,22 @@ function BudgetView({ data }) {
 }
 
 /* ============================================================
-   SCHEDULE — monthly calendar of work orders by scheduled date
+   SCHEDULE
 ============================================================ */
 function ScheduleView({ data, goToOrder }) {
-  const [cursor, setCursor] = useState(() => {
-    const t = new Date();
-    return { year: t.getFullYear(), month: t.getMonth() };
-  });
+  const [locFilter, setLocFilter] = useState(null);
+  const [cursor, setCursor] = useState(() => { const t = new Date(); return { year: t.getFullYear(), month: t.getMonth() }; });
 
   const firstOfMonth = new Date(cursor.year, cursor.month, 1);
   const startWeekday = firstOfMonth.getDay();
   const daysInMonth = new Date(cursor.year, cursor.month + 1, 0).getDate();
   const totalCells = Math.ceil((startWeekday + daysInMonth) / 7) * 7;
 
+  const allowedLocs = locFilter ? descendantIds(data.locations, locFilter) : null;
   const eventsByDay = {};
   data.workOrders.forEach((w) => {
     if (w.type === "PM Base" || !w.scheduledDate) return;
+    if (allowedLocs && !allowedLocs.has(w.locationId)) return;
     const d = new Date(w.scheduledDate + "T00:00:00");
     if (d.getFullYear() === cursor.year && d.getMonth() === cursor.month) {
       const day = d.getDate();
@@ -1935,85 +2372,66 @@ function ScheduleView({ data, goToOrder }) {
     <div>
       <SectionHeader
         title="Schedule"
-        subtitle="Work orders by scheduled date."
+        subtitle="When maintenance work is planned to happen."
+        info={PAGE_INFO.schedule}
         action={
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <Btn small variant="ghost" onClick={goPrev}><ChevronLeft size={14} /></Btn>
-            <span style={{ fontFamily: FONT_HEAD, fontSize: 14, fontWeight: 600, color: C.ink, minWidth: 150, textAlign: "center", display: "inline-block" }}>
-              {MONTH_NAMES[cursor.month]} {cursor.year}
-            </span>
+            <span style={{ fontFamily: FONT_HEAD, fontSize: 14, fontWeight: 600, color: C.ink, minWidth: 150, textAlign: "center", display: "inline-block" }}>{MONTH_NAMES[cursor.month]} {cursor.year}</span>
             <Btn small variant="ghost" onClick={goNext}><ChevronRight size={14} /></Btn>
             <Btn small variant="ghost" onClick={goToday}>Today</Btn>
           </div>
         }
       />
-      <Panel style={{ padding: 10 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, marginBottom: 4 }}>
-          {WEEKDAY_LABELS.map((w) => (
-            <div key={w} style={{ fontFamily: FONT_BODY, fontSize: 11, fontWeight: 700, color: C.inkFaint, textAlign: "center", padding: "4px 0" }}>{w}</div>
-          ))}
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
-          {Array.from({ length: totalCells }).map((_, i) => {
-            const dayNum = i - startWeekday + 1;
-            const inMonth = dayNum >= 1 && dayNum <= daysInMonth;
-            const dateStr = inMonth ? `${cursor.year}-${String(cursor.month + 1).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}` : null;
-            const isToday = dateStr === todayStr;
-            const dayEvents = inMonth ? (eventsByDay[dayNum] || []) : [];
-            return (
-              <div
-                key={i}
-                style={{
-                  minHeight: 92, border: `1px solid ${C.lineSoft}`, borderRadius: 3, padding: 5,
-                  background: inMonth ? (isToday ? C.orangeSoft : "#fff") : C.panelAlt,
-                  opacity: inMonth ? 1 : 0.5,
-                }}
-              >
-                {inMonth && (
-                  <>
-                    <div style={{ fontFamily: FONT_BODY, fontSize: 11, fontWeight: isToday ? 700 : 600, color: isToday ? C.orange : C.inkFaint, marginBottom: 3 }}>{dayNum}</div>
-                    {dayEvents.slice(0, 3).map((w) => (
-                      <div
-                        key={w.id}
-                        onClick={() => goToOrder(w.id)}
-                        title={`${formatWoNum(w.number)} ${w.title}`}
-                        style={{
-                          fontFamily: FONT_BODY, fontSize: 10.5, fontWeight: 600, color: "#fff",
-                          background: WO_TYPE_COLORS[w.type], borderRadius: 2, padding: "2px 4px", marginBottom: 2,
-                          cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                        }}
-                      >
-                        {formatWoNum(w.number)} {w.title}
-                      </div>
-                    ))}
-                    {dayEvents.length > 3 && (
-                      <div style={{ fontFamily: FONT_BODY, fontSize: 10, color: C.inkFaint }}>+{dayEvents.length - 3} more</div>
-                    )}
-                  </>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </Panel>
+      <div style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 16 }}>
+        <LocationNavTree data={data} selectedId={locFilter} onSelect={setLocFilter} />
+        <Panel style={{ padding: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, marginBottom: 4 }}>
+            {WEEKDAY_LABELS.map((w) => <div key={w} style={{ fontFamily: FONT_BODY, fontSize: 11, fontWeight: 700, color: C.inkFaint, textAlign: "center", padding: "4px 0" }}>{w}</div>)}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
+            {Array.from({ length: totalCells }).map((_, i) => {
+              const dayNum = i - startWeekday + 1;
+              const inMonth = dayNum >= 1 && dayNum <= daysInMonth;
+              const dateStr = inMonth ? `${cursor.year}-${String(cursor.month + 1).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}` : null;
+              const isToday = dateStr === todayStr;
+              const dayEvents = inMonth ? (eventsByDay[dayNum] || []) : [];
+              return (
+                <div key={i} style={{ minHeight: 92, border: `1px solid ${C.lineSoft}`, borderRadius: 3, padding: 5, background: inMonth ? (isToday ? C.orangeSoft : "#fff") : C.panelAlt, opacity: inMonth ? 1 : 0.5 }}>
+                  {inMonth && (
+                    <>
+                      <div style={{ fontFamily: FONT_BODY, fontSize: 11, fontWeight: isToday ? 700 : 600, color: isToday ? C.orange : C.inkFaint, marginBottom: 3 }}>{dayNum}</div>
+                      {dayEvents.slice(0, 3).map((w) => (
+                        <div key={w.id} onClick={() => goToOrder(w.id)} title={`${formatWoNum(w.number)} ${w.title}`} style={{ fontFamily: FONT_BODY, fontSize: 10.5, fontWeight: 600, color: "#fff", background: WO_TYPE_COLORS[w.type], borderRadius: 2, padding: "2px 4px", marginBottom: 2, cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {formatWoNum(w.number)} {w.title}
+                        </div>
+                      ))}
+                      {dayEvents.length > 3 && <div style={{ fontFamily: FONT_BODY, fontSize: 10, color: C.inkFaint }}>+{dayEvents.length - 3} more</div>}
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </Panel>
+      </div>
     </div>
   );
 }
 
 /* ============================================================
-   BACKUP — export the whole household to an Excel workbook and
-   re-import it (e.g. after bulk edits made in Excel).
+   BACKUP
 ============================================================ */
 const SHEET_SPECS = [
   {
     key: "locations", sheetName: "Locations", idPrefix: "loc",
-    toRow: (l) => ({ id: l.id, name: l.name, level: l.level, parentId: l.parentId || "" }),
-    fromRow: (r) => ({ id: r.id, name: String(r.name || ""), level: String(r.level || "Room"), parentId: r.parentId ? String(r.parentId) : null }),
+    toRow: (l) => ({ id: l.id, name: l.name, level: l.level, parentId: l.parentId || "", createdBy: l.createdBy || "" }),
+    fromRow: (r) => ({ id: r.id, name: String(r.name || ""), level: String(r.level || "Room"), parentId: r.parentId ? String(r.parentId) : null, createdBy: r.createdBy || null }),
   },
   {
     key: "assets", sheetName: "Assets", idPrefix: "a",
-    toRow: (a) => ({ id: a.id, name: a.name, category: a.category || "", locationId: a.locationId || "", manufacturer: a.manufacturer || "", model: a.model || "", serial: a.serial || "", purchaseDate: a.purchaseDate || "", warrantyEnd: a.warrantyEnd || "", notes: a.notes || "" }),
-    fromRow: (r) => ({ id: r.id, name: String(r.name || ""), category: String(r.category || ""), locationId: r.locationId ? String(r.locationId) : "", manufacturer: String(r.manufacturer || ""), model: String(r.model || ""), serial: String(r.serial || ""), purchaseDate: String(r.purchaseDate || ""), warrantyEnd: String(r.warrantyEnd || ""), notes: String(r.notes || "") }),
+    toRow: (a) => ({ id: a.id, name: a.name, category: a.category || "", locationId: a.locationId || "", manufacturer: a.manufacturer || "", model: a.model || "", serial: a.serial || "", purchaseDate: a.purchaseDate || "", warrantyEnd: a.warrantyEnd || "", notes: a.notes || "", createdBy: a.createdBy || "" }),
+    fromRow: (r) => ({ id: r.id, name: String(r.name || ""), category: String(r.category || ""), locationId: r.locationId ? String(r.locationId) : "", manufacturer: String(r.manufacturer || ""), model: String(r.model || ""), serial: String(r.serial || ""), purchaseDate: String(r.purchaseDate || ""), warrantyEnd: String(r.warrantyEnd || ""), notes: String(r.notes || ""), createdBy: r.createdBy || null }),
   },
   {
     key: "bomNodes", sheetName: "BOM Nodes", idPrefix: "bom",
@@ -2027,8 +2445,8 @@ const SHEET_SPECS = [
   },
   {
     key: "workRequests", sheetName: "Work Requests", idPrefix: "wr",
-    toRow: (w) => ({ id: w.id, number: w.number || "", title: w.title, description: w.description || "", assetId: w.assetId || "", bomNodeId: w.bomNodeId || "", locationId: w.locationId || "", requestedBy: w.requestedBy || "", dateSubmitted: w.dateSubmitted || "", priority: w.priority || "", status: w.status || "", reviewNote: w.reviewNote || "", workOrderId: w.workOrderId || "" }),
-    fromRow: (r) => ({ id: r.id, number: r.number ? Number(r.number) : undefined, title: String(r.title || ""), description: String(r.description || ""), assetId: r.assetId ? String(r.assetId) : null, bomNodeId: r.bomNodeId ? String(r.bomNodeId) : null, locationId: r.locationId ? String(r.locationId) : "", requestedBy: String(r.requestedBy || ""), dateSubmitted: String(r.dateSubmitted || ""), priority: String(r.priority || "When convenient"), status: String(r.status || "Submitted"), reviewNote: String(r.reviewNote || ""), workOrderId: r.workOrderId ? String(r.workOrderId) : null }),
+    toRow: (w) => ({ id: w.id, number: w.number || "", title: w.title, description: w.description || "", assetId: w.assetId || "", bomNodeId: w.bomNodeId || "", locationId: w.locationId || "", requestedBy: w.requestedBy || "", dateSubmitted: w.dateSubmitted || "", requiredByDate: w.requiredByDate || "", priority: w.priority || "", suggestedType: w.suggestedType || "", suggestedPartIds: (w.suggestedPartIds || []).join(","), status: w.status || "", reviewNote: w.reviewNote || "", workOrderId: w.workOrderId || "", createdBy: w.createdBy || "" }),
+    fromRow: (r) => ({ id: r.id, number: r.number ? Number(r.number) : undefined, title: String(r.title || ""), description: String(r.description || ""), assetId: r.assetId ? String(r.assetId) : null, bomNodeId: r.bomNodeId ? String(r.bomNodeId) : null, locationId: r.locationId ? String(r.locationId) : "", requestedBy: String(r.requestedBy || ""), dateSubmitted: String(r.dateSubmitted || ""), requiredByDate: String(r.requiredByDate || ""), priority: String(r.priority || "Medium"), suggestedType: String(r.suggestedType || "Corrective"), suggestedPartIds: String(r.suggestedPartIds || "").split(",").map((s) => s.trim()).filter(Boolean), status: String(r.status || "Submitted"), reviewNote: String(r.reviewNote || ""), workOrderId: r.workOrderId ? String(r.workOrderId) : null, createdBy: r.createdBy || null }),
   },
   {
     key: "workOrders", sheetName: "Work Orders", idPrefix: "wo",
@@ -2041,8 +2459,9 @@ const SHEET_SPECS = [
       sourceFixedDateDay: w.sourceFixedDate ? w.sourceFixedDate.day : "",
       pmMode: w.pmMode || "", frequencyValue: w.frequencyValue || "", frequencyUnit: w.frequencyUnit || "",
       fixedDates: (w.fixedDates || []).map((f) => `${String(f.month).padStart(2, "0")}-${String(f.day).padStart(2, "0")}`).join(", "),
-      scheduledDate: w.scheduledDate || "", requiredByDate: w.requiredByDate || "", completedDate: w.completedDate || "",
-      cost: w.cost || "", vendorId: w.vendorId || "", notes: w.notes || "",
+      priority: w.priority || "", executorId: w.executorId || "", partIds: (w.partIds || []).join(","),
+      scheduledDate: w.scheduledDate || "", requiredByDate: w.requiredByDate || "", completedDate: w.completedDate || "", verifiedDate: w.verifiedDate || "",
+      cost: w.cost || "", vendorId: w.vendorId || "", notes: w.notes || "", createdBy: w.createdBy || "",
     }),
     fromRow: (r) => {
       const fixedDates = String(r.fixedDates || "").split(",").map((s) => s.trim()).filter(Boolean).map((tok) => {
@@ -2062,25 +2481,27 @@ const SHEET_SPECS = [
         frequencyValue: r.frequencyValue ? Number(r.frequencyValue) : undefined,
         frequencyUnit: r.frequencyUnit || undefined,
         fixedDates: fixedDates.length ? fixedDates : undefined,
-        scheduledDate: String(r.scheduledDate || ""), requiredByDate: String(r.requiredByDate || ""), completedDate: r.completedDate ? String(r.completedDate) : null,
-        cost: r.cost !== "" && r.cost != null ? String(r.cost) : "", vendorId: r.vendorId ? String(r.vendorId) : null, notes: String(r.notes || ""),
+        priority: String(r.priority || "Medium"), executorId: r.executorId ? String(r.executorId) : "",
+        partIds: String(r.partIds || "").split(",").map((s) => s.trim()).filter(Boolean),
+        scheduledDate: String(r.scheduledDate || ""), requiredByDate: String(r.requiredByDate || ""), completedDate: r.completedDate ? String(r.completedDate) : null, verifiedDate: r.verifiedDate ? String(r.verifiedDate) : null,
+        cost: r.cost !== "" && r.cost != null ? String(r.cost) : "", vendorId: r.vendorId ? String(r.vendorId) : null, notes: String(r.notes || ""), createdBy: r.createdBy || null,
       };
     },
   },
   {
     key: "benchmarks", sheetName: "Benchmarks", idPrefix: "bm",
-    toRow: (b) => ({ id: b.id, title: b.title, checklist: b.checklist || "", estCost: b.estCost || "", estTime: b.estTime || "", notes: b.notes || "", vendorId: b.vendorId || "", version: b.version || 1 }),
-    fromRow: (r) => ({ id: r.id, title: String(r.title || ""), checklist: String(r.checklist || ""), estCost: String(r.estCost || ""), estTime: String(r.estTime || ""), notes: String(r.notes || ""), vendorId: r.vendorId ? String(r.vendorId) : null, version: r.version ? Number(r.version) : 1 }),
+    toRow: (b) => ({ id: b.id, title: b.title, checklist: b.checklist || "", estCost: b.estCost || "", estTime: b.estTime || "", notes: b.notes || "", vendorId: b.vendorId || "", version: b.version || 1, createdBy: b.createdBy || "" }),
+    fromRow: (r) => ({ id: r.id, title: String(r.title || ""), checklist: String(r.checklist || ""), estCost: String(r.estCost || ""), estTime: String(r.estTime || ""), notes: String(r.notes || ""), vendorId: r.vendorId ? String(r.vendorId) : null, version: r.version ? Number(r.version) : 1, createdBy: r.createdBy || null }),
   },
   {
     key: "vendors", sheetName: "Vendors", idPrefix: "v",
-    toRow: (v) => ({ id: v.id, name: v.name, specialty: v.specialty || "", contact: v.contact || "", notes: v.notes || "" }),
-    fromRow: (r) => ({ id: r.id, name: String(r.name || ""), specialty: String(r.specialty || ""), contact: String(r.contact || ""), notes: String(r.notes || "") }),
+    toRow: (v) => ({ id: v.id, name: v.name, specialty: v.specialty || "", contact: v.contact || "", link: v.link || "", notes: v.notes || "", createdBy: v.createdBy || "" }),
+    fromRow: (r) => ({ id: r.id, name: String(r.name || ""), specialty: String(r.specialty || ""), contact: String(r.contact || ""), link: String(r.link || ""), notes: String(r.notes || ""), createdBy: r.createdBy || null }),
   },
   {
-    key: "inventory", sheetName: "Inventory", idPrefix: "inv",
-    toRow: (i) => ({ id: i.id, name: i.name, assetId: i.assetId || "", bomNodeId: i.bomNodeId || "", qty: i.qty, reorderAt: i.reorderAt }),
-    fromRow: (r) => ({ id: r.id, name: String(r.name || ""), assetId: r.assetId ? String(r.assetId) : null, bomNodeId: r.bomNodeId ? String(r.bomNodeId) : null, qty: Number(r.qty) || 0, reorderAt: Number(r.reorderAt) || 0 }),
+    key: "inventory", sheetName: "Parts", idPrefix: "inv",
+    toRow: (i) => ({ id: i.id, partNumber: i.partNumber || "", name: i.name, description: i.description || "", manufacturer: i.manufacturer || "", manufacturerPartNumber: i.manufacturerPartNumber || "", cost: i.cost || "", link: i.link || "", assetId: i.assetId || "", bomNodeId: i.bomNodeId || "", qty: i.qty, reorderAt: i.reorderAt, createdBy: i.createdBy || "" }),
+    fromRow: (r) => ({ id: r.id, partNumber: r.partNumber ? Number(r.partNumber) : undefined, name: String(r.name || ""), description: String(r.description || ""), manufacturer: String(r.manufacturer || ""), manufacturerPartNumber: String(r.manufacturerPartNumber || ""), cost: String(r.cost || ""), link: String(r.link || ""), assetId: r.assetId ? String(r.assetId) : null, bomNodeId: r.bomNodeId ? String(r.bomNodeId) : null, qty: Number(r.qty) || 0, reorderAt: Number(r.reorderAt) || 0, createdBy: r.createdBy || null }),
   },
 ];
 
@@ -2092,12 +2513,10 @@ function BackupTools({ data, update }) {
   const doExport = () => {
     const wb = XLSX.utils.book_new();
     const readme = XLSX.utils.aoa_to_sheet([
-      ["HomeKeep backup"],
-      ["Exported " + new Date().toLocaleString()],
-      [""],
+      ["HomeKeep backup"], ["Exported " + new Date().toLocaleString()], [""],
       ["Each tab is one data type. Edit rows in Excel and re-import this file to apply changes."],
       ["To ADD a new row: leave its 'id' column blank — HomeKeep assigns one on import."],
-      ["To edit an existing row: keep its 'id' (and 'number', where present) unchanged."],
+      ["To edit an existing row: keep its 'id' (and 'number'/'partNumber', where present) unchanged."],
       ["Don't rename the sheet tabs or column headers — import matches on those."],
     ]);
     XLSX.utils.book_append_sheet(wb, readme, "Read me");
@@ -2114,7 +2533,7 @@ function BackupTools({ data, update }) {
     try {
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, { type: "array" });
-      const next = { locations: [], assets: [], bomNodes: [], pmTemplates: [], workRequests: [], workOrders: [], benchmarks: [], vendors: [], inventory: [], counters: { wo: 0, wr: 0 } };
+      const next = { locations: [], assets: [], bomNodes: [], pmTemplates: [], workRequests: [], workOrders: [], benchmarks: [], vendors: [], inventory: [], counters: { wo: 0, wr: 0, part: 0 } };
       for (const spec of SHEET_SPECS) {
         const ws = wb.Sheets[spec.sheetName];
         if (!ws) continue;
@@ -2124,12 +2543,14 @@ function BackupTools({ data, update }) {
           return spec.fromRow(withId);
         });
       }
-      let maxWo = 0, maxWr = 0;
+      let maxWo = 0, maxWr = 0, maxPart = 0;
       next.workOrders.forEach((w) => { if (w.number) maxWo = Math.max(maxWo, w.number); });
       next.workRequests.forEach((w) => { if (w.number) maxWr = Math.max(maxWr, w.number); });
+      next.inventory.forEach((p) => { if (p.partNumber) maxPart = Math.max(maxPart, p.partNumber); });
       next.workOrders.forEach((w) => { if (!w.number) w.number = ++maxWo; });
       next.workRequests.forEach((w) => { if (!w.number) w.number = ++maxWr; });
-      next.counters = { wo: maxWo, wr: maxWr };
+      next.inventory.forEach((p) => { if (!p.partNumber) p.partNumber = ++maxPart; });
+      next.counters = { wo: maxWo, wr: maxWr, part: maxPart };
 
       const ok = await dialog.confirm("This will replace ALL current HomeKeep data with the contents of this file. Continue?");
       if (!ok) return;
@@ -2152,9 +2573,7 @@ function BackupTools({ data, update }) {
       </div>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
         <Btn onClick={doExport}><FileDown size={14} /> Export to Excel</Btn>
-        <Btn variant="ghost" disabled={busy} onClick={() => fileRef.current?.click()}>
-          <FileUp size={14} /> {busy ? "Importing…" : "Import from Excel"}
-        </Btn>
+        <Btn variant="ghost" disabled={busy} onClick={() => fileRef.current?.click()}><FileUp size={14} /> {busy ? "Importing…" : "Import from Excel"}</Btn>
         <input ref={fileRef} type="file" accept=".xlsx" style={{ display: "none" }} onChange={(e) => { const f = e.target.files && e.target.files[0]; if (f) doImport(f); }} />
       </div>
     </Panel>
@@ -2162,13 +2581,12 @@ function BackupTools({ data, update }) {
 }
 
 /* ============================================================
-   OWNER TOOLS — member management, backup, and work order
-   deletion. Only reachable/visible when role === "Owner".
+   OWNER TOOLS
 ============================================================ */
 function MemberManagementInline({ currentUser }) {
   const dialog = useDialog();
   const [users, setUsers] = useState(null);
-  const [form, setForm] = useState({ username: "", password: "", role: "Household Member" });
+  const [form, setForm] = useState({ username: "", password: "", role: "Executor" });
   const [error, setError] = useState("");
 
   const load = () => api.listUsers().then(setUsers).catch(() => setUsers([]));
@@ -2179,11 +2597,9 @@ function MemberManagementInline({ currentUser }) {
     if (!form.username.trim() || !form.password) { setError("Username and password are required."); return; }
     try {
       await api.addUser(form.username.trim(), form.password, form.role);
-      setForm({ username: "", password: "", role: "Household Member" });
+      setForm({ username: "", password: "", role: "Executor" });
       load();
-    } catch (err) {
-      setError(err.message);
-    }
+    } catch (err) { setError(err.message); }
   };
 
   const remove = async (u) => {
@@ -2204,23 +2620,23 @@ function MemberManagementInline({ currentUser }) {
             {u.id === currentUser.id && <span style={{ fontFamily: FONT_BODY, fontSize: 11, color: C.inkFaint }}> (you)</span>}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <Tag text={u.role} color={u.role === "Owner" ? C.navy : C.olive} soft={u.role === "Owner" ? C.navySoft : C.oliveSoft} />
-            {u.id !== currentUser.id && (
-              <button onClick={() => remove(u)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rust }}><Trash2 size={14} /></button>
-            )}
+            <Tag text={u.role} color={u.role === "Owner" ? C.navy : u.role === "Manager" ? C.teal : u.role === "Guest" ? C.inkFaint : C.olive} soft={u.role === "Owner" ? C.navySoft : u.role === "Manager" ? C.tealSoft : u.role === "Guest" ? C.panelAlt : C.oliveSoft} />
+            {u.id !== currentUser.id && <button onClick={() => remove(u)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rust }}><Trash2 size={14} /></button>}
           </div>
         </div>
       ))}
       <div style={{ fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink, margin: "16px 0 8px" }}>Add a member</div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-        <Field label="Username"><input style={inputStyle} value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></Field>
-        <Field label="Password"><input type="password" style={inputStyle} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></Field>
+        <Field label="Username" required><input style={inputStyle} value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></Field>
+        <Field label="Password" required><input type="password" style={inputStyle} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></Field>
         <Field label="Role">
           <select style={inputStyle} value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
-            <option value="Household Member">Household Member</option>
-            <option value="Owner">Owner</option>
+            {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
           </select>
         </Field>
+      </div>
+      <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 10 }}>
+        Owner: full access. Manager: same rights as Owner, but can only delete records they created, and can't reach this page. Executor: does the work — submits requests, updates work orders. Guest: read-only.
       </div>
       {error && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.rust, marginBottom: 10 }}>{error}</div>}
       <div style={{ display: "flex", justifyContent: "flex-end" }}>
@@ -2233,17 +2649,14 @@ function MemberManagementInline({ currentUser }) {
 function DeleteWorkOrderTool({ data, update }) {
   const dialog = useDialog();
   const [query, setQuery] = useState("");
-
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return [];
-    return data.workOrders
-      .filter((w) => {
-        const num = formatWoNum(w.number || 0).toLowerCase();
-        const plainNum = String(w.number || "").toLowerCase();
-        return num.includes(q) || plainNum.includes(q) || w.title.toLowerCase().includes(q);
-      })
-      .slice(0, 20);
+    return data.workOrders.filter((w) => {
+      const num = formatWoNum(w.number || 0).toLowerCase();
+      const plainNum = String(w.number || "").toLowerCase();
+      return num.includes(q) || plainNum.includes(q) || w.title.toLowerCase().includes(q);
+    }).slice(0, 20);
   }, [query, data.workOrders]);
 
   const remove = async (w) => {
@@ -2276,53 +2689,83 @@ function DeleteWorkOrderTool({ data, update }) {
   );
 }
 
+function DeleteWorkRequestTool({ data, update }) {
+  const dialog = useDialog();
+  const [query, setQuery] = useState("");
+  const results = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    return data.workRequests.filter((w) => {
+      const num = formatWrNum(w.number || 0).toLowerCase();
+      const plainNum = String(w.number || "").toLowerCase();
+      return num.includes(q) || plainNum.includes(q) || w.title.toLowerCase().includes(q);
+    }).slice(0, 20);
+  }, [query, data.workRequests]);
+
+  const remove = async (w) => {
+    const ok = await dialog.confirm(`Permanently delete ${formatWrNum(w.number)} — "${w.title}"? This cannot be undone.`);
+    if (!ok) return;
+    update((d) => { d.workRequests = d.workRequests.filter((x) => x.id !== w.id); return d; });
+  };
+
+  return (
+    <Panel style={{ padding: 18 }}>
+      <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 4 }}>Delete a work request</div>
+      <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint, marginBottom: 12 }}>Search by number (e.g. WR-0004) or title.</div>
+      <input style={inputStyle} placeholder="WR-0004" value={query} onChange={(e) => setQuery(e.target.value)} />
+      {query.trim() && results.length === 0 && <Empty text="No matching work requests." />}
+      {results.map((w) => (
+        <div key={w.id} className="hk-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 4px", borderTop: `1px solid ${C.lineSoft}`, marginTop: 8 }}>
+          <div>
+            <div style={{ fontFamily: FONT_BODY, fontSize: 13, fontWeight: 700, color: C.ink }}>{formatWrNum(w.number)} · {w.title}</div>
+            <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint }}>{w.status}</div>
+          </div>
+          <Btn small variant="danger" onClick={() => remove(w)}><Trash2 size={12} /> Delete</Btn>
+        </div>
+      ))}
+    </Panel>
+  );
+}
+
 function OwnerToolsView({ data, update, currentUser }) {
   return (
     <div>
-      <SectionHeader title="Owner Tools" subtitle="Household member management, backups, and administrative actions." />
+      <SectionHeader title="Owner Tools" subtitle="Administrative controls: accounts, backups, and record clean-up." info={PAGE_INFO.owner} />
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <MemberManagementInline currentUser={currentUser} />
         <BackupTools data={data} update={update} />
         <DeleteWorkOrderTool data={data} update={update} />
+        <DeleteWorkRequestTool data={data} update={update} />
       </div>
     </div>
   );
 }
 
 /* ============================================================
-   AUTH — first-run setup (creates the Owner account) and login.
+   AUTH
 ============================================================ */
 function AuthScreen({ onAuthed }) {
-  const [mode, setMode] = useState(null); // 'setup' | 'login'
+  const [mode, setMode] = useState(null);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    api.setupStatus().then((r) => setMode(r.needsSetup ? "setup" : "login")).catch(() => setMode("login"));
-  }, []);
+  useEffect(() => { api.setupStatus().then((r) => setMode(r.needsSetup ? "setup" : "login")).catch(() => setMode("login")); }, []);
 
   const submit = async (e) => {
     e.preventDefault();
-    setError("");
-    setBusy(true);
+    setError(""); setBusy(true);
     try {
       const user = mode === "setup" ? await api.setup(username, password) : await api.login(username, password);
       onAuthed(user);
     } catch (err) {
       setError(err.message || "Something went wrong");
-    } finally {
-      setBusy(false);
-    }
+    } finally { setBusy(false); }
   };
 
   if (!mode) {
-    return (
-      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: C.bg }}>
-        <Loader2 className="animate-spin" size={20} color={C.inkSoft} />
-      </div>
-    );
+    return <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: C.bg }}><Loader2 className="animate-spin" size={20} color={C.inkSoft} /></div>;
   }
 
   return (
@@ -2330,37 +2773,18 @@ function AuthScreen({ onAuthed }) {
       <GlobalStyle />
       <Panel style={{ padding: 30, width: 380, maxWidth: "100%" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-          <div style={{ width: 28, height: 28, background: C.orange, borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <Wrench size={16} color="#fff" />
-          </div>
+          <div style={{ width: 28, height: 28, background: C.orange, borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center" }}><Wrench size={16} color="#fff" /></div>
           <span style={{ fontFamily: FONT_HEAD, fontWeight: 700, fontSize: 19, color: C.ink }}>HomeKeep</span>
         </div>
         <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkFaint, marginBottom: 20 }}>
           {mode === "setup" ? "Create the first Owner account to set up your household." : "Sign in to your household."}
         </div>
         <form onSubmit={submit}>
-          <Field label="Username">
-            <input style={inputStyle} value={username} onChange={(e) => setUsername(e.target.value)} autoFocus required />
-          </Field>
-          <Field label="Password">
-            <input
-              type="password"
-              style={inputStyle}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              minLength={mode === "setup" ? 6 : undefined}
-            />
-          </Field>
-          {mode === "setup" && (
-            <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 12 }}>
-              At least 6 characters. You can add household member accounts later from Owner Tools.
-            </div>
-          )}
+          <Field label="Username" required><input style={inputStyle} value={username} onChange={(e) => setUsername(e.target.value)} autoFocus required /></Field>
+          <Field label="Password" required><input type="password" style={inputStyle} value={password} onChange={(e) => setPassword(e.target.value)} required minLength={mode === "setup" ? 6 : undefined} /></Field>
+          {mode === "setup" && <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 12 }}>At least 6 characters. You can add household member accounts later from Owner Tools.</div>}
           {error && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.rust, marginBottom: 12 }}>{error}</div>}
-          <Btn type="submit" variant="primary" disabled={busy}>
-            {busy ? "…" : mode === "setup" ? "Create account & continue" : "Sign in"}
-          </Btn>
+          <Btn type="submit" variant="primary" disabled={busy}>{busy ? "…" : mode === "setup" ? "Create account & continue" : "Sign in"}</Btn>
         </form>
       </Panel>
     </div>
@@ -2371,58 +2795,37 @@ function AuthScreen({ onAuthed }) {
    APP SHELL
 ============================================================ */
 export default function HomeKeepApp() {
-  const [user, setUser] = useState(null); // null = not checked yet, false = not authed, object = authed
+  const [user, setUser] = useState(null);
   const [data, setDataRaw] = useState(null);
-  const [tab, setTab] = useState("dashboard");
+  const [tab, setTabRaw] = useState("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [openOrderId, setOpenOrderId] = useState(null);
+  const [pendingFilter, setPendingFilter] = useState(null);
   const saveTimer = useRef(null);
 
-  useEffect(() => {
-    api.me().then(setUser).catch(() => setUser(false));
-  }, []);
-
-  useEffect(() => {
-    if (!user) return;
-    api.getData().then(setDataRaw).catch(() => setDataRaw(null));
-  }, [user]);
+  useEffect(() => { api.me().then(setUser).catch(() => setUser(false)); }, []);
+  useEffect(() => { if (!user) return; api.getData().then(setDataRaw).catch(() => setDataRaw(null)); }, [user]);
 
   const persist = (next) => {
     clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => {
-      api.saveData(next).catch((e) => console.error("Save failed:", e));
-    }, 250);
+    saveTimer.current = setTimeout(() => { api.saveData(next).catch((e) => console.error("Save failed:", e)); }, 250);
   };
-
   const update = (fn) => {
-    setDataRaw((prev) => {
-      const next = fn(structuredClone(prev));
-      persist(next);
-      return next;
-    });
+    setDataRaw((prev) => { const next = fn(structuredClone(prev)); persist(next); return next; });
   };
+  const logout = async () => { await api.logout().catch(() => {}); setUser(false); setDataRaw(null); };
 
-  const logout = async () => {
-    await api.logout().catch(() => {});
-    setUser(false);
-    setDataRaw(null);
-  };
+  const setTab = (t) => { setTabRaw(t); setOpenOrderId(null); setPendingFilter(null); };
+  const applyFilter = (t, filter) => { setTabRaw(t); setOpenOrderId(null); setPendingFilter(filter); };
+  const goToOrder = (id) => { setTabRaw("orders"); setOpenOrderId(id); setPendingFilter(null); };
+  const goToRequest = (id) => { setTabRaw("requests"); setPendingFilter(null); };
 
-  if (user === null) {
-    return (
-      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: C.bg }}>
-        <Loader2 className="animate-spin" size={20} color={C.inkSoft} />
-      </div>
-    );
-  }
-  if (!user) {
-    return <AuthScreen onAuthed={setUser} />;
-  }
+  if (user === null) return <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: C.bg }}><Loader2 className="animate-spin" size={20} color={C.inkSoft} /></div>;
+  if (!user) return <AuthScreen onAuthed={setUser} />;
   if (!data) {
     return (
       <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: C.bg, fontFamily: FONT_BODY, color: C.inkSoft }}>
-        <GlobalStyle />
-        <Loader2 className="animate-spin" size={18} style={{ marginRight: 8 }} /> Loading HomeKeep…
+        <GlobalStyle /><Loader2 className="animate-spin" size={18} style={{ marginRight: 8 }} /> Loading HomeKeep…
       </div>
     );
   }
@@ -2433,28 +2836,24 @@ export default function HomeKeepApp() {
     orders: data.workOrders.filter((w) => w.status === "Open" || w.status === "In Progress").length,
   };
 
-  const goToOrder = (id) => { setTab("orders"); setOpenOrderId(id); };
-
   const views = {
-    dashboard: <Dashboard data={data} setTab={setTab} role={role} />,
+    dashboard: <Dashboard data={data} setTab={setTab} role={role} applyFilter={applyFilter} goToOrder={goToOrder} goToRequest={goToRequest} />,
     locations: <LocationsView data={data} update={update} role={role} />,
     assets: <AssetsView data={data} update={update} role={role} goToOrder={goToOrder} />,
-    requests: <WorkRequestsView data={data} update={update} role={role} currentUser={user.username} goToOrder={goToOrder} />,
-    orders: <WorkOrdersView data={data} update={update} role={role} openId={openOrderId} setOpenId={setOpenOrderId} />,
+    requests: <WorkRequestsView data={data} update={update} role={role} currentUser={user.username} goToOrder={goToOrder} pendingFilter={tab === "requests" ? pendingFilter : null} consumeFilter={() => setPendingFilter(null)} />,
+    orders: <WorkOrdersView data={data} update={update} role={role} currentUser={user.username} openId={openOrderId} setOpenId={setOpenOrderId} pendingFilter={tab === "orders" ? pendingFilter : null} consumeFilter={() => setPendingFilter(null)} />,
     schedule: <ScheduleView data={data} goToOrder={goToOrder} />,
-    vendors: <VendorsView data={data} update={update} role={role} />,
-    inventory: <InventoryView data={data} update={update} role={role} />,
+    vendors: <VendorsView data={data} update={update} role={role} currentUser={user.username} />,
+    parts: <PartsView data={data} update={update} role={role} currentUser={user.username} />,
     budget: <BudgetView data={data} />,
-    owner: role === "Owner"
-      ? <OwnerToolsView data={data} update={update} currentUser={user} />
-      : <Dashboard data={data} setTab={setTab} role={role} />,
+    owner: role === "Owner" ? <OwnerToolsView data={data} update={update} currentUser={user} /> : <Dashboard data={data} setTab={setTab} role={role} applyFilter={applyFilter} goToOrder={goToOrder} goToRequest={goToRequest} />,
   };
 
   return (
     <DialogProvider>
       <div style={{ minHeight: "100vh", background: C.bg, fontFamily: FONT_BODY }}>
         <GlobalStyle />
-        <Sidebar tab={tab} setTab={(t) => { setTab(t); setOpenOrderId(null); }} open={sidebarOpen} role={role} counts={counts} />
+        <Sidebar tab={tab} setTab={setTab} open={sidebarOpen} role={role} counts={counts} />
         <div style={{ marginLeft: sidebarOpen ? 216 : 0, transition: "margin .15s ease" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 24px", borderBottom: `1px solid ${C.line}`, background: C.panel, position: "sticky", top: 0, zIndex: 20 }}>
             <button onClick={() => setSidebarOpen((o) => !o)} style={{ background: "none", border: "none", cursor: "pointer", color: C.ink }}>
@@ -2463,20 +2862,14 @@ export default function HomeKeepApp() {
             <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
               <div style={{ position: "relative" }}>
                 <Bell size={17} color={C.inkSoft} />
-                {counts.requests > 0 && (
-                  <span style={{ position: "absolute", top: -5, right: -6, background: C.orange, color: "#fff", fontSize: 9.5, fontWeight: 700, borderRadius: 8, padding: "1px 4px" }}>
-                    {counts.requests}
-                  </span>
-                )}
+                {counts.requests > 0 && <span style={{ position: "absolute", top: -5, right: -6, background: C.orange, color: "#fff", fontSize: 9.5, fontWeight: 700, borderRadius: 8, padding: "1px 4px" }}>{counts.requests}</span>}
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <div style={{ textAlign: "right" }}>
                   <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, fontWeight: 700, color: C.ink, lineHeight: 1.2 }}>{user.username}</div>
                   <div style={{ fontFamily: FONT_BODY, fontSize: 10.5, color: C.inkFaint, lineHeight: 1.2 }}>{role}</div>
                 </div>
-                <button onClick={logout} title="Log out" style={{ background: "none", border: `1px solid ${C.line}`, borderRadius: 3, cursor: "pointer", color: C.inkSoft, padding: 6 }}>
-                  <LogOut size={14} />
-                </button>
+                <button onClick={logout} title="Log out" style={{ background: "none", border: `1px solid ${C.line}`, borderRadius: 3, cursor: "pointer", color: C.inkSoft, padding: 6 }}><LogOut size={14} /></button>
               </div>
             </div>
           </div>

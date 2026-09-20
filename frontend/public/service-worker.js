@@ -2,8 +2,16 @@
 // least open while offline or on a flaky connection. API requests always
 // go to the network — this app's data is per-household and live, not
 // something we want served stale from cache.
+//
+// Everything below is computed from self.registration.scope rather than
+// hardcoded absolute paths, so this works whether the app is deployed at
+// the domain root or under a subpath (e.g. /homekeep/).
+const SCOPE = self.registration.scope;
 const CACHE_NAME = "homekeep-shell-v1";
-const SHELL_URLS = ["/", "/index.html", "/manifest.json", "/icon-192.png", "/icon-512.png"];
+const SHELL_URLS = ["", "index.html", "manifest.json", "icon-192.png", "icon-512.png"].map(
+  (p) => new URL(p, SCOPE).toString()
+);
+const API_PATH_PREFIX = new URL("api/", SCOPE).pathname;
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -25,7 +33,7 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
 
   // Never cache API calls — always hit the network.
-  if (url.pathname.startsWith("/api/")) return;
+  if (url.pathname.startsWith(API_PATH_PREFIX)) return;
 
   if (event.request.method !== "GET") return;
 
@@ -44,3 +52,4 @@ self.addEventListener("fetch", (event) => {
     })
   );
 });
+
