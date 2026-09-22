@@ -37,7 +37,7 @@ RUN mkdir -p /data
 # overrides this — that's the normal way to change it. This ARG only
 # matters if you build/run the image directly without compose and want
 # a different built-in default (--build-arg PORT=3000).
-ARG PORT=8080
+ARG PORT=8040
 ENV PORT=$PORT
 EXPOSE $PORT
 

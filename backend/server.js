@@ -7,7 +7,7 @@ const SEED = require("./seed");
 const { hashPassword, verifyPassword, signToken, requireAuth, requireOwner } = require("./auth");
 
 const app = express();
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 8040;
 
 app.use(express.json({ limit: "2mb" }));
 app.use(cookieParser());

@@ -4,7 +4,7 @@ import {
   Users, DollarSign, Plus, ChevronRight, ChevronDown, X,
   Check, AlertTriangle, Bell, Menu, Trash2, Pencil, ArrowRight,
   Layers, Search, Boxes, ChevronLeft, Loader2, LogOut, UserPlus, Shield,
-  Calendar, FileDown, FileUp, Info, Archive, Link as LinkIcon,
+  Calendar, FileDown, FileUp, Info, Archive, Download, ExternalLink, ShoppingCart,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { api } from "./api.js";
@@ -191,6 +191,15 @@ function descendantIds(locations, rootId) {
 function formatWoNum(n) { return "WO-" + String(n || 0).padStart(4, "0"); }
 function formatWrNum(n) { return "WR-" + String(n || 0).padStart(4, "0"); }
 function formatPartNum(n) { return "PT-" + String(n || 0).padStart(4, "0"); }
+function serializePartsList(parts) {
+  return (parts || []).map((p) => `${p.partId}:${p.qty || 1}`).join(",");
+}
+function deserializePartsList(str) {
+  return String(str || "").split(",").map((s) => s.trim()).filter(Boolean).map((tok) => {
+    const [partId, qty] = tok.split(":");
+    return { partId, qty: Number(qty) || 1 };
+  });
+}
 
 function addInterval(dateISO, value, unit) {
   const d = new Date((dateISO || todayISO()) + "T00:00:00");
@@ -231,7 +240,7 @@ function spawnPmInstance(d, base, opts) {
     sourcePmBaseId: base.id, sourceFixedDate: fixedDate || null,
     priority: base.priority || "Medium", executorId: base.executorId || "",
     scheduledDate: "", requiredByDate, completedDate: null, verifiedDate: null,
-    cost: "", vendorId: base.vendorId || null, notes: "", partIds: [], createdBy: base.createdBy || null,
+    cost: "", vendorId: base.vendorId || null, notes: "", parts: [], comments: [], partsDeducted: false, createdBy: base.createdBy || null,
   });
 }
 function regeneratePmAfterCompletion(d, completedWO) {
@@ -248,7 +257,7 @@ function regeneratePmAfterCompletion(d, completedWO) {
       sourcePmBaseId: base.id, sourceFixedDate: completedWO.sourceFixedDate,
       priority: base.priority || "Medium", executorId: base.executorId || "",
       scheduledDate: "", requiredByDate, completedDate: null, verifiedDate: null,
-      cost: "", vendorId: base.vendorId || null, notes: "", partIds: [], createdBy: base.createdBy || null,
+      cost: "", vendorId: base.vendorId || null, notes: "", parts: [], comments: [], partsDeducted: false, createdBy: base.createdBy || null,
     });
   } else {
     spawnPmInstance(d, base, { afterDateISO: completedWO.completedDate || todayISO(), fixedDate: null });
@@ -477,6 +486,22 @@ function SectionHeader({ title, subtitle, action, info }) {
   );
 }
 
+function LinkButton({ url, small }) {
+  if (!url) return null;
+  return (
+    <a
+      href={url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} title="Open link in a new window"
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 4, fontFamily: FONT_BODY,
+        fontSize: small ? 11 : 12, fontWeight: 600, color: C.navy, textDecoration: "none",
+        border: `1px solid ${C.line}`, borderRadius: 3, padding: small ? "2px 6px" : "4px 8px", background: "#fff",
+      }}
+    >
+      <ExternalLink size={small ? 10 : 11} /> Open link
+    </a>
+  );
+}
+
 function Empty({ text }) {
   return (
     <div style={{ padding: "28px 16px", textAlign: "center", color: C.inkFaint, fontFamily: FONT_BODY, fontSize: 13 }}>
@@ -516,14 +541,14 @@ const PAGE_INFO = {
   orders: {
     purpose: "The record of all maintenance work in the household — planned, recurring, and reactive — from the moment it's opened to the moment it's verified done.",
     workflow: "Work orders move through Open, In Progress, Completed, and Verified. They're created directly, converted from an approved request, or generated automatically from a PM Base template.",
-    permissions: "Owners, Managers, and Executors can create and update work orders. Owners can delete any; Managers can delete ones they created.",
-    features: ["Kanban board by status, with a 30-day verified archive", "PM Base templates for recurring maintenance", "Parts attachment with location/component-scoped search", "Executor assignment", "Location, priority, and text search filters"],
+    permissions: "Owners, Managers, and Executors can create and update work orders. Only Owners and Managers can move a work order to Verified. Owners can delete any; Managers can delete ones they created.",
+    features: ["Kanban board by status, with a 30-day verified archive", "PM Base templates for recurring maintenance", "Parts attachment with location/component-scoped search", "Executor assignment and filter (defaults to yourself if you're an Executor)", "Completion comments for feedback on how the work went", "Location, priority, due-date, and executor filters"],
   },
   schedule: {
     purpose: "A calendar view of when maintenance work is planned to happen, so you can see what's coming up at a glance.",
     workflow: "Work orders with a scheduled date appear on that date. Click one to jump to its details.",
     permissions: "Everyone can view the schedule.",
-    features: ["Month navigation", "Location hierarchy filter", "Color-coded by work order type", "Click-through to work order detail"],
+    features: ["Month navigation", "Location and executor filters (executor defaults to yourself if you're an Executor)", "Color-coded by work order type", "Click-through to work order detail"],
   },
   vendors: {
     purpose: "The contractors and service providers you actually call on, kept in one place instead of scattered across texts and receipts.",
@@ -548,6 +573,12 @@ const PAGE_INFO = {
     workflow: "Manage who has access and what role they hold, export or import the full household record, and remove a work order or request that was created in error.",
     permissions: "Owners only. Managers have elevated rights elsewhere in the app, but not on this page.",
     features: ["Add/remove household member accounts and set roles", "Export/import the full household to Excel", "Delete a work order or work request by number"],
+  },
+  purchasing: {
+    purpose: "A running shopping list built automatically from what open work actually needs, so nothing gets started without the parts on hand.",
+    workflow: "Any part attached to an Open or In Progress work order in a quantity greater than what's currently in stock shows up here, grouped by the work order that needs it.",
+    permissions: "Owners and Managers only.",
+    features: ["Grouped by work order", "Shows quantity needed, on hand, and the shortfall to buy", "Click through to the work order"],
   },
 };
 
@@ -632,11 +663,12 @@ const NAV = [
   { id: "vendors", label: "Vendors", icon: Users },
   { id: "parts", label: "Parts Catalogue", icon: Package },
   { id: "budget", label: "Budget", icon: DollarSign },
+  { id: "purchasing", label: "Purchasing", icon: ShoppingCart, adminOnly: true },
   { id: "owner", label: "Owner Tools", icon: Shield, ownerOnly: true },
 ];
 
 function Sidebar({ tab, setTab, open, role, counts }) {
-  const items = NAV.filter((n) => !n.ownerOnly || role === "Owner");
+  const items = NAV.filter((n) => (!n.ownerOnly || role === "Owner") && (!n.adminOnly || isAdmin(role)));
   return (
     <div
       style={{ width: 216, flexShrink: 0, background: C.navy, color: "#fff", display: open ? "flex" : "none", flexDirection: "column", position: "fixed", top: 0, bottom: 0, left: 0, zIndex: 40 }}
@@ -1201,7 +1233,7 @@ function AssetBomPicker({ data, assetId, bomNodeId, onChange }) {
   );
 }
 
-function PartEditModal({ data, update, part, currentUser, onClose, onSaved }) {
+function PartEditModal({ data, update, part, currentUser, role, onClose, onSaved, onDeleted }) {
   const dialog = useDialog();
   const closeGuard = useCloseGuard(dialog);
   const blank = { name: "", description: "", manufacturer: "", manufacturerPartNumber: "", cost: "", link: "", assetId: null, bomNodeId: null, qty: 1, reorderAt: 1 };
@@ -1226,6 +1258,13 @@ function PartEditModal({ data, update, part, currentUser, onClose, onSaved }) {
       onClose();
     }
   };
+  const remove = async () => {
+    const ok = await dialog.confirm(`Permanently delete ${formatPartNum(part.partNumber)} — "${part.name}"? This cannot be undone.`);
+    if (!ok) return;
+    update((d) => { d.inventory = d.inventory.filter((i) => i.id !== part.id); return d; });
+    onDeleted && onDeleted();
+    onClose();
+  };
 
   return (
     <Modal title={part ? `Edit ${formatPartNum(part.partNumber)}` : "New part"} onClose={() => closeGuard(isDirty, save, onClose)} wide>
@@ -1236,19 +1275,29 @@ function PartEditModal({ data, update, part, currentUser, onClose, onSaved }) {
         <Field label="Manufacturer"><input style={inputStyle} value={form.manufacturer || ""} onChange={(e) => setForm({ ...form, manufacturer: e.target.value })} /></Field>
         <Field label="Manufacturer part #"><input style={inputStyle} value={form.manufacturerPartNumber || ""} onChange={(e) => setForm({ ...form, manufacturerPartNumber: e.target.value })} /></Field>
         <Field label="Cost ($)"><input style={inputStyle} value={form.cost || ""} onChange={(e) => setForm({ ...form, cost: e.target.value })} /></Field>
-        <Field label="Web link"><input style={inputStyle} value={form.link || ""} onChange={(e) => setForm({ ...form, link: e.target.value })} placeholder="https://…" /></Field>
+        <Field label="Web link">
+          <div style={{ display: "flex", gap: 6 }}>
+            <input style={inputStyle} value={form.link || ""} onChange={(e) => setForm({ ...form, link: e.target.value })} placeholder="https://…" />
+            <LinkButton url={form.link} small />
+          </div>
+        </Field>
         <Field label="Quantity on hand"><input type="number" style={inputStyle} value={form.qty} onChange={(e) => setForm({ ...form, qty: e.target.value })} /></Field>
         <Field label="Reorder at"><input type="number" style={inputStyle} value={form.reorderAt} onChange={(e) => setForm({ ...form, reorderAt: e.target.value })} /></Field>
       </div>
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-        <Btn variant="ghost" onClick={() => closeGuard(isDirty, save, onClose)}>Cancel</Btn>
-        <Btn variant="primary" onClick={save}>Save</Btn>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+        {part && canDelete(role, part, currentUser) ? (
+          <Btn variant="danger" onClick={remove}><Trash2 size={13} /> Delete</Btn>
+        ) : <span />}
+        <div style={{ display: "flex", gap: 8 }}>
+          <Btn variant="ghost" onClick={() => closeGuard(isDirty, save, onClose)}>Cancel</Btn>
+          <Btn variant="primary" onClick={save}>Save</Btn>
+        </div>
       </div>
     </Modal>
   );
 }
 
-function PartsPicker({ data, update, value, onChange, defaultLocationId, currentUser }) {
+function PartsPicker({ data, update, value, onChange, defaultLocationId, currentUser, role }) {
   const [locFilter, setLocFilter] = useState(defaultLocationId || null);
   const [bomFilter, setBomFilter] = useState(null);
   const [search, setSearch] = useState("");
@@ -1258,9 +1307,10 @@ function PartsPicker({ data, update, value, onChange, defaultLocationId, current
   const scopedAssetIds = new Set(data.assets.filter((a) => !allowedLocs || allowedLocs.has(a.locationId)).map((a) => a.id));
   const bomOptions = data.bomNodes.filter((n) => scopedAssetIds.has(n.assetId));
 
+  const attachedIds = new Set(value.map((v) => v.partId));
   const searchLower = search.trim().toLowerCase();
   const candidates = data.inventory
-    .filter((p) => !value.includes(p.id))
+    .filter((p) => !attachedIds.has(p.id))
     .filter((p) => !allowedLocs || !p.assetId || scopedAssetIds.has(p.assetId))
     .filter((p) => !bomFilter || p.bomNodeId === bomFilter)
     .filter((p) => {
@@ -1270,17 +1320,25 @@ function PartsPicker({ data, update, value, onChange, defaultLocationId, current
     })
     .slice(0, 12);
 
-  const attached = value.map((id) => data.inventory.find((p) => p.id === id)).filter(Boolean);
+  const attached = value.map((v) => ({ ...v, part: data.inventory.find((p) => p.id === v.partId) })).filter((v) => v.part);
+
+  const addPart = (id) => onChange([...value, { partId: id, qty: 1 }]);
+  const removePart = (id) => onChange(value.filter((v) => v.partId !== id));
+  const setQty = (id, qty) => onChange(value.map((v) => (v.partId === id ? { ...v, qty: Math.max(1, Number(qty) || 1) } : v)));
 
   return (
     <div style={{ marginBottom: 12 }}>
       <label style={fieldLabelStyle(false)}>Parts</label>
       {attached.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 8 }}>
-          {attached.map((p) => (
-            <div key={p.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 8px", background: C.panelAlt, borderRadius: 3 }}>
-              <span style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink }}>{formatPartNum(p.partNumber)} · {p.name}</span>
-              <button onClick={() => onChange(value.filter((x) => x !== p.id))} style={{ background: "none", border: "none", cursor: "pointer", color: C.rust }}><X size={13} /></button>
+          {attached.map(({ partId, qty, part }) => (
+            <div key={partId} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 8px", background: C.panelAlt, borderRadius: 3, gap: 8 }}>
+              <span style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink, flex: 1 }}>{formatPartNum(part.partNumber)} · {part.name}</span>
+              <input
+                type="number" min="1" value={qty} onChange={(e) => setQty(partId, e.target.value)}
+                style={{ width: 50, padding: "3px 5px", border: `1px solid ${C.line}`, borderRadius: 3, fontFamily: FONT_BODY, fontSize: 12 }}
+              />
+              <button onClick={() => removePart(partId)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rust }}><X size={13} /></button>
             </div>
           ))}
         </div>
@@ -1301,7 +1359,7 @@ function PartsPicker({ data, update, value, onChange, defaultLocationId, current
       <div className="hk-scroll" style={{ maxHeight: 160, overflowY: "auto", border: `1px solid ${C.lineSoft}`, borderRadius: 3 }}>
         {candidates.length === 0 && <div style={{ padding: 10, fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint }}>No matching parts.</div>}
         {candidates.map((p) => (
-          <div key={p.id} className="hk-row" onClick={() => onChange([...value, p.id])} style={{ display: "flex", justifyContent: "space-between", padding: "7px 8px", borderTop: `1px solid ${C.lineSoft}`, cursor: "pointer" }}>
+          <div key={p.id} className="hk-row" onClick={() => addPart(p.id)} style={{ display: "flex", justifyContent: "space-between", padding: "7px 8px", borderTop: `1px solid ${C.lineSoft}`, cursor: "pointer" }}>
             <span style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink }}>{formatPartNum(p.partNumber)} · {p.name}{p.manufacturer ? ` (${p.manufacturer})` : ""}</span>
             <Plus size={13} color={C.navy} />
           </div>
@@ -1312,7 +1370,7 @@ function PartsPicker({ data, update, value, onChange, defaultLocationId, current
       </div>
       {newPartOpen && (
         <PartEditModal
-          data={data} update={update} part={null} currentUser={currentUser}
+          data={data} update={update} part={null} currentUser={currentUser} role={role}
           onClose={() => setNewPartOpen(false)}
           onSaved={(id) => onChange([...value, id])}
         />
@@ -1376,7 +1434,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
   const [search, setSearch] = useState("");
   const [priorityFilter, setPriorityFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState(pendingFilter?.status || "all");
-  const blank = { title: "", description: "", assetId: null, bomNodeId: null, locationId: "", priority: "Medium", requiredByDate: "", suggestedType: "Corrective", suggestedPartIds: [] };
+  const blank = { title: "", description: "", assetId: null, bomNodeId: null, locationId: "", priority: "Medium", requiredByDate: "", suggestedType: "Corrective", suggestedParts: [] };
   const [form, setForm] = useState(blank);
   const initial = useRef(null);
   const [reviewForm, setReviewForm] = useState({});
@@ -1392,7 +1450,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
     setModal("new");
   };
   const openEditRequest = (wr) => {
-    const f = { title: wr.title, description: wr.description, assetId: wr.assetId, bomNodeId: wr.bomNodeId, locationId: wr.locationId, priority: wr.priority, requiredByDate: wr.requiredByDate || "", suggestedType: wr.suggestedType || "Corrective", suggestedPartIds: wr.suggestedPartIds || [] };
+    const f = { title: wr.title, description: wr.description, assetId: wr.assetId, bomNodeId: wr.bomNodeId, locationId: wr.locationId, priority: wr.priority, requiredByDate: wr.requiredByDate || "", suggestedType: wr.suggestedType || "Corrective", suggestedParts: wr.suggestedParts || [] };
     setForm(f); initial.current = JSON.stringify(f);
     setModal({ action: "editRequest", wr });
   };
@@ -1442,7 +1500,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
           description: wr.description, sourceRequestId: wr.id, sourceBenchmarkId: null,
           sourcePmBaseId: null, sourceFixedDate: null, priority: wr.priority || "Medium", executorId: "",
           scheduledDate: "", requiredByDate: "", completedDate: null, verifiedDate: null,
-          cost: "", vendorId: null, notes: "", partIds: wr.suggestedPartIds || [], createdBy: currentUser,
+          cost: "", vendorId: null, notes: "", parts: wr.suggestedParts || [], comments: [], partsDeducted: false, createdBy: currentUser,
           pmMode: reviewForm.pmMode,
         };
         if (reviewForm.pmMode === "Non-fixed") {
@@ -1466,7 +1524,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
           sourcePmBaseId: null, sourceFixedDate: null, priority: wr.priority || "Medium", executorId: "",
           scheduledDate: reviewForm.scheduledDate, requiredByDate: reviewForm.requiredByDate || wr.requiredByDate || "",
           completedDate: null, verifiedDate: null, cost: "", vendorId: null,
-          notes: "", partIds: wr.suggestedPartIds || [], createdBy: currentUser,
+          notes: "", parts: wr.suggestedParts || [], comments: [], partsDeducted: false, createdBy: currentUser,
         });
         const req = d.workRequests.find((r) => r.id === wr.id);
         req.status = "Approved"; req.workOrderId = woId;
@@ -1527,11 +1585,11 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
       <div style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 16 }}>
         <LocationNavTree data={data} selectedId={locFilter} onSelect={setLocFilter} />
         <div>
-          <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
-            <div style={{ position: "relative", maxWidth: 300, flex: 1 }}>
-              <Search size={14} color={C.inkFaint} style={{ position: "absolute", left: 10, top: 10 }} />
-              <input style={{ ...inputStyle, paddingLeft: 30 }} placeholder="Search by title or number…" value={search} onChange={(e) => setSearch(e.target.value)} />
-            </div>
+          <div style={{ position: "relative", maxWidth: 340, marginBottom: 10 }}>
+            <Search size={14} color={C.inkFaint} style={{ position: "absolute", left: 10, top: 10, pointerEvents: "none" }} />
+            <input style={{ ...inputStyle, paddingLeft: 30 }} placeholder="Search by title or number…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          </div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
             <select style={{ ...inputStyle, width: "auto" }} value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)}>
               <option value="all">All priorities</option>
               {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
@@ -1617,7 +1675,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
               </select>
             </Field>
           </div>
-          <PartsPicker data={data} update={update} value={form.suggestedPartIds} onChange={(v) => setForm({ ...form, suggestedPartIds: v })} defaultLocationId={form.locationId} currentUser={currentUser} />
+          <PartsPicker data={data} update={update} value={form.suggestedParts} onChange={(v) => setForm({ ...form, suggestedParts: v })} defaultLocationId={form.locationId} currentUser={currentUser} role={role} />
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
             <Btn variant="ghost" onClick={() => closeGuard(isDirty, modal === "new" ? submitRequest : saveEditRequest, () => setModal(null))}>Cancel</Btn>
             <Btn variant="primary" onClick={modal === "new" ? submitRequest : saveEditRequest}>{modal === "new" ? "Submit" : "Save changes"}</Btn>
@@ -1754,7 +1812,7 @@ function ArchiveModal({ data, onClose, goToOrder }) {
   );
 }
 
-function WorkOrdersView({ data, update, role, currentUser, openId, setOpenId, pendingFilter, consumeFilter }) {
+function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId, setOpenId, pendingFilter, consumeFilter }) {
   const dialog = useDialog();
   const closeGuard = useCloseGuard(dialog);
   const [modal, setModal] = useState(null);
@@ -1762,12 +1820,13 @@ function WorkOrdersView({ data, update, role, currentUser, openId, setOpenId, pe
   const [search, setSearch] = useState("");
   const [priorityFilter, setPriorityFilter] = useState("all");
   const [dueFilter, setDueFilter] = useState(pendingFilter?.due || "all");
+  const [executorFilter, setExecutorFilter] = useState(role === "Executor" ? currentUserId : "");
   const [showArchive, setShowArchive] = useState(false);
   const [users, setUsers] = useState([]);
   const blank = {
     title: "", type: "Unplanned", assetId: null, bomNodeId: null, locationId: data.locations[0]?.id || "",
     description: "", scheduledDate: todayISO(), requiredByDate: "", vendorId: "", benchmarkId: "", executorId: "",
-    priority: "Medium", pmMode: "Non-fixed", frequencyValue: "3", frequencyUnit: "months", fixedDates: [], partIds: [],
+    priority: "Medium", pmMode: "Non-fixed", frequencyValue: "3", frequencyUnit: "months", fixedDates: [], parts: [],
   };
   const [form, setForm] = useState(blank);
   const initial = useRef(null);
@@ -1775,6 +1834,7 @@ function WorkOrdersView({ data, update, role, currentUser, openId, setOpenId, pe
   const [detailEdits, setDetailEdits] = useState({});
   const detailInitial = useRef(null);
   const detailDirty = !!openId && JSON.stringify(detailEdits) !== detailInitial.current;
+  const [commentDraft, setCommentDraft] = useState("");
 
   useEffect(() => { if (pendingFilter) consumeFilter(); }, []); // eslint-disable-line
   useEffect(() => { api.listUsers().then(setUsers).catch(() => setUsers([])); }, []);
@@ -1810,7 +1870,7 @@ function WorkOrdersView({ data, update, role, currentUser, openId, setOpenId, pe
         completedDate: null, verifiedDate: null,
         cost: "", vendorId: form.vendorId || null,
         notes: checklist ? "Checklist: " + checklist : "",
-        partIds: form.type === "PM Base" ? [] : form.partIds, createdBy: currentUser,
+        parts: form.type === "PM Base" ? [] : form.parts, comments: [], partsDeducted: false, createdBy: currentUser,
       };
       if (form.type === "PM Base") {
         wo.pmMode = form.pmMode;
@@ -1831,6 +1891,7 @@ function WorkOrdersView({ data, update, role, currentUser, openId, setOpenId, pe
   const openWO = data.workOrders.find((w) => w.id === openId);
   useEffect(() => {
     if (openWO) { const snap = { ...openWO }; setDetailEdits(snap); detailInitial.current = JSON.stringify(snap); }
+    setCommentDraft("");
   }, [openId]); // eslint-disable-line
 
   const saveDetail = () => {
@@ -1838,6 +1899,7 @@ function WorkOrdersView({ data, update, role, currentUser, openId, setOpenId, pe
     detailInitial.current = JSON.stringify(detailEdits);
   };
   const setStatus = (status) => {
+    if (status === "Verified" && !isAdmin(role)) return;
     update((d) => {
       const w = d.workOrders.find((x) => x.id === openWO.id);
       const wasTerminal = w.status === "Completed" || w.status === "Verified";
@@ -1845,8 +1907,25 @@ function WorkOrdersView({ data, update, role, currentUser, openId, setOpenId, pe
       if (status === "Completed" && !w.completedDate) w.completedDate = todayISO();
       if (status === "Verified" && !w.verifiedDate) w.verifiedDate = todayISO();
       if (status === "Completed" && w.type === "PM" && w.sourcePmBaseId && !wasTerminal) regeneratePmAfterCompletion(d, w);
+      if (status === "Completed" && !w.partsDeducted) {
+        (w.parts || []).forEach(({ partId, qty }) => {
+          const item = d.inventory.find((i) => i.id === partId);
+          if (item) item.qty = Math.max(0, item.qty - (Number(qty) || 0));
+        });
+        w.partsDeducted = true;
+      }
       return d;
     });
+  };
+  const addComment = () => {
+    if (!commentDraft.trim()) return;
+    update((d) => {
+      const w = d.workOrders.find((x) => x.id === openWO.id);
+      w.comments = w.comments || [];
+      w.comments.push({ id: uid("cm"), author: currentUser, date: todayISO(), text: commentDraft.trim() });
+      return d;
+    });
+    setCommentDraft("");
   };
   const updateBenchmarkFromWO = async () => {
     if (!openWO.sourceBenchmarkId) return;
@@ -1886,6 +1965,7 @@ function WorkOrdersView({ data, update, role, currentUser, openId, setOpenId, pe
   const matchesFilters = (w) => {
     if (allowedLocs && !allowedLocs.has(w.locationId)) return false;
     if (priorityFilter !== "all" && w.priority !== priorityFilter) return false;
+    if (executorFilter && w.executorId !== executorFilter) return false;
     if (dueFilter !== "all") {
       const notDone = w.status !== "Completed" && w.status !== "Verified";
       if (!notDone) return false;
@@ -1926,11 +2006,11 @@ function WorkOrdersView({ data, update, role, currentUser, openId, setOpenId, pe
       <div style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 16 }}>
         <LocationNavTree data={data} selectedId={locFilter} onSelect={setLocFilter} />
         <div>
-          <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
-            <div style={{ position: "relative", maxWidth: 300, flex: 1 }}>
-              <Search size={14} color={C.inkFaint} style={{ position: "absolute", left: 10, top: 10 }} />
-              <input style={{ ...inputStyle, paddingLeft: 30 }} placeholder="Search by title or number…" value={search} onChange={(e) => setSearch(e.target.value)} />
-            </div>
+          <div style={{ position: "relative", maxWidth: 340, marginBottom: 10 }}>
+            <Search size={14} color={C.inkFaint} style={{ position: "absolute", left: 10, top: 10, pointerEvents: "none" }} />
+            <input style={{ ...inputStyle, paddingLeft: 30 }} placeholder="Search by title or number…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          </div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
             <select style={{ ...inputStyle, width: "auto" }} value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)}>
               <option value="all">All priorities</option>
               {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
@@ -1939,6 +2019,10 @@ function WorkOrdersView({ data, update, role, currentUser, openId, setOpenId, pe
               <option value="all">All due dates</option>
               <option value="overdue">Overdue</option>
               <option value="30">Due within 30 days</option>
+            </select>
+            <select style={{ ...inputStyle, width: "auto" }} value={executorFilter} onChange={(e) => setExecutorFilter(e.target.value)}>
+              <option value="">All executors</option>
+              {assignableUsers.map((u) => <option key={u.id} value={u.id}>{u.username}{u.id === currentUserId ? " (me)" : ""}</option>)}
             </select>
           </div>
 
@@ -2065,7 +2149,7 @@ function WorkOrdersView({ data, update, role, currentUser, openId, setOpenId, pe
             </Field>
           </div>
           {form.type !== "PM Base" && (
-            <PartsPicker data={data} update={update} value={form.partIds} onChange={(v) => setForm({ ...form, partIds: v })} defaultLocationId={form.locationId} currentUser={currentUser} />
+            <PartsPicker data={data} update={update} value={form.parts} onChange={(v) => setForm({ ...form, parts: v })} defaultLocationId={form.locationId} currentUser={currentUser} role={role} />
           )}
           <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 60 }} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
@@ -2118,17 +2202,45 @@ function WorkOrdersView({ data, update, role, currentUser, openId, setOpenId, pe
                   </select>
                 </Field>
               </div>
-              <PartsPicker data={data} update={update} value={detailEdits.partIds || []} onChange={(v) => setDetailEdits({ ...detailEdits, partIds: v })} defaultLocationId={openWO.locationId} currentUser={currentUser} />
+              <PartsPicker data={data} update={update} value={detailEdits.parts || []} onChange={(v) => setDetailEdits({ ...detailEdits, parts: v })} defaultLocationId={openWO.locationId} currentUser={currentUser} role={role} />
               <Field label="Notes / checklist"><textarea style={{ ...inputStyle, minHeight: 80 }} value={detailEdits.notes || ""} onChange={(e) => setDetailEdits({ ...detailEdits, notes: e.target.value })} /></Field>
 
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6, flexWrap: "wrap", gap: 8 }}>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   {WO_STATUSES.map((s) => (
-                    <Btn key={s} small variant={openWO.status === s ? "primary" : "ghost"} onClick={() => setStatus(s)}>{s}</Btn>
+                    <Btn
+                      key={s} small variant={openWO.status === s ? "primary" : "ghost"}
+                      disabled={s === "Verified" && !isAdmin(role)}
+                      title={s === "Verified" && !isAdmin(role) ? "Only Owners and Managers can verify a work order" : undefined}
+                      onClick={() => setStatus(s)}
+                    >
+                      {s}
+                    </Btn>
                   ))}
                 </div>
                 <Btn small onClick={saveDetail}>Save changes</Btn>
               </div>
+
+              {(openWO.status === "Completed" || openWO.status === "Verified") && (
+                <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${C.lineSoft}` }}>
+                  <div style={{ fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 8 }}>Comments</div>
+                  {(openWO.comments || []).length === 0 && <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint, marginBottom: 8 }}>No comments yet.</div>}
+                  {(openWO.comments || []).map((c) => (
+                    <div key={c.id} style={{ padding: "6px 0", borderTop: `1px solid ${C.lineSoft}` }}>
+                      <div style={{ fontFamily: FONT_BODY, fontSize: 11, fontWeight: 700, color: C.inkFaint }}>{c.author} · {fmtDate(c.date)}</div>
+                      <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink }}>{c.text}</div>
+                    </div>
+                  ))}
+                  {canWrite(role) && (
+                    <div style={{ marginTop: 8 }}>
+                      <textarea style={{ ...inputStyle, minHeight: 50 }} placeholder="How did it go? Anything to improve next time?" value={commentDraft} onChange={(e) => setCommentDraft(e.target.value)} />
+                      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 6 }}>
+                        <Btn small onClick={addComment}>Add comment</Btn>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {(openWO.type === "Benchmark" || openWO.type === "Corrective") && (
                 <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${C.lineSoft}`, display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -2168,6 +2280,7 @@ function VendorsView({ data, update, role, currentUser }) {
   const dialog = useDialog();
   const closeGuard = useCloseGuard(dialog);
   const [modal, setModal] = useState(null);
+  const [search, setSearch] = useState("");
   const blank = { name: "", specialty: "", contact: "", link: "", notes: "" };
   const [form, setForm] = useState(blank);
   const initial = useRef(null);
@@ -2177,11 +2290,12 @@ function VendorsView({ data, update, role, currentUser }) {
   const openEdit = (v) => { const f = { ...v }; setForm(f); initial.current = JSON.stringify(f); setModal(v.id); };
   const save = () => {
     if (!form.name.trim()) return;
-    update((d) => {
-      if (modal === "add") d.vendors.push({ id: uid("v"), ...form, name: form.name.trim(), createdBy: currentUser });
-      else Object.assign(d.vendors.find((v) => v.id === modal), form, { name: form.name.trim() });
-      return d;
-    });
+    if (modal === "add") {
+      update((d) => { d.vendors.push({ id: uid("v"), ...form, name: form.name.trim(), createdBy: currentUser }); return d; });
+    } else {
+      const id = modal;
+      update((d) => { Object.assign(d.vendors.find((v) => v.id === id), form, { name: form.name.trim() }); return d; });
+    }
     setModal(null);
   };
   const remove = async (v) => {
@@ -2189,6 +2303,10 @@ function VendorsView({ data, update, role, currentUser }) {
     if (!ok) return;
     update((d) => { d.vendors = d.vendors.filter((x) => x.id !== v.id); return d; });
   };
+
+  const searchLower = search.trim().toLowerCase();
+  const visible = data.vendors.filter((v) => !searchLower || [v.name, v.specialty, v.contact].filter(Boolean).join(" ").toLowerCase().includes(searchLower));
+  const editingVendor = modal && modal !== "add" ? data.vendors.find((v) => v.id === modal) : null;
 
   return (
     <div>
@@ -2198,18 +2316,22 @@ function VendorsView({ data, update, role, currentUser }) {
         info={PAGE_INFO.vendors}
         action={isAdmin(role) && <Btn variant="primary" onClick={openAdd}><Plus size={15} /> Add vendor</Btn>}
       />
+      <div style={{ position: "relative", maxWidth: 340, marginBottom: 12 }}>
+        <Search size={14} color={C.inkFaint} style={{ position: "absolute", left: 10, top: 10, pointerEvents: "none" }} />
+        <input style={{ ...inputStyle, paddingLeft: 30 }} placeholder="Search by name, specialty, or contact…" value={search} onChange={(e) => setSearch(e.target.value)} />
+      </div>
       <Panel>
-        {data.vendors.length === 0 && <Empty text="No vendors saved yet." />}
-        {data.vendors.map((v) => (
+        {visible.length === 0 && <Empty text="No matching vendors." />}
+        {visible.map((v) => (
           <div key={v.id} className="hk-row" style={{ display: "flex", justifyContent: "space-between", padding: "12px 18px", borderTop: `1px solid ${C.lineSoft}` }}>
             <div>
               <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, fontWeight: 700, color: C.ink }}>{v.name}</div>
               <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint }}>{v.specialty} · {v.contact}</div>
-              {v.link && <a href={v.link} target="_blank" rel="noreferrer" style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.navy, display: "inline-flex", alignItems: "center", gap: 3, marginTop: 2 }}><LinkIcon size={11} /> {v.link}</a>}
               {v.notes && <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkSoft, marginTop: 2 }}>{v.notes}</div>}
+              {v.link && <div style={{ marginTop: 6 }}><LinkButton url={v.link} small /></div>}
             </div>
             {isAdmin(role) && (
-              <div style={{ display: "flex", gap: 6 }}>
+              <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
                 <button onClick={() => openEdit(v)} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkSoft }}><Pencil size={14} /></button>
                 {canDelete(role, v, currentUser) && <button onClick={() => remove(v)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rust }}><Trash2 size={14} /></button>}
               </div>
@@ -2222,11 +2344,21 @@ function VendorsView({ data, update, role, currentUser }) {
           <Field label="Name" required><input style={inputStyle} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} autoFocus /></Field>
           <Field label="Specialty"><input style={inputStyle} value={form.specialty} onChange={(e) => setForm({ ...form, specialty: e.target.value })} /></Field>
           <Field label="Contact"><input style={inputStyle} value={form.contact} onChange={(e) => setForm({ ...form, contact: e.target.value })} /></Field>
-          <Field label="Web link"><input style={inputStyle} value={form.link} onChange={(e) => setForm({ ...form, link: e.target.value })} placeholder="https://…" /></Field>
+          <Field label="Web link">
+            <div style={{ display: "flex", gap: 6 }}>
+              <input style={inputStyle} value={form.link} onChange={(e) => setForm({ ...form, link: e.target.value })} placeholder="https://…" />
+              <LinkButton url={form.link} small />
+            </div>
+          </Field>
           <Field label="Notes"><textarea style={{ ...inputStyle, minHeight: 60 }} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field>
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-            <Btn variant="ghost" onClick={() => closeGuard(isDirty, save, () => setModal(null))}>Cancel</Btn>
-            <Btn variant="primary" onClick={save}>Save</Btn>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+            {editingVendor && canDelete(role, editingVendor, currentUser) ? (
+              <Btn variant="danger" onClick={() => { remove(editingVendor); setModal(null); }}><Trash2 size={13} /> Delete</Btn>
+            ) : <span />}
+            <div style={{ display: "flex", gap: 8 }}>
+              <Btn variant="ghost" onClick={() => closeGuard(isDirty, save, () => setModal(null))}>Cancel</Btn>
+              <Btn variant="primary" onClick={save}>Save</Btn>
+            </div>
           </div>
         </Modal>
       )}
@@ -2239,6 +2371,7 @@ function VendorsView({ data, update, role, currentUser }) {
 ============================================================ */
 function PartsView({ data, update, role, currentUser }) {
   const [editing, setEditing] = useState(null); // "new" | part object
+  const [search, setSearch] = useState("");
 
   const adjust = (item, delta, e) => {
     e.stopPropagation();
@@ -2249,6 +2382,13 @@ function PartsView({ data, update, role, currentUser }) {
     });
   };
 
+  const searchLower = search.trim().toLowerCase();
+  const visible = data.inventory.filter((item) => {
+    if (!searchLower) return true;
+    const hay = [formatPartNum(item.partNumber), item.name, item.manufacturer, item.manufacturerPartNumber].filter(Boolean).join(" ").toLowerCase();
+    return hay.includes(searchLower);
+  });
+
   return (
     <div>
       <SectionHeader
@@ -2257,9 +2397,13 @@ function PartsView({ data, update, role, currentUser }) {
         info={PAGE_INFO.parts}
         action={isAdmin(role) && <Btn variant="primary" onClick={() => setEditing("new")}><Plus size={15} /> Add part</Btn>}
       />
+      <div style={{ position: "relative", maxWidth: 340, marginBottom: 14 }}>
+        <Search size={14} color={C.inkFaint} style={{ position: "absolute", left: 10, top: 10, pointerEvents: "none" }} />
+        <input style={{ ...inputStyle, paddingLeft: 30 }} placeholder="Search by part #, name, or manufacturer…" value={search} onChange={(e) => setSearch(e.target.value)} />
+      </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
-        {data.inventory.length === 0 && <Empty text="No parts tracked yet." />}
-        {data.inventory.map((item) => {
+        {visible.length === 0 && <Empty text="No matching parts." />}
+        {visible.map((item) => {
           const low = item.qty <= item.reorderAt;
           return (
             <Panel key={item.id} style={{ padding: 14 }}>
@@ -2281,13 +2425,14 @@ function PartsView({ data, update, role, currentUser }) {
                 </div>
                 {item.cost && <span style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint }}>${item.cost}</span>}
               </div>
+              {item.link && <div style={{ marginTop: 8 }} onClick={(e) => e.stopPropagation()}><LinkButton url={item.link} small /></div>}
             </Panel>
           );
         })}
       </div>
       {editing && (
         <PartEditModal
-          data={data} update={update} part={editing === "new" ? null : editing} currentUser={currentUser}
+          data={data} update={update} part={editing === "new" ? null : editing} currentUser={currentUser} role={role}
           onClose={() => setEditing(null)}
         />
       )}
@@ -2342,9 +2487,14 @@ function BudgetView({ data }) {
 /* ============================================================
    SCHEDULE
 ============================================================ */
-function ScheduleView({ data, goToOrder }) {
+function ScheduleView({ data, role, currentUserId, goToOrder }) {
   const [locFilter, setLocFilter] = useState(null);
+  const [executorFilter, setExecutorFilter] = useState(role === "Executor" ? currentUserId : "");
+  const [users, setUsers] = useState([]);
   const [cursor, setCursor] = useState(() => { const t = new Date(); return { year: t.getFullYear(), month: t.getMonth() }; });
+
+  useEffect(() => { api.listUsers().then(setUsers).catch(() => setUsers([])); }, []);
+  const assignableUsers = users.filter((u) => u.role === "Owner" || u.role === "Manager" || u.role === "Executor");
 
   const firstOfMonth = new Date(cursor.year, cursor.month, 1);
   const startWeekday = firstOfMonth.getDay();
@@ -2356,6 +2506,7 @@ function ScheduleView({ data, goToOrder }) {
   data.workOrders.forEach((w) => {
     if (w.type === "PM Base" || !w.scheduledDate) return;
     if (allowedLocs && !allowedLocs.has(w.locationId)) return;
+    if (executorFilter && w.executorId !== executorFilter) return;
     const d = new Date(w.scheduledDate + "T00:00:00");
     if (d.getFullYear() === cursor.year && d.getMonth() === cursor.month) {
       const day = d.getDate();
@@ -2375,7 +2526,11 @@ function ScheduleView({ data, goToOrder }) {
         subtitle="When maintenance work is planned to happen."
         info={PAGE_INFO.schedule}
         action={
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <select style={{ ...inputStyle, width: "auto" }} value={executorFilter} onChange={(e) => setExecutorFilter(e.target.value)}>
+              <option value="">All executors</option>
+              {assignableUsers.map((u) => <option key={u.id} value={u.id}>{u.username}{u.id === currentUserId ? " (me)" : ""}</option>)}
+            </select>
             <Btn small variant="ghost" onClick={goPrev}><ChevronLeft size={14} /></Btn>
             <span style={{ fontFamily: FONT_HEAD, fontSize: 14, fontWeight: 600, color: C.ink, minWidth: 150, textAlign: "center", display: "inline-block" }}>{MONTH_NAMES[cursor.month]} {cursor.year}</span>
             <Btn small variant="ghost" onClick={goNext}><ChevronRight size={14} /></Btn>
@@ -2445,8 +2600,8 @@ const SHEET_SPECS = [
   },
   {
     key: "workRequests", sheetName: "Work Requests", idPrefix: "wr",
-    toRow: (w) => ({ id: w.id, number: w.number || "", title: w.title, description: w.description || "", assetId: w.assetId || "", bomNodeId: w.bomNodeId || "", locationId: w.locationId || "", requestedBy: w.requestedBy || "", dateSubmitted: w.dateSubmitted || "", requiredByDate: w.requiredByDate || "", priority: w.priority || "", suggestedType: w.suggestedType || "", suggestedPartIds: (w.suggestedPartIds || []).join(","), status: w.status || "", reviewNote: w.reviewNote || "", workOrderId: w.workOrderId || "", createdBy: w.createdBy || "" }),
-    fromRow: (r) => ({ id: r.id, number: r.number ? Number(r.number) : undefined, title: String(r.title || ""), description: String(r.description || ""), assetId: r.assetId ? String(r.assetId) : null, bomNodeId: r.bomNodeId ? String(r.bomNodeId) : null, locationId: r.locationId ? String(r.locationId) : "", requestedBy: String(r.requestedBy || ""), dateSubmitted: String(r.dateSubmitted || ""), requiredByDate: String(r.requiredByDate || ""), priority: String(r.priority || "Medium"), suggestedType: String(r.suggestedType || "Corrective"), suggestedPartIds: String(r.suggestedPartIds || "").split(",").map((s) => s.trim()).filter(Boolean), status: String(r.status || "Submitted"), reviewNote: String(r.reviewNote || ""), workOrderId: r.workOrderId ? String(r.workOrderId) : null, createdBy: r.createdBy || null }),
+    toRow: (w) => ({ id: w.id, number: w.number || "", title: w.title, description: w.description || "", assetId: w.assetId || "", bomNodeId: w.bomNodeId || "", locationId: w.locationId || "", requestedBy: w.requestedBy || "", dateSubmitted: w.dateSubmitted || "", requiredByDate: w.requiredByDate || "", priority: w.priority || "", suggestedType: w.suggestedType || "", suggestedParts: serializePartsList(w.suggestedParts), status: w.status || "", reviewNote: w.reviewNote || "", workOrderId: w.workOrderId || "", createdBy: w.createdBy || "" }),
+    fromRow: (r) => ({ id: r.id, number: r.number ? Number(r.number) : undefined, title: String(r.title || ""), description: String(r.description || ""), assetId: r.assetId ? String(r.assetId) : null, bomNodeId: r.bomNodeId ? String(r.bomNodeId) : null, locationId: r.locationId ? String(r.locationId) : "", requestedBy: String(r.requestedBy || ""), dateSubmitted: String(r.dateSubmitted || ""), requiredByDate: String(r.requiredByDate || ""), priority: String(r.priority || "Medium"), suggestedType: String(r.suggestedType || "Corrective"), suggestedParts: deserializePartsList(r.suggestedParts), status: String(r.status || "Submitted"), reviewNote: String(r.reviewNote || ""), workOrderId: r.workOrderId ? String(r.workOrderId) : null, createdBy: r.createdBy || null }),
   },
   {
     key: "workOrders", sheetName: "Work Orders", idPrefix: "wo",
@@ -2459,7 +2614,7 @@ const SHEET_SPECS = [
       sourceFixedDateDay: w.sourceFixedDate ? w.sourceFixedDate.day : "",
       pmMode: w.pmMode || "", frequencyValue: w.frequencyValue || "", frequencyUnit: w.frequencyUnit || "",
       fixedDates: (w.fixedDates || []).map((f) => `${String(f.month).padStart(2, "0")}-${String(f.day).padStart(2, "0")}`).join(", "),
-      priority: w.priority || "", executorId: w.executorId || "", partIds: (w.partIds || []).join(","),
+      priority: w.priority || "", executorId: w.executorId || "", parts: serializePartsList(w.parts),
       scheduledDate: w.scheduledDate || "", requiredByDate: w.requiredByDate || "", completedDate: w.completedDate || "", verifiedDate: w.verifiedDate || "",
       cost: w.cost || "", vendorId: w.vendorId || "", notes: w.notes || "", createdBy: w.createdBy || "",
     }),
@@ -2482,7 +2637,7 @@ const SHEET_SPECS = [
         frequencyUnit: r.frequencyUnit || undefined,
         fixedDates: fixedDates.length ? fixedDates : undefined,
         priority: String(r.priority || "Medium"), executorId: r.executorId ? String(r.executorId) : "",
-        partIds: String(r.partIds || "").split(",").map((s) => s.trim()).filter(Boolean),
+        parts: deserializePartsList(r.parts),
         scheduledDate: String(r.scheduledDate || ""), requiredByDate: String(r.requiredByDate || ""), completedDate: r.completedDate ? String(r.completedDate) : null, verifiedDate: r.verifiedDate ? String(r.verifiedDate) : null,
         cost: r.cost !== "" && r.cost != null ? String(r.cost) : "", vendorId: r.vendorId ? String(r.vendorId) : null, notes: String(r.notes || ""), createdBy: r.createdBy || null,
       };
@@ -2727,6 +2882,59 @@ function DeleteWorkRequestTool({ data, update }) {
   );
 }
 
+function PurchasingView({ data, goToOrder }) {
+  const groups = data.workOrders
+    .filter((w) => (w.status === "Open" || w.status === "In Progress") && w.type !== "PM Base")
+    .map((w) => {
+      const shortages = (w.parts || []).map(({ partId, qty }) => {
+        const part = data.inventory.find((p) => p.id === partId);
+        if (!part) return null;
+        const needed = Number(qty) || 0;
+        const shortfall = needed - part.qty;
+        return shortfall > 0 ? { part, needed, onHand: part.qty, shortfall } : null;
+      }).filter(Boolean);
+      return { wo: w, shortages };
+    })
+    .filter((g) => g.shortages.length > 0);
+
+  const totalItems = groups.reduce((s, g) => s + g.shortages.length, 0);
+
+  return (
+    <div>
+      <SectionHeader
+        title="Purchasing"
+        subtitle="Parts needed for open work that aren't fully stocked."
+        info={PAGE_INFO.purchasing}
+      />
+      {groups.length === 0 ? (
+        <Empty text="Nothing to buy — every part needed for open work is in stock." />
+      ) : (
+        <>
+          <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkFaint, marginBottom: 14 }}>
+            {totalItems} part{totalItems === 1 ? "" : "s"} short across {groups.length} work order{groups.length === 1 ? "" : "s"}.
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {groups.map(({ wo, shortages }) => (
+              <Panel key={wo.id} style={{ padding: 16 }}>
+                <div onClick={() => goToOrder(wo.id)} style={{ cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                  <span style={{ fontFamily: FONT_BODY, fontSize: 13.5, fontWeight: 700, color: C.ink }}>{formatWoNum(wo.number)} · {wo.title}</span>
+                  <Tag text={wo.status} color={WO_STATUS_COLORS[wo.status]} soft={C.panelAlt} />
+                </div>
+                {shortages.map(({ part, needed, onHand, shortfall }) => (
+                  <div key={part.id} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderTop: `1px solid ${C.lineSoft}` }}>
+                    <span style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink }}>{formatPartNum(part.partNumber)} · {part.name}</span>
+                    <span style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.rust, fontWeight: 600 }}>need {needed}, have {onHand} — buy {shortfall}</span>
+                  </div>
+                ))}
+              </Panel>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function OwnerToolsView({ data, update, currentUser }) {
   return (
     <div>
@@ -2801,7 +3009,25 @@ export default function HomeKeepApp() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [openOrderId, setOpenOrderId] = useState(null);
   const [pendingFilter, setPendingFilter] = useState(null);
+  const [installPrompt, setInstallPrompt] = useState(null);
   const saveTimer = useRef(null);
+
+  useEffect(() => {
+    const onPrompt = (e) => { e.preventDefault(); setInstallPrompt(e); };
+    const onInstalled = () => setInstallPrompt(null);
+    window.addEventListener("beforeinstallprompt", onPrompt);
+    window.addEventListener("appinstalled", onInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", onPrompt);
+      window.removeEventListener("appinstalled", onInstalled);
+    };
+  }, []);
+  const doInstall = async () => {
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    await installPrompt.userChoice;
+    setInstallPrompt(null);
+  };
 
   useEffect(() => { api.me().then(setUser).catch(() => setUser(false)); }, []);
   useEffect(() => { if (!user) return; api.getData().then(setDataRaw).catch(() => setDataRaw(null)); }, [user]);
@@ -2841,11 +3067,12 @@ export default function HomeKeepApp() {
     locations: <LocationsView data={data} update={update} role={role} />,
     assets: <AssetsView data={data} update={update} role={role} goToOrder={goToOrder} />,
     requests: <WorkRequestsView data={data} update={update} role={role} currentUser={user.username} goToOrder={goToOrder} pendingFilter={tab === "requests" ? pendingFilter : null} consumeFilter={() => setPendingFilter(null)} />,
-    orders: <WorkOrdersView data={data} update={update} role={role} currentUser={user.username} openId={openOrderId} setOpenId={setOpenOrderId} pendingFilter={tab === "orders" ? pendingFilter : null} consumeFilter={() => setPendingFilter(null)} />,
-    schedule: <ScheduleView data={data} goToOrder={goToOrder} />,
+    orders: <WorkOrdersView data={data} update={update} role={role} currentUser={user.username} currentUserId={user.id} openId={openOrderId} setOpenId={setOpenOrderId} pendingFilter={tab === "orders" ? pendingFilter : null} consumeFilter={() => setPendingFilter(null)} />,
+    schedule: <ScheduleView data={data} role={role} currentUserId={user.id} goToOrder={goToOrder} />,
     vendors: <VendorsView data={data} update={update} role={role} currentUser={user.username} />,
     parts: <PartsView data={data} update={update} role={role} currentUser={user.username} />,
     budget: <BudgetView data={data} />,
+    purchasing: isAdmin(role) ? <PurchasingView data={data} goToOrder={goToOrder} /> : <Dashboard data={data} setTab={setTab} role={role} applyFilter={applyFilter} goToOrder={goToOrder} goToRequest={goToRequest} />,
     owner: role === "Owner" ? <OwnerToolsView data={data} update={update} currentUser={user} /> : <Dashboard data={data} setTab={setTab} role={role} applyFilter={applyFilter} goToOrder={goToOrder} goToRequest={goToRequest} />,
   };
 
@@ -2860,6 +3087,9 @@ export default function HomeKeepApp() {
               {sidebarOpen ? <ChevronLeft size={18} /> : <Menu size={18} />}
             </button>
             <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+              {installPrompt && (
+                <Btn small variant="ghost" onClick={doInstall}><Download size={13} /> Install app</Btn>
+              )}
               <div style={{ position: "relative" }}>
                 <Bell size={17} color={C.inkSoft} />
                 {counts.requests > 0 && <span style={{ position: "absolute", top: -5, right: -6, background: C.orange, color: "#fff", fontSize: 9.5, fontWeight: 700, borderRadius: 8, padding: "1px 4px" }}>{counts.requests}</span>}

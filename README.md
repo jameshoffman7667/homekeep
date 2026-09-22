@@ -49,15 +49,15 @@ git init
 git add .
 git commit -m "Initial commit"
 git branch -M main
-git remote add origin https://github.com/<your-username>/homekeep.git
+git remote add origin https://github.com/jameshoffman7667/homekeep.git
 git push -u origin main
 ```
 
-Then open **`docker-compose.yml`** and replace `ghcr.io/OWNER/REPO:latest`
-with your actual GitHub owner and repo name, all lowercase (e.g.
-`ghcr.io/jsmith/homekeep:latest`), and push that change. This is the
-image name the GitHub Actions workflow below publishes to — they need
-to match.
+`docker-compose.yml` is already set to pull `ghcr.io/jameshoffman7667/homekeep:latest`
+— that's the image name the GitHub Actions workflow below publishes to
+for this repo, so no editing needed unless you fork it under a
+different owner/repo name (in which case, update that `image:` line to
+match, all lowercase).
 
 ### Continuous builds via GitHub Actions
 
@@ -81,7 +81,7 @@ cd homekeep
 cp .env.example .env
 # Edit .env and set JWT_SECRET to a long random string, e.g.:
 #   openssl rand -hex 32
-# PORT defaults to 8080 — change it in .env if that port is already in use.
+# PORT defaults to 8040 — change it in .env if that port is already in use.
 
 docker compose up -d --build
 ```
@@ -93,10 +93,10 @@ up -d` will pull it from GHCR instead.
 The first build takes a few minutes (installing dependencies, compiling
 `better-sqlite3`, building the frontend). After that, it starts in seconds.
 
-Open **http://localhost:8080** — or, from another device on the same
-Wi-Fi/LAN, **http://\<this-machine's-LAN-IP\>:8080** (find the IP with
+Open **http://localhost:8040** — or, from another device on the same
+Wi-Fi/LAN, **http://\<this-machine's-LAN-IP\>:8040** (find the IP with
 `ip addr` / `ifconfig` on Linux/macOS or `ipconfig` on Windows). If you
-set a different `PORT` in `.env`, use that instead of 8080 throughout
+set a different `PORT` in `.env`, use that instead of 8040 throughout
 this document.
 
 The first time you open it, you'll be asked to create the **Owner**
@@ -112,14 +112,14 @@ know where to pull it from — it doesn't need to build anything itself.
 1. In Portainer, go to **Stacks → Add stack**.
 2. Choose **Repository** as the build method.
 3. **Repository URL:** your GitHub repo URL (e.g.
-   `https://github.com/<your-username>/homekeep`).
+   `https://github.com/jameshoffman7667/homekeep`).
 4. **Compose path:** `docker-compose.yml` (the default).
 5. Under **Environment variables**, add:
    - `JWT_SECRET` → a long random string (e.g. output of `openssl rand -hex 32`)
    - `COOKIE_SECURE` → `false` for LAN-only access, `true` if this stack sits behind HTTPS
-   - `PORT` → optional, defaults to `8080` if omitted; set this if that port is already in use on the host
+   - `PORT` → optional, defaults to `8040` if omitted; set this if that port is already in use on the host
 6. Click **Deploy the stack**. Portainer pulls
-   `ghcr.io/OWNER/REPO:latest` (the value you set in
+   `ghcr.io/jameshoffman7667/homekeep:latest` (the value you set in
    `docker-compose.yml`) and starts the container.
 
 To pick up new pushes later, open the stack in Portainer and use
@@ -133,7 +133,7 @@ Portainer version) to fetch the latest image from GHCR.
 
 1. **Stacks → Add stack → Web editor**.
 2. Paste the contents of this repo's `docker-compose.yml` (with
-   `ghcr.io/OWNER/REPO:latest` already edited to your real image name).
+   `ghcr.io/jameshoffman7667/homekeep:latest` already edited to your real image name).
 3. Add the same `JWT_SECRET` / `COOKIE_SECURE` environment variables as
    above.
 4. Deploy. This method never touches your Git repo — you'll need to
@@ -172,7 +172,7 @@ listing needed.
 Two levels of access:
 
 - **Same Wi-Fi network as the server:** just visit
-  `http://<server-LAN-IP>:8080` from the phone. Chrome will generally
+  `http://<server-LAN-IP>:8040` from the phone. Chrome will generally
   offer to add a home-screen shortcut even over plain HTTP on a private
   network, though some install-prompt features are HTTPS-only.
 - **Truly remote (outside your home network):** Android's full PWA
@@ -294,7 +294,7 @@ Use a tunneling service such as [Tailscale](https://tailscale.com/) (puts
 your phone and server on a private encrypted network — simplest for a
 household) or a
 [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
-pointed at `http://localhost:8080`. Either gives you a stable HTTPS URL
+pointed at `http://localhost:8040`. Either gives you a stable HTTPS URL
 without router configuration. Set `COOKIE_SECURE=true` once traffic
 arrives over HTTPS either way.
 

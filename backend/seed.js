@@ -33,7 +33,7 @@ module.exports = {
       description: "Hear repeated clicking from the utility room, furnace never actually lights.",
       assetId: "a_furnace", bomNodeId: "b_ignitor", locationId: "loc_util",
       requestedBy: "Jamie", dateSubmitted: "2026-09-05", requiredByDate: "2026-09-22",
-      priority: "High", suggestedType: "Corrective", suggestedPartIds: ["inv_ignitor"],
+      priority: "High", suggestedType: "Corrective", suggestedParts: [{ partId: "inv_ignitor", qty: 1 }],
       status: "Under Review", reviewNote: "", workOrderId: null, createdBy: "Jamie",
     },
   ],
@@ -46,7 +46,7 @@ module.exports = {
       priority: "Medium", executorId: null,
       scheduledDate: "2026-06-20", requiredByDate: "2026-06-25", completedDate: "2026-06-20", verifiedDate: null,
       cost: "19", vendorId: null, notes: "Used 16x25x1 pleated filter.",
-      partIds: ["inv_filter"], createdBy: null,
+      parts: [{ partId: "inv_filter", qty: 1 }], comments: [], partsDeducted: true, createdBy: null,
     },
   ],
   benchmarks: [
