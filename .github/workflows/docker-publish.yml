@@ -1,0 +1,38 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches:
+      - main  # Triggers the build whenever you push code to the main branch
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Check out the source code from your GitHub repository
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      # 2. Set up Docker Buildx (enables advanced build features)
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 3. Log into Docker Hub using your saved secrets
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # 4. Build the image from your Dockerfile and push it to Docker Hub
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          # Replace 'your-dockerhub-username' and 'your-repo-name' accordingly
+          tags: |
+            your-dockerhub-username/your-repo-name:latest
+            your-dockerhub-username/your-repo-name:${{ github.sha }}
