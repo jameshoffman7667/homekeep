@@ -91,12 +91,17 @@ app.post("/api/users", requireAuth, requireOwner, (req, res) => {
   const existing = db.prepare("SELECT id FROM users WHERE username = ?").get(username.trim());
   if (existing) return res.status(400).json({ error: "That username is already taken" });
   const id = randomUUID();
-  db.prepare("INSERT INTO users (id, username, password_hash, role) VALUES (?,?,?,?)").run(
-    id,
-    username.trim(),
-    hashPassword(password),
-    role
-  );
+  try {
+    db.prepare("INSERT INTO users (id, username, password_hash, role) VALUES (?,?,?,?)").run(
+      id,
+      username.trim(),
+      hashPassword(password),
+      role
+    );
+  } catch (e) {
+    console.error("[homekeep] Failed to create user:", e.message);
+    return res.status(400).json({ error: "Couldn't create that account. Check the server logs for details." });
+  }
   res.json({ id, username: username.trim(), role });
 });
 

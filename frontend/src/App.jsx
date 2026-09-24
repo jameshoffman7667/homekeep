@@ -5,6 +5,7 @@ import {
   Check, AlertTriangle, Bell, Menu, Trash2, Pencil, ArrowRight,
   Layers, Search, Boxes, ChevronLeft, Loader2, LogOut, UserPlus, Shield,
   Calendar, FileDown, FileUp, Info, Archive, Download, ExternalLink, ShoppingCart,
+  Building2, DoorOpen, Square, Box,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { api } from "./api.js";
@@ -80,6 +81,14 @@ const GlobalStyle = () => (
    HELPERS & CONSTANTS
 ============================================================ */
 const LOCATION_LEVELS = ["Property", "Structure", "Floor", "Room", "Area", "Sub-area"];
+const LEVEL_ICONS = {
+  Property: MapPin,
+  Structure: Building2,
+  Floor: Layers,
+  Room: DoorOpen,
+  Area: Square,
+  "Sub-area": Box,
+};
 const BOM_LEVELS = ["Component", "Sub-component", "Part"];
 const WO_TYPES = ["PM", "PM Base", "Benchmark", "Corrective", "Unplanned"];
 const WO_STATUSES = ["Open", "In Progress", "Completed", "Verified"];
@@ -225,7 +234,13 @@ function sameDateNextYear(dateISO) {
   d.setFullYear(d.getFullYear() + 1);
   return d.toISOString().slice(0, 10);
 }
+// A PM Base is only allowed one Open/In Progress child at a time —
+// this guards every place a new occurrence could be generated.
+function pmBaseHasActiveChild(d, baseId) {
+  return d.workOrders.some((w) => w.sourcePmBaseId === baseId && (w.status === "Open" || w.status === "In Progress"));
+}
 function spawnPmInstance(d, base, opts) {
+  if (pmBaseHasActiveChild(d, base.id)) return;
   const afterDateISO = opts.afterDateISO;
   const fixedDate = opts.fixedDate;
   const requiredByDate = fixedDate
@@ -246,6 +261,7 @@ function spawnPmInstance(d, base, opts) {
 function regeneratePmAfterCompletion(d, completedWO) {
   const base = d.workOrders.find((w) => w.id === completedWO.sourcePmBaseId && w.type === "PM Base");
   if (!base) return;
+  if (pmBaseHasActiveChild(d, base.id)) return;
   if (base.pmMode === "Fixed" && completedWO.sourceFixedDate) {
     const requiredByDate = sameDateNextYear(completedWO.requiredByDate || todayISO());
     d.counters = d.counters || { wo: 0, wr: 0, part: 0 };
@@ -893,24 +909,36 @@ function LocationsView({ data, update, role }) {
     update((d) => { d.locations = d.locations.filter((l) => l.id !== node.id); return d; });
   };
 
-  const rows = flattenTree(data.locations, "parentId", null);
+  const allIds = useMemo(() => new Set(data.locations.map((l) => l.id)), [data.locations]);
+  const [expanded, setExpanded] = useState(() => new Set(allIds));
+  const toggle = (id) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
 
-  return (
-    <div>
-      <SectionHeader
-        title="Location Hierarchy"
-        subtitle="The physical map of the household that everything else is organized around."
-        info={PAGE_INFO.locations}
-        action={isAdmin(role) && <Btn variant="primary" onClick={() => openAdd(null)}><Plus size={15} /> Add top-level location</Btn>}
-      />
-      <Panel>
-        {rows.length === 0 && <Empty text="No locations yet." />}
-        {rows.map(({ item, depth }) => {
-          const assetCount = data.assets.filter((a) => a.locationId === item.id).length;
-          return (
-            <div key={item.id} className="hk-row" style={{ display: "flex", alignItems: "center", padding: "10px 16px", borderTop: `1px solid ${C.lineSoft}`, gap: 10 }}>
-              <div style={{ width: depth * 20 }} />
-              <MapPin size={14} color={C.inkFaint} />
+  const renderChildren = (parentId, depth) =>
+    data.locations
+      .filter((l) => (l.parentId || null) === parentId)
+      .map((item) => {
+        const hasKids = data.locations.some((l) => l.parentId === item.id);
+        const isOpen = expanded.has(item.id);
+        const assetCount = data.assets.filter((a) => a.locationId === item.id).length;
+        const Icon = LEVEL_ICONS[item.level] || MapPin;
+        return (
+          <div key={item.id}>
+            <div className="hk-row" style={{ display: "flex", alignItems: "center", padding: "10px 16px", borderTop: `1px solid ${C.lineSoft}`, gap: 10 }}>
+              <div style={{ width: depth * 20, flexShrink: 0 }} />
+              {hasKids ? (
+                <span onClick={() => toggle(item.id)} style={{ display: "flex", cursor: "pointer", color: C.inkFaint, flexShrink: 0 }}>
+                  {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                </span>
+              ) : (
+                <span style={{ width: 14, flexShrink: 0 }} />
+              )}
+              <Icon size={14} color={C.inkFaint} />
               <span style={{ fontFamily: FONT_BODY, fontSize: 13.5, fontWeight: 600, color: C.ink, flex: 1 }}>{item.name}</span>
               <Tag text={item.level} color={C.navy} soft={C.navySoft} />
               {assetCount > 0 && <span style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint }}>{assetCount} asset{assetCount > 1 ? "s" : ""}</span>}
@@ -922,8 +950,26 @@ function LocationsView({ data, update, role }) {
                 </div>
               )}
             </div>
-          );
-        })}
+            {hasKids && isOpen && renderChildren(item.id, depth + 1)}
+          </div>
+        );
+      });
+
+  return (
+    <div>
+      <SectionHeader
+        title="Location Hierarchy"
+        subtitle="The physical map of the household that everything else is organized around."
+        info={PAGE_INFO.locations}
+        action={isAdmin(role) && <Btn variant="primary" onClick={() => openAdd(null)}><Plus size={15} /> Add top-level location</Btn>}
+      />
+      <div style={{ display: "flex", gap: 14, marginBottom: 8 }}>
+        <span className="hk-link" onClick={() => setExpanded(new Set(allIds))} style={{ fontFamily: FONT_BODY, fontSize: 12, fontWeight: 700, color: C.navy, cursor: "pointer" }}>Expand all</span>
+        <span className="hk-link" onClick={() => setExpanded(new Set())} style={{ fontFamily: FONT_BODY, fontSize: 12, fontWeight: 700, color: C.navy, cursor: "pointer" }}>Collapse all</span>
+      </div>
+      <Panel>
+        {data.locations.length === 0 && <Empty text="No locations yet." />}
+        {renderChildren(null, 0)}
       </Panel>
 
       {modal && (
@@ -1420,7 +1466,7 @@ function PmBaseFields({ form, setForm }) {
         </div>
       )}
       <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 12 }}>
-        A PM Base is never scheduled or completed itself — it's a template. Creating it immediately generates the first PM work order(s) copied from it.
+        A PM Base is never scheduled or completed itself — it's a template. Creating it generates the first PM work order copied from it. Only one occurrence can be Open or In Progress per PM Base at a time — if multiple fixed dates are configured, only the earliest upcoming one is generated now; the rest follow once the active occurrence is completed.
       </div>
     </>
   );
@@ -1511,7 +1557,10 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
         }
         d.workOrders.push(base);
         if (base.pmMode === "Non-fixed") spawnPmInstance(d, base, { afterDateISO: todayISO(), fixedDate: null });
-        else base.fixedDates.forEach((fd) => spawnPmInstance(d, base, { afterDateISO: todayISO(), fixedDate: fd }));
+        else {
+          const sorted = [...base.fixedDates].sort((a, b) => nextFixedOccurrence(a.month, a.day, todayISO()).localeCompare(nextFixedOccurrence(b.month, b.day, todayISO())));
+          sorted.forEach((fd) => spawnPmInstance(d, base, { afterDateISO: todayISO(), fixedDate: fd }));
+        }
         const req = d.workRequests.find((r) => r.id === wr.id);
         req.status = "Approved"; req.workOrderId = baseId;
       } else {
@@ -1752,13 +1801,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
 function PmBaseDetail({ data, base, onOpenInstance }) {
   const linked = data.workOrders.filter((w) => w.sourcePmBaseId === base.id).sort((a, b) => (a.requiredByDate || "").localeCompare(b.requiredByDate || ""));
   return (
-    <div>
-      <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.ink, marginBottom: 10 }}>
-        {base.pmMode === "Fixed"
-          ? `Fixed schedule — runs every year on: ${(base.fixedDates || []).map((f) => `${MONTH_NAMES[f.month - 1]} ${f.day}`).join(", ")}`
-          : `Repeats every ${base.frequencyValue} ${base.frequencyUnit}, counted forward from each completion date.`}
-      </div>
-      {base.description && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkSoft, marginBottom: 14, fontStyle: "italic" }}>{base.description}</div>}
+    <div style={{ marginTop: 8 }}>
       <div style={{ fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 6 }}>Generated PM instances</div>
       {linked.length === 0 && <Empty text="None generated yet." />}
       {linked.map((w) => (
@@ -1819,6 +1862,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
   const [locFilter, setLocFilter] = useState(null);
   const [search, setSearch] = useState("");
   const [priorityFilter, setPriorityFilter] = useState("all");
+  const [typeFilter, setTypeFilter] = useState("all");
   const [dueFilter, setDueFilter] = useState(pendingFilter?.due || "all");
   const [executorFilter, setExecutorFilter] = useState(role === "Executor" ? currentUserId : "");
   const [showArchive, setShowArchive] = useState(false);
@@ -1880,7 +1924,10 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
       d.workOrders.push(wo);
       if (form.type === "PM Base") {
         if (wo.pmMode === "Non-fixed") spawnPmInstance(d, wo, { afterDateISO: todayISO(), fixedDate: null });
-        else wo.fixedDates.forEach((fd) => spawnPmInstance(d, wo, { afterDateISO: todayISO(), fixedDate: fd }));
+        else {
+          const sorted = [...wo.fixedDates].sort((a, b) => nextFixedOccurrence(a.month, a.day, todayISO()).localeCompare(nextFixedOccurrence(b.month, b.day, todayISO())));
+          sorted.forEach((fd) => spawnPmInstance(d, wo, { afterDateISO: todayISO(), fixedDate: fd }));
+        }
       }
       setOpenId(id);
       return d;
@@ -1965,6 +2012,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
   const matchesFilters = (w) => {
     if (allowedLocs && !allowedLocs.has(w.locationId)) return false;
     if (priorityFilter !== "all" && w.priority !== priorityFilter) return false;
+    if (typeFilter !== "all" && w.type !== typeFilter) return false;
     if (executorFilter && w.executorId !== executorFilter) return false;
     if (dueFilter !== "all") {
       const notDone = w.status !== "Completed" && w.status !== "Verified";
@@ -2011,6 +2059,10 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
             <input style={{ ...inputStyle, paddingLeft: 30 }} placeholder="Search by title or number…" value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
           <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+            <select style={{ ...inputStyle, width: "auto" }} value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+              <option value="all">All types</option>
+              {WO_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
             <select style={{ ...inputStyle, width: "auto" }} value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)}>
               <option value="all">All priorities</option>
               {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
@@ -2173,37 +2225,118 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
           </div>
 
           {openWO.type === "PM Base" ? (
-            <PmBaseDetail data={data} base={openWO} onOpenInstance={setOpenId} />
+            <>
+              {isAdmin(role) ? (
+                <>
+                  <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 60 }} value={detailEdits.description || ""} onChange={(e) => setDetailEdits({ ...detailEdits, description: e.target.value })} /></Field>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <Field label="Priority">
+                      <select style={inputStyle} value={detailEdits.priority || "Medium"} onChange={(e) => setDetailEdits({ ...detailEdits, priority: e.target.value })}>
+                        {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
+                      </select>
+                    </Field>
+                    <Field label="Vendor">
+                      <select style={inputStyle} value={detailEdits.vendorId || ""} onChange={(e) => setDetailEdits({ ...detailEdits, vendorId: e.target.value })}>
+                        <option value="">— none —</option>
+                        {data.vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+                      </select>
+                    </Field>
+                  </div>
+                  <Field label="Executor">
+                    <select style={inputStyle} value={detailEdits.executorId || ""} onChange={(e) => setDetailEdits({ ...detailEdits, executorId: e.target.value })}>
+                      <option value="">— unassigned —</option>
+                      {assignableUsers.map((u) => <option key={u.id} value={u.id}>{u.username} ({u.role})</option>)}
+                    </select>
+                  </Field>
+                  <PmBaseFields form={detailEdits} setForm={setDetailEdits} />
+                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 16 }}>
+                    <Btn small onClick={saveDetail}>Save changes</Btn>
+                    <Btn small variant="primary" onClick={() => { saveDetail(); setOpenId(null); }}>Save & Close</Btn>
+                  </div>
+                </>
+              ) : (
+                <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.ink, marginBottom: 10 }}>
+                  {openWO.pmMode === "Fixed"
+                    ? `Fixed schedule — runs every year on: ${(openWO.fixedDates || []).map((f) => `${MONTH_NAMES[f.month - 1]} ${f.day}`).join(", ")}`
+                    : `Repeats every ${openWO.frequencyValue} ${openWO.frequencyUnit}, counted forward from each completion date.`}
+                  {openWO.description && <div style={{ marginTop: 8, fontStyle: "italic", color: C.inkSoft }}>{openWO.description}</div>}
+                </div>
+              )}
+              <PmBaseDetail data={data} base={openWO} onOpenInstance={setOpenId} />
+            </>
           ) : (
             <>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                <Field label="Scheduled date"><input type="date" style={inputStyle} value={detailEdits.scheduledDate || ""} onChange={(e) => setDetailEdits({ ...detailEdits, scheduledDate: e.target.value })} /></Field>
-                <Field label="Required by"><input type="date" style={inputStyle} value={detailEdits.requiredByDate || ""} onChange={(e) => setDetailEdits({ ...detailEdits, requiredByDate: e.target.value })} /></Field>
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                <Field label="Cost ($)"><input style={inputStyle} value={detailEdits.cost || ""} onChange={(e) => setDetailEdits({ ...detailEdits, cost: e.target.value })} /></Field>
-                <Field label="Vendor">
-                  <select style={inputStyle} value={detailEdits.vendorId || ""} onChange={(e) => setDetailEdits({ ...detailEdits, vendorId: e.target.value })}>
-                    <option value="">— none —</option>
-                    {data.vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
-                  </select>
-                </Field>
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                <Field label="Priority">
-                  <select style={inputStyle} value={detailEdits.priority || "Medium"} onChange={(e) => setDetailEdits({ ...detailEdits, priority: e.target.value })}>
-                    {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
-                  </select>
-                </Field>
-                <Field label="Executor">
-                  <select style={inputStyle} value={detailEdits.executorId || ""} onChange={(e) => setDetailEdits({ ...detailEdits, executorId: e.target.value })}>
-                    <option value="">— unassigned —</option>
-                    {assignableUsers.map((u) => <option key={u.id} value={u.id}>{u.username} ({u.role})</option>)}
-                  </select>
-                </Field>
-              </div>
-              <PartsPicker data={data} update={update} value={detailEdits.parts || []} onChange={(v) => setDetailEdits({ ...detailEdits, parts: v })} defaultLocationId={openWO.locationId} currentUser={currentUser} role={role} />
-              <Field label="Notes / checklist"><textarea style={{ ...inputStyle, minHeight: 80 }} value={detailEdits.notes || ""} onChange={(e) => setDetailEdits({ ...detailEdits, notes: e.target.value })} /></Field>
+              {isAdmin(role) ? (
+                <>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <Field label="Scheduled date"><input type="date" style={inputStyle} value={detailEdits.scheduledDate || ""} onChange={(e) => setDetailEdits({ ...detailEdits, scheduledDate: e.target.value })} /></Field>
+                    <Field label="Required by"><input type="date" style={inputStyle} value={detailEdits.requiredByDate || ""} onChange={(e) => setDetailEdits({ ...detailEdits, requiredByDate: e.target.value })} /></Field>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <Field label="Cost ($)"><input style={inputStyle} value={detailEdits.cost || ""} onChange={(e) => setDetailEdits({ ...detailEdits, cost: e.target.value })} /></Field>
+                    <Field label="Vendor">
+                      <select style={inputStyle} value={detailEdits.vendorId || ""} onChange={(e) => setDetailEdits({ ...detailEdits, vendorId: e.target.value })}>
+                        <option value="">— none —</option>
+                        {data.vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+                      </select>
+                    </Field>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <Field label="Priority">
+                      <select style={inputStyle} value={detailEdits.priority || "Medium"} onChange={(e) => setDetailEdits({ ...detailEdits, priority: e.target.value })}>
+                        {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
+                      </select>
+                    </Field>
+                    <Field label="Executor">
+                      <select style={inputStyle} value={detailEdits.executorId || ""} onChange={(e) => setDetailEdits({ ...detailEdits, executorId: e.target.value })}>
+                        <option value="">— unassigned —</option>
+                        {assignableUsers.map((u) => <option key={u.id} value={u.id}>{u.username} ({u.role})</option>)}
+                      </select>
+                    </Field>
+                  </div>
+                  <PartsPicker data={data} update={update} value={detailEdits.parts || []} onChange={(v) => setDetailEdits({ ...detailEdits, parts: v })} defaultLocationId={openWO.locationId} currentUser={currentUser} role={role} />
+                  <Field label="Notes / checklist"><textarea style={{ ...inputStyle, minHeight: 80 }} value={detailEdits.notes || ""} onChange={(e) => setDetailEdits({ ...detailEdits, notes: e.target.value })} /></Field>
+                </>
+              ) : (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+                    {[
+                      ["Scheduled date", fmtDate(openWO.scheduledDate)],
+                      ["Required by", fmtDate(openWO.requiredByDate)],
+                      ["Cost", openWO.cost ? `$${openWO.cost}` : "—"],
+                      ["Vendor", openWO.vendorId ? (nameOf(data.vendors, openWO.vendorId) || "—") : "—"],
+                      ["Priority", openWO.priority || "Medium"],
+                      ["Executor", (assignableUsers.find((u) => u.id === openWO.executorId) || {}).username || "Unassigned"],
+                    ].map(([k, v]) => (
+                      <div key={k}>
+                        <div style={{ fontFamily: FONT_BODY, fontSize: 10.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: "0.03em" }}>{k}</div>
+                        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.ink }}>{v}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {(openWO.parts || []).length > 0 && (
+                    <div style={{ marginBottom: 10 }}>
+                      <div style={{ fontFamily: FONT_BODY, fontSize: 10.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: "0.03em", marginBottom: 4 }}>Parts</div>
+                      {(openWO.parts || []).map(({ partId, qty }) => {
+                        const part = data.inventory.find((p) => p.id === partId);
+                        return part ? <div key={partId} style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink }}>{formatPartNum(part.partNumber)} · {part.name} × {qty}</div> : null;
+                      })}
+                    </div>
+                  )}
+                  {openWO.description && (
+                    <div style={{ marginBottom: 10 }}>
+                      <div style={{ fontFamily: FONT_BODY, fontSize: 10.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: "0.03em", marginBottom: 4 }}>Description</div>
+                      <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink }}>{openWO.description}</div>
+                    </div>
+                  )}
+                  {openWO.notes && (
+                    <div>
+                      <div style={{ fontFamily: FONT_BODY, fontSize: 10.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: "0.03em", marginBottom: 4 }}>Notes / checklist</div>
+                      <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink }}>{openWO.notes}</div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6, flexWrap: "wrap", gap: 8 }}>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -2218,7 +2351,12 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                     </Btn>
                   ))}
                 </div>
-                <Btn small onClick={saveDetail}>Save changes</Btn>
+                {isAdmin(role) && (
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <Btn small onClick={saveDetail}>Save changes</Btn>
+                    <Btn small variant="primary" onClick={() => { saveDetail(); setOpenId(null); }}>Save & Close</Btn>
+                  </div>
+                )}
               </div>
 
               {(openWO.status === "Completed" || openWO.status === "Verified") && (
@@ -2242,7 +2380,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                 </div>
               )}
 
-              {(openWO.type === "Benchmark" || openWO.type === "Corrective") && (
+              {isAdmin(role) && (openWO.type === "Benchmark" || openWO.type === "Corrective") && (
                 <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${C.lineSoft}`, display: "flex", gap: 8, flexWrap: "wrap" }}>
                   {openWO.sourceBenchmarkId ? (
                     <Btn small variant="ghost" onClick={updateBenchmarkFromWO}>Update benchmark with this run</Btn>
