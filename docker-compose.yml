@@ -10,7 +10,7 @@ services:
     # alone) never needs the Dockerfile or source tree, just Docker
     # Hub access. To build the image yourself instead of waiting on
     # CI, see "Prebuilding the image" in README.md.
-    image: mybadreligon/homekeep:latest
+    image: jameshoffman7667/homekeep:latest
     container_name: homekeep
     restart: unless-stopped
     environment:

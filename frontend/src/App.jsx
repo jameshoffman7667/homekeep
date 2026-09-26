@@ -74,6 +74,46 @@ const GlobalStyle = () => (
     .hk-row:hover { background: ${C.panelAlt}; }
     .hk-nav-item:hover { background: rgba(255,255,255,0.08); }
     .hk-link:hover { text-decoration: underline; }
+
+    /* ---- Mobile / touch responsiveness ---- */
+    .hk-sidebar { transition: transform .18s ease; }
+    .hk-sidebar-backdrop { display: none; }
+
+    @media (max-width: 860px) {
+      .hk-main-shell { margin-left: 0 !important; }
+      .hk-sidebar { box-shadow: 3px 0 16px rgba(0,0,0,0.28); }
+      .hk-sidebar-backdrop {
+        display: block; position: fixed; inset: 0; background: rgba(20,26,22,0.45); z-index: 39;
+      }
+      .hk-topbar { padding: 10px 14px !important; }
+      .hk-page-pad { padding: 14px !important; }
+      .hk-user-meta { display: none; }
+
+      /* stacking grids down to a single column on narrow screens */
+      .hk-grid-2, .hk-grid-3, .hk-grid-4, .hk-grid-fixed2, .hk-grid-fixed3, .hk-kanban {
+        grid-template-columns: 1fr !important;
+      }
+      /* the 7-day dashboard strip becomes a 4-wide wrap instead of one column */
+      .hk-grid-7 { grid-template-columns: repeat(4, 1fr) !important; }
+      /* a real calendar keeps its 7 day-of-week columns, just tighter */
+      .hk-cal-grid { gap: 2px !important; }
+      .hk-cal-grid > div { font-size: 10px !important; padding: 3px !important; min-height: 46px !important; }
+
+      /* comfortable tap targets and readable controls on touch screens */
+      button, select, input, .hk-tap { min-height: 40px; }
+      .hk-btn { min-height: 38px; }
+      input, select, textarea { font-size: 15px !important; }
+    }
+
+    @media (max-width: 480px) {
+      .hk-grid-7 { grid-template-columns: repeat(2, 1fr) !important; }
+      .hk-page-pad { padding: 10px !important; }
+    }
+
+    @media (max-width: 600px) {
+      .hk-modal-overlay { padding: 0 !important; align-items: flex-end !important; }
+      .hk-modal-card { width: 100% !important; max-width: 100% !important; max-height: 92vh !important; border-radius: 10px 10px 0 0 !important; }
+    }
   `}</style>
 );
 
@@ -331,11 +371,12 @@ function Btn({ children, onClick, variant, small, type, disabled, title }) {
 function Modal({ title, onClose, children, wide }) {
   return (
     <div
+      className="hk-modal-overlay"
       style={{ position: "fixed", inset: 0, background: "rgba(28,36,32,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60, padding: 16 }}
       onClick={onClose}
     >
       <div
-        className="hk-fade hk-scroll"
+        className="hk-fade hk-scroll hk-modal-card"
         style={{ background: C.panel, width: wide ? 640 : 460, maxWidth: "100%", maxHeight: "88vh", overflowY: "auto", border: `1px solid ${C.line}`, borderRadius: 5 }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -683,12 +724,12 @@ const NAV = [
   { id: "owner", label: "Owner Tools", icon: Shield, ownerOnly: true },
 ];
 
-function Sidebar({ tab, setTab, open, role, counts }) {
+function Sidebar({ tab, setTab, open, role, counts, onNavigate }) {
   const items = NAV.filter((n) => (!n.ownerOnly || role === "Owner") && (!n.adminOnly || isAdmin(role)));
   return (
     <div
       style={{ width: 216, flexShrink: 0, background: C.navy, color: "#fff", display: open ? "flex" : "none", flexDirection: "column", position: "fixed", top: 0, bottom: 0, left: 0, zIndex: 40 }}
-      className="hk-scroll"
+      className="hk-scroll hk-sidebar"
     >
       <div style={{ padding: "20px 18px 14px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -706,7 +747,7 @@ function Sidebar({ tab, setTab, open, role, counts }) {
           const badge = counts[n.id];
           return (
             <div
-              key={n.id} onClick={() => setTab(n.id)} className="hk-nav-item"
+              key={n.id} onClick={() => { setTab(n.id); onNavigate && onNavigate(); }} className="hk-nav-item"
               style={{
                 display: "flex", alignItems: "center", gap: 10, padding: "9px 10px", borderRadius: 3, cursor: "pointer", marginBottom: 2,
                 background: active ? "rgba(255,255,255,0.14)" : "transparent",
@@ -721,7 +762,7 @@ function Sidebar({ tab, setTab, open, role, counts }) {
         })}
       </div>
       <div style={{ padding: 14, borderTop: "1px solid rgba(255,255,255,0.12)", fontFamily: FONT_BODY, fontSize: 11, color: "#8FA0AF" }}>
-        v8 · matches the HomeKeep functional spec
+        v9 · matches the HomeKeep functional spec
       </div>
     </div>
   );
@@ -744,7 +785,7 @@ function WeekLookahead({ data, goToOrder }) {
   return (
     <Panel style={{ padding: 16, marginTop: 16 }}>
       <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 10 }}>Next 7 days</div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6 }}>
+      <div className="hk-grid-7" style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6 }}>
         {days.map((d) => {
           const dt = new Date(d + "T00:00:00");
           const items = byDay[d] || [];
@@ -806,7 +847,7 @@ function Dashboard({ data, setTab, role, applyFilter, goToOrder, goToRequest }) 
         {stat("Due within 30 days", dueSoonWO.length, undefined, () => applyFilter("orders", { due: "30" }))}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <Panel style={{ padding: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
             <h3 style={{ fontFamily: FONT_HEAD, fontSize: 15, margin: 0, color: C.ink }}>Work requests awaiting review</h3>
@@ -1073,7 +1114,7 @@ function BomTree({ data, update, assetId, role }) {
               {BOM_LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}
             </select>
           </Field>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <Field label="Manufacturer"><input style={inputStyle} value={form.manufacturer} onChange={(e) => setForm({ ...form, manufacturer: e.target.value })} /></Field>
             <Field label="Model / part #"><input style={inputStyle} value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} /></Field>
             <Field label="Install date"><input type="date" style={inputStyle} value={form.installDate} onChange={(e) => setForm({ ...form, installDate: e.target.value })} /></Field>
@@ -1146,7 +1187,7 @@ function AssetsView({ data, update, role, goToOrder }) {
         info={PAGE_INFO.assets}
         action={isAdmin(role) && <Btn variant="primary" onClick={openAdd}><Plus size={15} /> Add asset</Btn>}
       />
-      <div style={{ display: "grid", gridTemplateColumns: "200px 240px 1fr", gap: 16 }}>
+      <div className="hk-grid-fixed3" style={{ display: "grid", gridTemplateColumns: "200px 240px 1fr", gap: 16 }}>
         <LocationNavTree data={data} selectedId={locFilter} onSelect={setLocFilter} />
 
         <Panel style={{ padding: 6, alignSelf: "start" }}>
@@ -1174,7 +1215,7 @@ function AssetsView({ data, update, role, goToOrder }) {
                   </div>
                 )}
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginTop: 16 }}>
+              <div className="hk-grid-4" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginTop: 16 }}>
                 {[
                   ["Category", asset.category || "—"], ["Manufacturer", asset.manufacturer || "—"],
                   ["Model", asset.model || "—"], ["Serial", asset.serial || "—"],
@@ -1193,7 +1234,7 @@ function AssetsView({ data, update, role, goToOrder }) {
               <BomTree data={data} update={update} assetId={asset.id} role={role} />
             </Panel>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+            <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
               <Panel style={{ padding: 16 }}>
                 <div style={{ fontFamily: FONT_HEAD, fontSize: 14, fontWeight: 600, color: C.ink, marginBottom: 8 }}>PM tasks</div>
                 {relatedPM.length === 0 && <Empty text="No recurring tasks defined." />}
@@ -1229,7 +1270,7 @@ function AssetsView({ data, update, role, goToOrder }) {
 
       {modal && (
         <Modal title={modal === "add" ? "Add asset" : "Edit asset"} onClose={() => closeGuard(isDirty, save, () => setModal(null))} wide>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <Field label="Name" required><input style={inputStyle} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} autoFocus /></Field>
             <Field label="Category"><input style={inputStyle} value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} placeholder="HVAC, Appliance, Vehicle…" /></Field>
             <Field label="Location" required>
@@ -1262,7 +1303,7 @@ function AssetsView({ data, update, role, goToOrder }) {
 function AssetBomPicker({ data, assetId, bomNodeId, onChange }) {
   const bomOptions = assetId ? flattenTree(data.bomNodes.filter((n) => n.assetId === assetId), "parentId", null) : [];
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+    <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
       <Field label="Asset">
         <select style={inputStyle} value={assetId || ""} onChange={(e) => onChange({ assetId: e.target.value || null, bomNodeId: null })}>
           <option value="">— none —</option>
@@ -1317,7 +1358,7 @@ function PartEditModal({ data, update, part, currentUser, role, onClose, onSaved
       <Field label="Name" required><input style={inputStyle} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. 16x25x1 Furnace Filter" autoFocus /></Field>
       <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 50 }} value={form.description || ""} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
       <AssetBomPicker data={data} assetId={form.assetId} bomNodeId={form.bomNodeId} onChange={({ assetId, bomNodeId }) => setForm({ ...form, assetId, bomNodeId })} />
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+      <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
         <Field label="Manufacturer"><input style={inputStyle} value={form.manufacturer || ""} onChange={(e) => setForm({ ...form, manufacturer: e.target.value })} /></Field>
         <Field label="Manufacturer part #"><input style={inputStyle} value={form.manufacturerPartNumber || ""} onChange={(e) => setForm({ ...form, manufacturerPartNumber: e.target.value })} /></Field>
         <Field label="Cost ($)"><input style={inputStyle} value={form.cost || ""} onChange={(e) => setForm({ ...form, cost: e.target.value })} /></Field>
@@ -1389,7 +1430,7 @@ function PartsPicker({ data, update, value, onChange, defaultLocationId, current
           ))}
         </div>
       )}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+      <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
         <select style={inputStyle} value={locFilter || ""} onChange={(e) => { setLocFilter(e.target.value || null); setBomFilter(null); }}>
           <option value="">All locations</option>
           {flattenTree(data.locations, "parentId", null).map(({ item, depth }) => (
@@ -1442,7 +1483,7 @@ function PmBaseFields({ form, setForm }) {
         </select>
       </Field>
       {form.pmMode === "Non-fixed" ? (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           <Field label="Every"><input type="number" min="1" style={inputStyle} value={form.frequencyValue} onChange={(e) => setForm({ ...form, frequencyValue: e.target.value })} /></Field>
           <Field label="Unit">
             <select style={inputStyle} value={form.frequencyUnit} onChange={(e) => setForm({ ...form, frequencyUnit: e.target.value })}>
@@ -1631,7 +1672,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
         info={PAGE_INFO.requests}
         action={canWrite(role) && <Btn variant="primary" onClick={openNew}><Plus size={15} /> Submit request</Btn>}
       />
-      <div style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 16 }}>
+      <div className="hk-grid-fixed2" style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 16 }}>
         <LocationNavTree data={data} selectedId={locFilter} onSelect={setLocFilter} />
         <div>
           <div style={{ position: "relative", maxWidth: 340, marginBottom: 10 }}>
@@ -1699,7 +1740,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
           <Field label="Title" required><input style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="What needs attention?" autoFocus /></Field>
           <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 70 }} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
           <AssetBomPicker data={data} assetId={form.assetId} bomNodeId={form.bomNodeId} onChange={({ assetId, bomNodeId }) => setForm({ ...form, assetId, bomNodeId, locationId: assetId ? data.assets.find((a) => a.id === assetId).locationId : form.locationId })} />
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <Field label="Location" required>
               <select style={inputStyle} value={form.locationId} onChange={(e) => setForm({ ...form, locationId: e.target.value })}>
                 {flattenTree(data.locations, "parentId", null).map(({ item, depth }) => (
@@ -1713,7 +1754,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
               </select>
             </Field>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <Field label="Required by" required><input type="date" style={inputStyle} value={form.requiredByDate} onChange={(e) => setForm({ ...form, requiredByDate: e.target.value })} /></Field>
             <Field label="Suggested work order type">
               <select style={inputStyle} value={form.suggestedType} onChange={(e) => setForm({ ...form, suggestedType: e.target.value })}>
@@ -1748,7 +1789,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
           {reviewForm.type === "PM Base" ? (
             <PmBaseFields form={reviewForm} setForm={setReviewForm} />
           ) : (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
               <Field label="Scheduled date"><input type="date" style={inputStyle} value={reviewForm.scheduledDate} onChange={(e) => setReviewForm({ ...reviewForm, scheduledDate: e.target.value })} /></Field>
               <Field label="Required by"><input type="date" style={inputStyle} value={reviewForm.requiredByDate} onChange={(e) => setReviewForm({ ...reviewForm, requiredByDate: e.target.value })} /></Field>
             </div>
@@ -1830,7 +1871,7 @@ function ArchiveModal({ data, onClose, goToOrder }) {
   return (
     <Modal title="Verified work order archive" onClose={onClose} wide>
       <input style={{ ...inputStyle, marginBottom: 10 }} placeholder="Search by title or number…" value={search} onChange={(e) => setSearch(e.target.value)} />
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+      <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
         <select style={inputStyle} value={locFilter} onChange={(e) => setLocFilter(e.target.value)}>
           <option value="">All locations</option>
           {flattenTree(data.locations, "parentId", null).map(({ item, depth }) => (
@@ -2051,7 +2092,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
         info={PAGE_INFO.orders}
         action={canWrite(role) && <Btn variant="primary" onClick={openNew}><Plus size={15} /> New work order</Btn>}
       />
-      <div style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 16 }}>
+      <div className="hk-grid-fixed2" style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 16 }}>
         <LocationNavTree data={data} selectedId={locFilter} onSelect={setLocFilter} />
         <div>
           <div style={{ position: "relative", maxWidth: 340, marginBottom: 10 }}>
@@ -2078,7 +2119,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
             </select>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+          <div className="hk-grid-4 hk-kanban" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
             {columns.map((col) => (
               <div key={col.status}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
@@ -2146,7 +2187,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
       {modal === "new" && (
         <Modal title="New work order" onClose={() => closeGuard(isDirty, createWO, () => setModal(null))} wide>
           <Field label="Title" required><input style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} autoFocus /></Field>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <Field label="Type">
               <select style={inputStyle} value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
                 {WO_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
@@ -2171,7 +2212,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
           {form.type === "PM Base" && <PmBaseFields form={form} setForm={setForm} />}
 
           <AssetBomPicker data={data} assetId={form.assetId} bomNodeId={form.bomNodeId} onChange={({ assetId, bomNodeId }) => setForm({ ...form, assetId, bomNodeId, locationId: assetId ? data.assets.find((a) => a.id === assetId).locationId : form.locationId })} />
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <Field label="Location" required>
               <select style={inputStyle} value={form.locationId} onChange={(e) => setForm({ ...form, locationId: e.target.value })}>
                 {flattenTree(data.locations, "parentId", null).map(({ item, depth }) => (
@@ -2186,7 +2227,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
           {form.type !== "PM Base" && (
             <Field label="Required by"><input type="date" style={inputStyle} value={form.requiredByDate} onChange={(e) => setForm({ ...form, requiredByDate: e.target.value })} /></Field>
           )}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <Field label="Vendor">
               <select style={inputStyle} value={form.vendorId} onChange={(e) => setForm({ ...form, vendorId: e.target.value })}>
                 <option value="">— none —</option>
@@ -2229,7 +2270,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
               {isAdmin(role) ? (
                 <>
                   <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 60 }} value={detailEdits.description || ""} onChange={(e) => setDetailEdits({ ...detailEdits, description: e.target.value })} /></Field>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <Field label="Priority">
                       <select style={inputStyle} value={detailEdits.priority || "Medium"} onChange={(e) => setDetailEdits({ ...detailEdits, priority: e.target.value })}>
                         {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
@@ -2268,11 +2309,11 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
             <>
               {isAdmin(role) ? (
                 <>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <Field label="Scheduled date"><input type="date" style={inputStyle} value={detailEdits.scheduledDate || ""} onChange={(e) => setDetailEdits({ ...detailEdits, scheduledDate: e.target.value })} /></Field>
                     <Field label="Required by"><input type="date" style={inputStyle} value={detailEdits.requiredByDate || ""} onChange={(e) => setDetailEdits({ ...detailEdits, requiredByDate: e.target.value })} /></Field>
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <Field label="Cost ($)"><input style={inputStyle} value={detailEdits.cost || ""} onChange={(e) => setDetailEdits({ ...detailEdits, cost: e.target.value })} /></Field>
                     <Field label="Vendor">
                       <select style={inputStyle} value={detailEdits.vendorId || ""} onChange={(e) => setDetailEdits({ ...detailEdits, vendorId: e.target.value })}>
@@ -2281,7 +2322,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                       </select>
                     </Field>
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <Field label="Priority">
                       <select style={inputStyle} value={detailEdits.priority || "Medium"} onChange={(e) => setDetailEdits({ ...detailEdits, priority: e.target.value })}>
                         {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
@@ -2299,7 +2340,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                 </>
               ) : (
                 <div style={{ marginBottom: 12 }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+                  <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
                     {[
                       ["Scheduled date", fmtDate(openWO.scheduledDate)],
                       ["Required by", fmtDate(openWO.requiredByDate)],
@@ -2676,13 +2717,13 @@ function ScheduleView({ data, role, currentUserId, goToOrder }) {
           </div>
         }
       />
-      <div style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 16 }}>
+      <div className="hk-grid-fixed2" style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 16 }}>
         <LocationNavTree data={data} selectedId={locFilter} onSelect={setLocFilter} />
         <Panel style={{ padding: 10 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, marginBottom: 4 }}>
+          <div className="hk-cal-grid" style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, marginBottom: 4 }}>
             {WEEKDAY_LABELS.map((w) => <div key={w} style={{ fontFamily: FONT_BODY, fontSize: 11, fontWeight: 700, color: C.inkFaint, textAlign: "center", padding: "4px 0" }}>{w}</div>)}
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
+          <div className="hk-cal-grid" style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
             {Array.from({ length: totalCells }).map((_, i) => {
               const dayNum = i - startWeekday + 1;
               const inMonth = dayNum >= 1 && dayNum <= daysInMonth;
@@ -2919,7 +2960,7 @@ function MemberManagementInline({ currentUser }) {
         </div>
       ))}
       <div style={{ fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink, margin: "16px 0 8px" }}>Add a member</div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+      <div className="hk-grid-3" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
         <Field label="Username" required><input style={inputStyle} value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></Field>
         <Field label="Password" required><input type="password" style={inputStyle} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></Field>
         <Field label="Role">
@@ -3144,7 +3185,7 @@ export default function HomeKeepApp() {
   const [user, setUser] = useState(null);
   const [data, setDataRaw] = useState(null);
   const [tab, setTabRaw] = useState("dashboard");
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(() => (typeof window === "undefined" ? true : window.innerWidth > 860));
   const [openOrderId, setOpenOrderId] = useState(null);
   const [pendingFilter, setPendingFilter] = useState(null);
   const [installPrompt, setInstallPrompt] = useState(null);
@@ -3218,10 +3259,11 @@ export default function HomeKeepApp() {
     <DialogProvider>
       <div style={{ minHeight: "100vh", background: C.bg, fontFamily: FONT_BODY }}>
         <GlobalStyle />
-        <Sidebar tab={tab} setTab={setTab} open={sidebarOpen} role={role} counts={counts} />
-        <div style={{ marginLeft: sidebarOpen ? 216 : 0, transition: "margin .15s ease" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 24px", borderBottom: `1px solid ${C.line}`, background: C.panel, position: "sticky", top: 0, zIndex: 20 }}>
-            <button onClick={() => setSidebarOpen((o) => !o)} style={{ background: "none", border: "none", cursor: "pointer", color: C.ink }}>
+        <Sidebar tab={tab} setTab={setTab} open={sidebarOpen} role={role} counts={counts} onNavigate={() => { if (window.innerWidth <= 860) setSidebarOpen(false); }} />
+        {sidebarOpen && <div className="hk-sidebar-backdrop" onClick={() => setSidebarOpen(false)} />}
+        <div className="hk-main-shell" style={{ marginLeft: sidebarOpen ? 216 : 0, transition: "margin .15s ease" }}>
+          <div className="hk-topbar" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 24px", borderBottom: `1px solid ${C.line}`, background: C.panel, position: "sticky", top: 0, zIndex: 20 }}>
+            <button onClick={() => setSidebarOpen((o) => !o)} className="hk-tap" style={{ background: "none", border: "none", cursor: "pointer", color: C.ink }}>
               {sidebarOpen ? <ChevronLeft size={18} /> : <Menu size={18} />}
             </button>
             <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
@@ -3233,15 +3275,15 @@ export default function HomeKeepApp() {
                 {counts.requests > 0 && <span style={{ position: "absolute", top: -5, right: -6, background: C.orange, color: "#fff", fontSize: 9.5, fontWeight: 700, borderRadius: 8, padding: "1px 4px" }}>{counts.requests}</span>}
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <div style={{ textAlign: "right" }}>
+                <div className="hk-user-meta" style={{ textAlign: "right" }}>
                   <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, fontWeight: 700, color: C.ink, lineHeight: 1.2 }}>{user.username}</div>
                   <div style={{ fontFamily: FONT_BODY, fontSize: 10.5, color: C.inkFaint, lineHeight: 1.2 }}>{role}</div>
                 </div>
-                <button onClick={logout} title="Log out" style={{ background: "none", border: `1px solid ${C.line}`, borderRadius: 3, cursor: "pointer", color: C.inkSoft, padding: 6 }}><LogOut size={14} /></button>
+                <button onClick={logout} title="Log out" className="hk-tap" style={{ background: "none", border: `1px solid ${C.line}`, borderRadius: 3, cursor: "pointer", color: C.inkSoft, padding: 6 }}><LogOut size={14} /></button>
               </div>
             </div>
           </div>
-          <div style={{ padding: 24, maxWidth: 1280 }}>{views[tab]}</div>
+          <div className="hk-page-pad" style={{ padding: 24, maxWidth: 1280 }}>{views[tab]}</div>
         </div>
       </div>
     </DialogProvider>

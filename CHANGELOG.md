@@ -9,6 +9,27 @@ release.
 
 ---
 
+## v9
+
+**Commit message:** `Make the app usable on phones: off-canvas nav drawer and responsive layouts`
+
+- Added a real mobile navigation pattern: the sidebar now opens as an
+  off-canvas drawer with a tap-to-close backdrop on screens ≤860px,
+  instead of pushing page content aside; it starts closed by default
+  on phone-sized screens
+- Made every multi-column layout in the app (Assets, Work Orders and
+  Work Requests filter/detail panes, Schedule, the Work Orders kanban
+  board, the dashboard stat cards, PM/BOM detail grids, forms) collapse
+  to a single column below 860px, so nothing gets squeezed or clipped
+  on a phone screen
+- Kept the Schedule month calendar at a true 7-day-wide grid on mobile
+  (shrunk padding/type instead of collapsing it, since a calendar needs
+  its 7 columns to make sense)
+- Made popups (add/edit dialogs) open as a bottom sheet that fills the
+  screen width on phones, and raised tap targets (buttons, inputs,
+  selects) to a touch-friendly minimum height
+- No backend or data changes in this release
+
 ## v8
 
 **Commit message:** `Add version-numbered releases and a project changelog`
