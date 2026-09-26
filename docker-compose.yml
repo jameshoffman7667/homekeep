@@ -1,26 +1,25 @@
 services:
   homekeep:
-    # Pulled from GitHub Container Registry by default — built and
-    # published automatically by .github/workflows/docker-publish.yml
-    # for jameshoffman7667/homekeep. If you fork this under a different
-    # owner/repo, update the image name below to match (lowercase).
-    # `build:` is kept as a local fallback: if the image above hasn't
-    # been pulled yet, `docker compose up --build` will build it from
-    # the Dockerfile in this repo instead. It's also how you build a
-    # subpath-deployment image — see VITE_BASE_PATH in .env.example.
-    image: ghcr.io/jameshoffman7667/homekeep:latest
-    build:
-      context: .
-      args:
-        VITE_BASE_PATH: ${VITE_BASE_PATH:-/}
+    # Pulled from Docker Hub — built and published automatically by
+    # .github/workflows/docker-publish.yml. Replace "jameshoffman7667"
+    # below with your own Docker Hub username if you're publishing
+    # under a different account.
+    #
+    # This is a pure image deploy — there's no `build:` section here,
+    # so `docker compose up` (or a Portainer stack from this file
+    # alone) never needs the Dockerfile or source tree, just Docker
+    # Hub access. To build the image yourself instead of waiting on
+    # CI, see "Prebuilding the image" in README.md.
+    image: jameshoffman7667/homekeep:latest
     container_name: homekeep
     restart: unless-stopped
     environment:
       - PORT=${PORT:-8040}
       - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in your .env file (or in Portainer's stack environment variables) — see .env.example}
       # Leave COOKIE_SECURE unset/false for plain-HTTP local access.
-      # Set to "true" once served over HTTPS (e.g. via the caddy profile
-      # below) — browsers drop secure cookies sent over plain HTTP.
+      # Set to "true" once this sits behind HTTPS (e.g. a reverse
+      # proxy you run separately) — browsers drop secure cookies sent
+      # over plain HTTP.
       - COOKIE_SECURE=${COOKIE_SECURE:-false}
     volumes:
       - homekeep_data:/data
@@ -30,29 +29,5 @@ services:
       # Local web portal access: http://<this-machine's-LAN-IP>:${PORT:-8040}
       - "${PORT:-8040}:${PORT:-8040}"
 
-  # Optional: automatic-HTTPS reverse proxy for remote access (needed for
-  # a fully installable Android PWA outside your own LAN). Only starts
-  # with `docker compose --profile https up`. Requires a domain name
-  # pointed at this host and ports 80/443 reachable from the internet.
-  caddy:
-    image: caddy:2-alpine
-    container_name: homekeep-caddy
-    restart: unless-stopped
-    profiles: ["https"]
-    depends_on:
-      - homekeep
-    environment:
-      # Caddy substitutes {$PORT} inside Caddyfile using this.
-      - PORT=${PORT:-8040}
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile
-      - caddy_data:/data
-      - caddy_config:/config
-
 volumes:
   homekeep_data:
-  caddy_data:
-  caddy_config:

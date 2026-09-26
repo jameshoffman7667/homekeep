@@ -13,10 +13,9 @@ support, or a small cloud VM.
 ```
 homekeep/
 ├── .github/workflows/
-│   └── docker-publish.yml   # CI: builds & pushes the image to ghcr.io on push
+│   └── docker-publish.yml   # CI: builds & pushes the image to Docker Hub on push
 ├── Dockerfile              # multi-stage build: frontend build → backend runtime
-├── docker-compose.yml      # pulls the GHCR image (or builds locally) + optional HTTPS profile
-├── Caddyfile                # reverse proxy config, only used with --profile https
+├── docker-compose.yml      # pulls the Docker Hub image — no build step
 ├── .env.example             # copy to .env and fill in
 ├── .gitignore
 ├── LICENSE
@@ -34,6 +33,13 @@ homekeep/
 One container serves everything: the API under `/api/*` and the built
 frontend for everything else. Data is stored in a SQLite file inside a
 Docker volume, so it survives restarts and rebuilds.
+
+`docker-compose.yml` deliberately has **no `build:` section** — it only
+ever pulls a prebuilt image. That means `docker compose up`, and a
+Portainer stack built from this file alone (no repo, no Dockerfile,
+nothing else needed), always just work, whether the image comes from
+Docker Hub or one you built yourself. See "Prebuilding the image"
+below if you'd rather build than wait on Docker Hub.
 
 ## 1. Prerequisites
 
@@ -53,26 +59,34 @@ git remote add origin https://github.com/jameshoffman7667/homekeep.git
 git push -u origin main
 ```
 
-`docker-compose.yml` is already set to pull `ghcr.io/jameshoffman7667/homekeep:latest`
-— that's the image name the GitHub Actions workflow below publishes to
-for this repo, so no editing needed unless you fork it under a
-different owner/repo name (in which case, update that `image:` line to
-match, all lowercase).
-
-### Continuous builds via GitHub Actions
+### Continuous builds via GitHub Actions → Docker Hub
 
 `.github/workflows/docker-publish.yml` is already included. On every
 push to `main` (and on version tags like `v1.0.0`), it builds the
-Dockerfile in this repo and pushes the image to the **GitHub Container
-Registry** (`ghcr.io`) — tagged `latest` plus the commit SHA. No setup
-needed beyond pushing to GitHub; it uses the repo's built-in
-`GITHUB_TOKEN`.
+Dockerfile in this repo and pushes the image to **Docker Hub** —
+tagged `latest` plus the commit SHA.
 
-By default, new packages on GHCR are **private**. If you want Portainer
-(or anyone else) to pull the image without authenticating, go to your
-GitHub profile → **Packages** → the `homekeep` package → **Package
-settings** → change visibility to **Public**. Otherwise, see the
-"private image" note in the Portainer section below.
+Unlike GitHub Container Registry, Docker Hub needs credentials you set
+up yourself:
+
+1. Create a Docker Hub account if you don't have one, at
+   [hub.docker.com](https://hub.docker.com).
+2. Create an access token: **Account Settings → Security → New Access
+   Token**, with **Read & Write** scope. Copy it — you won't see it again.
+3. In your GitHub repo: **Settings → Secrets and variables → Actions →
+   New repository secret**, and add two secrets:
+   - `DOCKERHUB_USERNAME` — your Docker Hub username
+   - `DOCKERHUB_TOKEN` — the access token from step 2
+4. Push to `main` (or run the workflow manually from the **Actions**
+   tab). It'll publish to `docker.io/<DOCKERHUB_USERNAME>/homekeep:latest`.
+
+`docker-compose.yml` is already set to pull `jameshoffman7667/homekeep:latest`.
+If your Docker Hub username is different, update the `image:` line in
+`docker-compose.yml` to match before deploying.
+
+By default, a new Docker Hub repository is **public**, so no
+credentials are needed to pull it. If you'd rather keep it private, see
+"If the image is private" under Portainer, below.
 
 ## 3. Quick start — running it yourself with Docker Compose
 
@@ -83,15 +97,13 @@ cp .env.example .env
 #   openssl rand -hex 32
 # PORT defaults to 8040 — change it in .env if that port is already in use.
 
-docker compose up -d --build
+docker compose up -d
 ```
 
-`--build` builds locally from the Dockerfile the first time; once the
-GitHub Actions workflow has published an image, plain `docker compose
-up -d` will pull it from GHCR instead.
-
-The first build takes a few minutes (installing dependencies, compiling
-`better-sqlite3`, building the frontend). After that, it starts in seconds.
+This pulls `jameshoffman7667/homekeep:latest` (or whatever `image:` you
+set) from Docker Hub and starts it — nothing gets built locally. The
+first pull downloads the image; after that, starting/stopping is
+instant.
 
 Open **http://localhost:8040** — or, from another device on the same
 Wi-Fi/LAN, **http://\<this-machine's-LAN-IP\>:8040** (find the IP with
@@ -102,72 +114,129 @@ this document.
 The first time you open it, you'll be asked to create the **Owner**
 account. After that, sign in from any device on the network.
 
-## 4. Deploying with Portainer
+## 4. Prebuilding the image
 
-Once the image is published to GHCR (step 2), Portainer just needs to
-know where to pull it from — it doesn't need to build anything itself.
+You don't have to wait on Docker Hub or GitHub Actions — you can build
+the image yourself and either use it locally or push it up.
 
-### Option A — Portainer "Repository" stack (recommended)
+**Build it:**
+```bash
+cd homekeep
+docker build -t homekeep:latest .
+```
+(On Windows, run this from PowerShell or Command Prompt with Docker
+Desktop running — the command is identical.)
 
-1. In Portainer, go to **Stacks → Add stack**.
-2. Choose **Repository** as the build method.
-3. **Repository URL:** your GitHub repo URL (e.g.
+**Use it locally without touching `docker-compose.yml`:** if the image
+tag matches what's in the compose file (`jameshoffman7667/homekeep:latest`
+by default), `docker compose up -d` will use your local build instead
+of pulling — Docker always prefers an image it already has:
+```bash
+docker build -t jameshoffman7667/homekeep:latest .
+docker compose up -d
+```
+
+**Push it to Docker Hub yourself** (useful if you don't want to rely on
+GitHub Actions at all):
+```bash
+docker login
+docker build -t <your-dockerhub-username>/homekeep:latest .
+docker push <your-dockerhub-username>/homekeep:latest
+```
+Then point `docker-compose.yml`'s `image:` line at that tag.
+
+**Building for a subpath deployment** (e.g. serving at
+`example.com/homekeep/` — see §7): pass `VITE_BASE_PATH` as a build
+argument, since it has to be baked into the frontend at build time:
+```bash
+docker build --build-arg VITE_BASE_PATH=/homekeep/ -t homekeep:latest .
+```
+Leave it off for a normal root deployment (the default).
+
+**Different CPU architecture than your build machine** (e.g. building
+on an Intel/AMD laptop but deploying to a Raspberry Pi or other ARM
+device) — use `buildx` instead of plain `docker build`:
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t <your-dockerhub-username>/homekeep:latest --push .
+```
+`--push` is required for multi-platform builds, since Docker can't load
+more than one platform into the local image cache at once.
+
+**Getting a locally built image onto a *different* machine** (e.g. a
+remote server Portainer manages, when you built on your own laptop):
+either push it to a registry as above and pull it there, or transfer it
+directly:
+```bash
+docker save homekeep:latest -o homekeep.tar
+# copy homekeep.tar to the other machine, then there:
+docker load -i homekeep.tar
+```
+
+## 5. Deploying with Portainer
+
+Since `docker-compose.yml` has no `build:` section, Portainer never
+needs your Dockerfile or source tree — either deployment method below
+just pulls (or finds locally) the image named in `image:`.
+
+### Option A — Portainer "Repository" stack
+
+1. **Stacks → Add stack**, build method **Repository**.
+2. **Repository URL:** your GitHub repo (e.g.
    `https://github.com/jameshoffman7667/homekeep`).
-4. **Compose path:** `docker-compose.yml` (the default).
-5. Under **Environment variables**, add:
+3. **Compose path:** `docker-compose.yml` (the default).
+4. Under **Environment variables**, add:
    - `JWT_SECRET` → a long random string (e.g. output of `openssl rand -hex 32`)
-   - `COOKIE_SECURE` → `false` for LAN-only access, `true` if this stack sits behind HTTPS
-   - `PORT` → optional, defaults to `8040` if omitted; set this if that port is already in use on the host
-6. Click **Deploy the stack**. Portainer pulls
-   `ghcr.io/jameshoffman7667/homekeep:latest` (the value you set in
-   `docker-compose.yml`) and starts the container.
-
-To pick up new pushes later, open the stack in Portainer and use
-**Pull and redeploy** (or **Update the stack**, depending on your
-Portainer version) to fetch the latest image from GHCR.
-
-> If your Portainer edition/version doesn't expose the "Repository"
-> build method, use **Option B** below instead — it works everywhere.
+   - `COOKIE_SECURE` → `false` for LAN-only access, `true` if this sits behind HTTPS
+   - `PORT` → optional, defaults to `8040` if omitted
+5. **Deploy the stack.**
 
 ### Option B — paste the compose file directly (Web editor)
 
+If Portainer's "Repository" method isn't available to you, or you'd
+rather not connect it to GitHub at all — this is the method that
+previously failed with "failed to read dockerfile" if you tried it
+with the old build-based compose file. That's fixed now, since there's
+nothing to build:
+
 1. **Stacks → Add stack → Web editor**.
-2. Paste the contents of this repo's `docker-compose.yml` (with
-   `ghcr.io/jameshoffman7667/homekeep:latest` already edited to your real image name).
-3. Add the same `JWT_SECRET` / `COOKIE_SECURE` environment variables as
-   above.
-4. Deploy. This method never touches your Git repo — you'll need to
-   re-paste the file if you change it.
+2. Paste the contents of `docker-compose.yml` as-is.
+3. Add the same `JWT_SECRET` / `COOKIE_SECURE` environment variables as above.
+4. **Deploy the stack.**
 
-### If the GHCR image is private
+Either way, to pick up a new image later, open the stack and use
+**Pull and redeploy** (or **Update the stack**, depending on your
+Portainer version).
 
-Portainer needs credentials to pull a private GHCR image:
+### If the image is private
 
-1. Create a GitHub [Personal Access Token](https://github.com/settings/tokens)
-   with at least `read:packages` scope.
-2. In Portainer, go to **Registries → Add registry → Custom registry**,
-   set the URL to `ghcr.io`, and use your GitHub username + that token
-   as the credentials.
-3. Deploy the stack as above — Portainer will authenticate
-   automatically when pulling.
+If you kept your Docker Hub repository private, Portainer needs
+credentials to pull it:
 
-Simplest fix, though: make the package public (see step 2 above) and
-skip registry credentials entirely.
+1. In Portainer: **Registries → Add registry → DockerHub**.
+2. Enter your Docker Hub username and an access token (same kind you
+   created for GitHub Actions in §2, or a separate one with Read scope).
+3. Deploy the stack as above — Portainer authenticates automatically.
 
-## 5. Adding household members
+Simplest fix, though: keep the repository public and skip this
+entirely.
 
-Once signed in as Owner, click **Members** in the top bar to create
-accounts for other household members (Owner or Household Member role).
-Each person signs in with their own username/password — this replaces
-the old prototype's demo role-switcher with real accounts and real
-permissions, matching the functional spec.
+## 6. Household members & administration
 
-## 6. Using it as an Android app (PWA)
+Once signed in as Owner, go to the **Owner Tools** page (visible only
+to the Owner role) to create accounts for other household members —
+Owner, Manager, Executor, or Guest. Each person signs in with their own
+username/password. Owner Tools is also where you export/import the
+full household to Excel and delete a work order or request by number.
+
+## 7. Using it as an Android/Chrome app (PWA)
 
 On an Android phone, open the site in **Chrome**, then use the menu →
-**"Add to Home screen" / "Install app"**. It launches full-screen with
-its own icon, no browser chrome, and a home-screen icon — no Play Store
-listing needed.
+**"Add to Home screen" / "Install app"**. On a Chromium desktop
+browser (Chrome, Edge), look for the install icon in the address bar,
+or the **Install app** button that appears in HomeKeep's own top bar
+when the browser offers it. Either way, it launches full-screen with
+its own icon, no browser chrome — no Play Store listing needed.
 
 Two levels of access:
 
@@ -176,129 +245,59 @@ Two levels of access:
   offer to add a home-screen shortcut even over plain HTTP on a private
   network, though some install-prompt features are HTTPS-only.
 - **Truly remote (outside your home network):** Android's full PWA
-  install behavior — and browsers in general — expect **HTTPS**. See the
-  next section.
+  install behavior — and browsers in general — expect **HTTPS**. See
+  the next section.
 
-## 7. Enabling HTTPS for remote access
+## 8. Enabling HTTPS for remote access
 
 If you want to use HomeKeep from outside your home (e.g. household
-members checking work requests while out), you need HTTPS and a way for
-traffic to reach your server.
+members checking work requests while out), you need HTTPS and a way
+for traffic to reach your server. This repo doesn't bundle a reverse
+proxy — pick whichever you're already comfortable with, or use one of
+the no-server-config options below.
 
-### Option A — dedicated (sub)domain, e.g. `homekeep.hoffmanhouse.ca`
+### Reverse proxy options (pick one)
 
-The simplest path — no frontend rebuild needed, works with the default
-image as-is.
+Any of these can sit in front of the `homekeep` container and handle
+HTTPS. All of them need ports 80/443 forwarded to your Docker host and
+a domain (or subdomain) pointed at your home's public IP:
 
-1. In your DNS provider, add an A (and/or AAAA) record for
-   `homekeep.hoffmanhouse.ca` pointing at your home's public IP (or use a
-   dynamic-DNS service if your IP isn't static).
-2. On your router, forward ports 80 and 443 to the machine running Docker.
-3. In `Caddyfile`, uncomment **Pattern A** and set it to your subdomain:
-   ```
-   homekeep.hoffmanhouse.ca {
-       reverse_proxy homekeep:{$PORT}
-   }
-   ```
-4. In `.env`, set `COOKIE_SECURE=true`.
-5. Start everything, including the reverse proxy:
-   ```bash
-   docker compose --profile https up -d --build
-   ```
-   Caddy automatically requests and renews a free HTTPS certificate via
-   Let's Encrypt — no manual certificate handling.
+- **[Caddy](https://caddyserver.com/)** — simplest to hand-configure;
+  automatic HTTPS via Let's Encrypt with a couple of lines of config.
+  Run it as its own container (`caddy:2-alpine`), pointed at
+  `homekeep:8040` (or whatever `PORT` you set).
+- **[Nginx Proxy Manager](https://nginxproxymanager.com/)** — a
+  web-UI-driven reverse proxy, popular in home-server/Portainer setups;
+  handles Let's Encrypt certificates through its UI, no config files.
+- **[Traefik](https://traefik.io/traefik/)** — auto-discovers
+  containers via Docker labels; a good fit if you're already running
+  several services this way.
 
-### Option B — a subpath on an existing domain, e.g. `hoffmanhouse.ca/homekeep`
+For a **subpath** deployment (e.g. `example.com/homekeep/` rather than
+a dedicated subdomain) specifically: build the image with
+`VITE_BASE_PATH=/homekeep/` (see §4), and configure your reverse proxy
+to strip the `/homekeep` prefix before forwarding to the container
+(Caddy calls this `handle_path`; other proxies have equivalent
+"strip prefix" options) — otherwise the app's own asset requests won't
+line up with what the proxy is expecting. A dedicated subdomain avoids
+this extra step entirely, since nothing needs stripping.
 
-This is what you want if `hoffmanhouse.ca` already hosts (or will host)
-other things and you'd rather not use a subdomain. It needs one extra
-step compared to Option A: **a single-page app has to be told it's being
-served from a subpath**, or it tries to load its files from the domain
-root and breaks (blank page, missing icons, failed logins). This repo's
-build already supports this via the `VITE_BASE_PATH` setting — you just
-need to turn it on and rebuild.
+Once HTTPS is in place, set `COOKIE_SECURE=true` in `.env` (or your
+Portainer stack's environment variables) — browsers silently refuse to
+send secure cookies over plain HTTP, so leaving this on before HTTPS
+is live will lock you out of logging in.
 
-**Step by step:**
+### No domain, or don't want to open ports
 
-1. **Point DNS at your home server.** In your DNS provider (wherever
-   `hoffmanhouse.ca` is registered/managed), add an A record (and AAAA if
-   you have an IPv6 address) for `hoffmanhouse.ca` — or the subdomain
-   you're actually using for your main site — pointing at your home's
-   public IP address. If your ISP doesn't give you a static IP, use a
-   dynamic-DNS updater instead of a plain A record.
-
-2. **Forward ports on your router.** Forward external ports **80** and
-   **443** to the internal IP address of the machine running Docker.
-   Both are required — port 80 for the initial Let's Encrypt
-   verification, port 443 for HTTPS traffic itself.
-
-3. **Build the image with the subpath baked in.** In `.env`, add:
-   ```
-   VITE_BASE_PATH=/homekeep/
-   ```
-   (leading *and* trailing slash matter). Then build — note `build`,
-   not just `up`, so the frontend actually gets rebuilt with this setting:
-   ```bash
-   docker compose build homekeep
-   ```
-
-4. **Configure Caddy for the subpath.** Edit `Caddyfile`: uncomment
-   **Pattern B** and set your real domain:
-   ```
-   hoffmanhouse.ca {
-       handle_path /homekeep/* {
-           reverse_proxy homekeep:{$PORT}
-       }
-       # ...anything else you host at hoffmanhouse.ca goes here...
-   }
-   ```
-   `handle_path` strips the `/homekeep` prefix before forwarding to the
-   container, so the app (now built knowing it lives under `/homekeep/`)
-   and the container agree on where things are.
-
-5. **Set `COOKIE_SECURE=true`** in `.env`, since this will now be served
-   over HTTPS.
-
-6. **Start everything:**
-   ```bash
-   docker compose --profile https up -d
-   ```
-   (You already built the image with the right base path in step 3, so
-   no `--build` needed here — just don't run a plain `docker compose
-   build` again without `VITE_BASE_PATH` set, or it'll silently rebuild
-   back to a root-path image.)
-
-7. **Verify:** visit `https://hoffmanhouse.ca/homekeep/` in a browser.
-   Caddy will obtain a certificate automatically on first request (this
-   can take a few seconds). Check `docker compose logs caddy` if it
-   doesn't come up right away.
-
-**If you later want to remove the subpath and go back to root or a
-subdomain:** just unset `VITE_BASE_PATH` (or set it back to `/`) and
-run `docker compose build homekeep` again — nothing else in the app
-needs to change either way.
-
-**If you're deploying this via Portainer** (see §4) rather than plain
-Docker Compose on the command line: the image published to GHCR is
-always built with the default root path, so a subpath deployment needs
-Portainer to build the image itself rather than pull it. When adding
-the stack, set the build method to build from the Dockerfile (not just
-pull `image:`), and add `VITE_BASE_PATH=/homekeep/` as a build argument
-if your Portainer version exposes that option — otherwise, build the
-image once on the command line as in step 3 above, push it to your own
-registry, and point Portainer's `image:` at that instead.
-
-### Option C — no domain, or don't want to open ports
-
-Use a tunneling service such as [Tailscale](https://tailscale.com/) (puts
-your phone and server on a private encrypted network — simplest for a
-household) or a
+Use a tunneling service such as [Tailscale](https://tailscale.com/)
+(puts your phone and server on a private encrypted network — simplest
+for a household) or a
 [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
 pointed at `http://localhost:8040`. Either gives you a stable HTTPS URL
-without router configuration. Set `COOKIE_SECURE=true` once traffic
-arrives over HTTPS either way.
+without router configuration or a reverse proxy of your own. Set
+`COOKIE_SECURE=true` once traffic arrives over HTTPS either way.
 
-## 8. Data & backups
+## 9. Data & backups
 
 All data lives in the `homekeep_data` Docker volume (a single SQLite
 file). To back it up:
@@ -314,21 +313,29 @@ folder name — run `docker volume ls` to check.)
 To restore, reverse the tar command into a fresh volume before starting
 the container.
 
-## 9. Updating
+HomeKeep also has its own in-app backup, independent of the above: as
+an Owner, use **Owner Tools → Backup & bulk edit** to export the whole
+household to an Excel file, or re-import one.
+
+## 10. Updating
 
 **Local Docker Compose:**
 ```bash
-git pull            # if you're tracking this in version control
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
 **Portainer:** push your changes to GitHub (which triggers the GitHub
 Actions build), then in Portainer use **Pull and redeploy** on the
 stack to fetch the new image.
 
-The database volume is untouched by rebuilds either way.
+**If you're using a locally prebuilt image** instead of Docker Hub,
+rebuild it (§4) and run `docker compose up -d` again — Docker will
+notice the image changed and recreate the container.
 
-## 10. Security notes
+The database volume is untouched by any of the above.
+
+## 11. Security notes
 
 - Always set a real `JWT_SECRET` before exposing this beyond
   `localhost` — the default is intentionally insecure and only meant
@@ -336,13 +343,15 @@ The database volume is untouched by rebuilds either way.
 - Passwords are hashed with bcrypt; sessions are signed JWTs stored in
   an `httpOnly` cookie.
 - There's no rate-limiting on the login endpoint. For an internet-facing
-  deployment, put it behind Caddy/Cloudflare (both provide basic
-  protection) or add a rate limiter such as `express-rate-limit`.
+  deployment, put it behind a reverse proxy that offers basic
+  protection (Cloudflare, Nginx Proxy Manager, Traefik with a
+  rate-limit middleware) or add one directly, such as
+  `express-rate-limit`.
 - This app is scoped to a single household (per the functional spec) —
   every account shares the same asset/location/work-order data. It's
   not designed for multiple unrelated households on one instance.
 
-## 11. Known simplifications vs. the full functional spec
+## 12. Known simplifications vs. the full functional spec
 
 - **Notifications** are in-app only (the bell icon) — no email/SMS/push
   yet. Adding push notifications would mean integrating a service like

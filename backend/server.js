@@ -16,7 +16,7 @@ const COOKIE_OPTS = {
   httpOnly: true,
   sameSite: "lax",
   // Set COOKIE_SECURE=true once the app is served over HTTPS (e.g. behind
-  // the bundled Caddy reverse-proxy profile) — browsers refuse "secure"
+  // a reverse proxy you run in front of it) — browsers refuse "secure"
   // cookies over plain HTTP, which would otherwise break login on LAN/HTTP.
   secure: process.env.COOKIE_SECURE === "true",
   maxAge: 30 * 24 * 60 * 60 * 1000,
