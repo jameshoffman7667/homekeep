@@ -1,49 +1,68 @@
 # HomeKeep — Changelog
 
 Every entry below corresponds to one delivered `homekeep-docker` build
-(and, where noted, an updated functional spec). Starting with this
-release, both the zip and the functional spec file carry a `-vN` suffix
-matching the version below. The **Commit message** line under each
-entry is meant to be pasted as-is as the Git commit message for that
-release.
+(and, where noted, an updated functional spec). Versions **v0.1–v0.8**
+were pre-release builds. **v1** is the first official release, and is
+the point where the zip's top-level folder, the zip filename, and the
+functional spec filename all began carrying a matching `-vN` suffix,
+with the spec and this changelog included inside the zip itself.
+
+From v1 onward, each entry carries a **Commit short description**
+(≤50 characters, including the version number, meant to be pasted as
+the Git commit's summary line) and a **Commit extended description**
+(≤200 words, also naming the version, the commit body — i.e.
+`git commit -m "<short>" -m "<extended>"`).
 
 ---
 
-## v9
+## v1 — official release
 
-**Commit message:** `Make the app usable on phones: off-canvas nav drawer and responsive layouts`
+**Commit short description:** `v1: Make the app mobile-friendly`
 
-- Added a real mobile navigation pattern: the sidebar now opens as an
-  off-canvas drawer with a tap-to-close backdrop on screens ≤860px,
-  instead of pushing page content aside; it starts closed by default
-  on phone-sized screens
-- Made every multi-column layout in the app (Assets, Work Orders and
-  Work Requests filter/detail panes, Schedule, the Work Orders kanban
-  board, the dashboard stat cards, PM/BOM detail grids, forms) collapse
-  to a single column below 860px, so nothing gets squeezed or clipped
-  on a phone screen
-- Kept the Schedule month calendar at a true 7-day-wide grid on mobile
-  (shrunk padding/type instead of collapsing it, since a calendar needs
-  its 7 columns to make sense)
-- Made popups (add/edit dialogs) open as a bottom sheet that fills the
-  screen width on phones, and raised tap targets (buttons, inputs,
-  selects) to a touch-friendly minimum height
-- No backend or data changes in this release
+**Commit extended description:**
+v1 is HomeKeep's first official release, following the v0.1–v0.8
+pre-release builds, and focuses on mobile usability. The app had no
+responsive CSS: fixed-width inline styles meant the sidebar
+permanently ate a third of a phone screen and multi-column layouts
+got crushed. This adds a responsive pass at an 860px breakpoint, with
+no backend or data changes.
 
-## v8
+Navigation: the sidebar is now an off-canvas drawer on phones instead
+of pushing content aside — closed by default below 860px, opens over
+the content with a tap-to-close backdrop, and auto-closes on tapping
+a menu item.
+
+Layout: every multi-column grid collapses to one column below 860px —
+Assets, Work Orders/Requests, the Schedule filter pane, the kanban
+board, dashboard stat cards, PM/BOM detail grids, and multi-column
+forms. Auto-fill card grids (Parts Catalogue, Vendors) already reflow
+and needed no change.
+
+Calendar: the Schedule month view keeps its true 7-day grid on mobile
+(padding/font shrink instead), since it needs all 7 columns to make
+sense.
+
+Popups: add/edit dialogs open as a full-width bottom sheet on phones
+instead of a small centered box.
+
+Touch: buttons, inputs, and selects get a comfortable minimum tap
+height, and inputs use a larger font to avoid iOS's zoom-on-focus
+behavior.
+
+## v0.8
 
 **Commit message:** `Add version-numbered releases and a project changelog`
 
 - Introduced version-numbered filenames for every future delivery —
-  this release is `homekeep-docker-v8.zip` and
-  `Home_CMMS_Functional_Specification-v8.md`
+  this release is `homekeep-docker-v0.8.zip` and
+  `Home_CMMS_Functional_Specification-v0.8.md`
 - Added this changelog, backfilled with an entry for every version
-  delivered so far (v1–v7)
+  delivered so far (v0.1–v0.7)
 - Bumped the in-app footer version string to match
 
 ---
 
-## v7
+## v0.7
 
 **Commit message:** `Remove bundled Caddy; publish to Docker Hub; pure image-based compose deploy`
 
@@ -62,7 +81,7 @@ release.
   image" section (local build, tagging, pushing, multi-arch builds,
   and moving an image to a machine with no registry access)
 
-## v6
+## v0.6
 
 **Commit message:** `Restrict PM Base concurrency, lock down Executor edit rights, fix 500 error on non-Owner user creation`
 
@@ -83,7 +102,7 @@ release.
   all, with a distinct icon per location level
 - Added a work-order-type filter to the Work Orders page
 
-## v5
+## v0.5
 
 **Commit message:** `Add household roles, Parts Catalogue, PM Base scheduling, and a redesigned dashboard`
 
@@ -117,7 +136,7 @@ release.
   and delete-by-number for work orders and requests
 - Functional spec rewritten to reflect all of the above (v2.0/2.1)
 
-## v4
+## v0.4
 
 **Commit message:** `Allow editing submitted work requests; support subpath deployment behind a reverse proxy`
 
@@ -131,7 +150,7 @@ release.
   behind Caddy, plus step-by-step instructions for packaging the PWA
   as an Android APK via Bubblewrap/PWABuilder
 
-## v3
+## v0.3
 
 **Commit message:** `Make the container port configurable via environment variable`
 
@@ -139,7 +158,7 @@ release.
   `docker-compose.yml`, the `Dockerfile` default, and the backend's
   own fallback, instead of being hardcoded to 8080
 
-## v2
+## v0.2
 
 **Commit message:** `Add GitHub Actions CI and Portainer deployment docs`
 
@@ -151,7 +170,7 @@ release.
   deployment methods (Git-repository stack and pasted Web-editor
   stack) in `README.md`
 
-## v1
+## v0.1
 
 **Commit message:** `Package HomeKeep as a standalone Docker deployment with PWA support`
 

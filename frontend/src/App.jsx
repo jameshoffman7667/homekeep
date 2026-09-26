@@ -762,7 +762,7 @@ function Sidebar({ tab, setTab, open, role, counts, onNavigate }) {
         })}
       </div>
       <div style={{ padding: 14, borderTop: "1px solid rgba(255,255,255,0.12)", fontFamily: FONT_BODY, fontSize: 11, color: "#8FA0AF" }}>
-        v9 · matches the HomeKeep functional spec
+        v1 · matches the HomeKeep functional spec
       </div>
     </div>
   );
