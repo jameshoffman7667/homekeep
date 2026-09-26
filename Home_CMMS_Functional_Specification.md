@@ -1,9 +1,9 @@
 # Functional Specification: Home CMMS (HomeKeep)
 
-**Document version:** 2.3
-**Project release:** v1 — first official release (see CHANGELOG.md in the project zip; earlier builds are numbered v0.1–v0.8)
 **Date:** September 26, 2026
 **Status:** Draft
+
+_Versioning note: this document is no longer given its own version number — it's tracked by Git history in the project repo. See `CHANGELOG.md` for the app's own release history (v0.1–v0.8 pre-release, v1 onward official)._
 
 ---
 
@@ -245,6 +245,7 @@ A **PM Base** is a template work order that is never itself scheduled or complet
 | **Backup** | Owner-initiated full data export/import via Excel at any time (3.15); infrastructure-level backup is a deployment concern, not an in-app one |
 | **Platform support** | Modern web browsers; installable as a Progressive Web App on Android, Chrome desktop (with an in-app "Install app" prompt when the browser supports it), and other Chromium-based browsers |
 | **Responsive layout** | Fully usable on phone-sized screens (~360px wide and up): the navigation collapses to an off-canvas drawer, multi-column layouts stack to one column, the month calendar keeps its 7-day grid at reduced scale, and touch targets meet a comfortable minimum size |
+| **Appearance** | Light and dark themes; follows the device/browser's color-scheme preference automatically, with a manual override switch (auto/light/dark) in the top bar that's remembered per browser |
 
 ---
 

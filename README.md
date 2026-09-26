@@ -80,7 +80,7 @@ up yourself:
 4. Push to `main` (or run the workflow manually from the **Actions**
    tab). It'll publish to `docker.io/<DOCKERHUB_USERNAME>/homekeep:latest`.
 
-`docker-compose.yml` is already set to pull `jameshoffman7667/homekeep:latest`.
+`docker-compose.yml` is already set to pull `mybadreligon/homekeep:latest`.
 If your Docker Hub username is different, update the `image:` line in
 `docker-compose.yml` to match before deploying.
 
@@ -100,7 +100,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-This pulls `jameshoffman7667/homekeep:latest` (or whatever `image:` you
+This pulls `mybadreligon/homekeep:latest` (or whatever `image:` you
 set) from Docker Hub and starts it — nothing gets built locally. The
 first pull downloads the image; after that, starting/stopping is
 instant.
@@ -128,11 +128,11 @@ docker build -t homekeep:latest .
 Desktop running — the command is identical.)
 
 **Use it locally without touching `docker-compose.yml`:** if the image
-tag matches what's in the compose file (`jameshoffman7667/homekeep:latest`
+tag matches what's in the compose file (`mybadreligon/homekeep:latest`
 by default), `docker compose up -d` will use your local build instead
 of pulling — Docker always prefers an image it already has:
 ```bash
-docker build -t jameshoffman7667/homekeep:latest .
+docker build -t mybadreligon/homekeep:latest .
 docker compose up -d
 ```
 

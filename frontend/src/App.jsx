@@ -5,7 +5,7 @@ import {
   Check, AlertTriangle, Bell, Menu, Trash2, Pencil, ArrowRight,
   Layers, Search, Boxes, ChevronLeft, Loader2, LogOut, UserPlus, Shield,
   Calendar, FileDown, FileUp, Info, Archive, Download, ExternalLink, ShoppingCart,
-  Building2, DoorOpen, Square, Box,
+  Building2, DoorOpen, Square, Box, Sun, Moon, MonitorSmartphone,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { api } from "./api.js";
@@ -13,27 +13,30 @@ import { api } from "./api.js";
 /* ============================================================
    DESIGN TOKENS
 ============================================================ */
+// Every token below resolves to a CSS custom property (defined in GlobalStyle
+// for both light and dark palettes), so any inline style that reads from C
+// automatically follows the active theme — no per-component dark-mode logic.
 const C = {
-  bg: "#E5E8E2",
-  panel: "#FBFAF7",
-  panelAlt: "#F1F0EA",
-  ink: "#1C2420",
-  inkSoft: "#5B655F",
-  inkFaint: "#8C948D",
-  line: "#C8CCC1",
-  lineSoft: "#DBDED4",
-  navy: "#28415F",
-  navySoft: "#DCE3EA",
-  orange: "#C85410",
-  orangeSoft: "#F4DBC4",
-  olive: "#5C6B3B",
-  oliveSoft: "#DEE4CB",
-  rust: "#A03B2A",
-  rustSoft: "#F1D9D2",
-  gold: "#A97D22",
-  goldSoft: "#EFE1BE",
-  teal: "#2F6E62",
-  tealSoft: "#D9E7E3",
+  bg: "var(--hk-bg)",
+  panel: "var(--hk-panel)",
+  panelAlt: "var(--hk-panel-alt)",
+  ink: "var(--hk-ink)",
+  inkSoft: "var(--hk-ink-soft)",
+  inkFaint: "var(--hk-ink-faint)",
+  line: "var(--hk-line)",
+  lineSoft: "var(--hk-line-soft)",
+  navy: "var(--hk-navy)",
+  navySoft: "var(--hk-navy-soft)",
+  orange: "var(--hk-orange)",
+  orangeSoft: "var(--hk-orange-soft)",
+  olive: "var(--hk-olive)",
+  oliveSoft: "var(--hk-olive-soft)",
+  rust: "var(--hk-rust)",
+  rustSoft: "var(--hk-rust-soft)",
+  gold: "var(--hk-gold)",
+  goldSoft: "var(--hk-gold-soft)",
+  teal: "var(--hk-teal)",
+  tealSoft: "var(--hk-teal-soft)",
 };
 
 const FONT_HEAD = '"Space Grotesk", sans-serif';
@@ -47,7 +50,7 @@ const inputStyle = {
   fontFamily: FONT_BODY,
   fontSize: 13.5,
   color: C.ink,
-  background: "#fff",
+  background: C.panel,
   outline: "none",
 };
 function fieldLabelStyle(required) {
@@ -65,6 +68,85 @@ function fieldLabelStyle(required) {
 const GlobalStyle = () => (
   <style>{`
     @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+
+    /* ---- Theme tokens: light (default) ---- */
+    :root {
+      --hk-bg: #E5E8E2;
+      --hk-panel: #FBFAF7;
+      --hk-panel-alt: #F1F0EA;
+      --hk-ink: #1C2420;
+      --hk-ink-soft: #5B655F;
+      --hk-ink-faint: #8C948D;
+      --hk-line: #C8CCC1;
+      --hk-line-soft: #DBDED4;
+      --hk-navy: #28415F;
+      --hk-navy-soft: #DCE3EA;
+      --hk-orange: #C85410;
+      --hk-orange-soft: #F4DBC4;
+      --hk-olive: #5C6B3B;
+      --hk-olive-soft: #DEE4CB;
+      --hk-rust: #A03B2A;
+      --hk-rust-soft: #F1D9D2;
+      --hk-gold: #A97D22;
+      --hk-gold-soft: #EFE1BE;
+      --hk-teal: #2F6E62;
+      --hk-teal-soft: #D9E7E3;
+      color-scheme: light;
+    }
+    /* ---- Theme tokens: dark, applied automatically when the OS/browser
+       prefers dark and the user hasn't explicitly picked "light" ---- */
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --hk-bg: #171D19;
+        --hk-panel: #1E2521;
+        --hk-panel-alt: #242C27;
+        --hk-ink: #E7EAE3;
+        --hk-ink-soft: #A8B0A7;
+        --hk-ink-faint: #74807A;
+        --hk-line: #33403A;
+        --hk-line-soft: #2A3530;
+        --hk-navy: #7FA3CC;
+        --hk-navy-soft: #253244;
+        --hk-orange: #E38C4E;
+        --hk-orange-soft: #3A2A1C;
+        --hk-olive: #9AAE6E;
+        --hk-olive-soft: #2B331F;
+        --hk-rust: #DE8873;
+        --hk-rust-soft: #3A231E;
+        --hk-gold: #D2A94E;
+        --hk-gold-soft: #3A2F18;
+        --hk-teal: #6BBDAC;
+        --hk-teal-soft: #1D3430;
+        color-scheme: dark;
+      }
+    }
+    /* ---- Explicit user override, regardless of OS preference ---- */
+    :root[data-theme="dark"] {
+      --hk-bg: #171D19;
+      --hk-panel: #1E2521;
+      --hk-panel-alt: #242C27;
+      --hk-ink: #E7EAE3;
+      --hk-ink-soft: #A8B0A7;
+      --hk-ink-faint: #74807A;
+      --hk-line: #33403A;
+      --hk-line-soft: #2A3530;
+      --hk-navy: #7FA3CC;
+      --hk-navy-soft: #253244;
+      --hk-orange: #E38C4E;
+      --hk-orange-soft: #3A2A1C;
+      --hk-olive: #9AAE6E;
+      --hk-olive-soft: #2B331F;
+      --hk-rust: #DE8873;
+      --hk-rust-soft: #3A231E;
+      --hk-gold: #D2A94E;
+      --hk-gold-soft: #3A2F18;
+      --hk-teal: #6BBDAC;
+      --hk-teal-soft: #1D3430;
+      color-scheme: dark;
+    }
+    :root[data-theme="light"] { color-scheme: light; }
+    body { background: ${C.bg}; transition: background-color .15s ease; }
+
     .hk-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
     .hk-scroll::-webkit-scrollbar-thumb { background: ${C.line}; border-radius: 4px; }
     .hk-fade { animation: hkfade .14s ease-out; }
@@ -551,7 +633,7 @@ function LinkButton({ url, small }) {
       style={{
         display: "inline-flex", alignItems: "center", gap: 4, fontFamily: FONT_BODY,
         fontSize: small ? 11 : 12, fontWeight: 600, color: C.navy, textDecoration: "none",
-        border: `1px solid ${C.line}`, borderRadius: 3, padding: small ? "2px 6px" : "4px 8px", background: "#fff",
+        border: `1px solid ${C.line}`, borderRadius: 3, padding: small ? "2px 6px" : "4px 8px", background: C.panel,
       }}
     >
       <ExternalLink size={small ? 10 : 11} /> Open link
@@ -762,7 +844,7 @@ function Sidebar({ tab, setTab, open, role, counts, onNavigate }) {
         })}
       </div>
       <div style={{ padding: 14, borderTop: "1px solid rgba(255,255,255,0.12)", fontFamily: FONT_BODY, fontSize: 11, color: "#8FA0AF" }}>
-        v1 · matches the HomeKeep functional spec
+        v1.1 · matches the HomeKeep functional spec
       </div>
     </div>
   );
@@ -791,7 +873,7 @@ function WeekLookahead({ data, goToOrder }) {
           const items = byDay[d] || [];
           const isToday = d === todayISO();
           return (
-            <div key={d} style={{ border: `1px solid ${C.lineSoft}`, borderRadius: 3, padding: 6, minHeight: 78, background: isToday ? C.orangeSoft : "#fff" }}>
+            <div key={d} style={{ border: `1px solid ${C.lineSoft}`, borderRadius: 3, padding: 6, minHeight: 78, background: isToday ? C.orangeSoft : C.panel }}>
               <div style={{ fontFamily: FONT_BODY, fontSize: 10.5, fontWeight: 700, color: isToday ? C.orange : C.inkFaint }}>
                 {dt.toLocaleDateString(undefined, { weekday: "short", day: "numeric" })}
               </div>
@@ -2598,9 +2680,9 @@ function PartsView({ data, update, role, currentUser }) {
               </div>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 10 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <button onClick={(e) => adjust(item, -1, e)} disabled={!canWrite(role)} style={{ border: `1px solid ${C.line}`, background: "#fff", width: 24, height: 24, borderRadius: 3, cursor: canWrite(role) ? "pointer" : "not-allowed", opacity: canWrite(role) ? 1 : 0.4 }}>−</button>
+                  <button onClick={(e) => adjust(item, -1, e)} disabled={!canWrite(role)} style={{ border: `1px solid ${C.line}`, background: C.panel, width: 24, height: 24, borderRadius: 3, cursor: canWrite(role) ? "pointer" : "not-allowed", opacity: canWrite(role) ? 1 : 0.4 }}>−</button>
                   <span style={{ fontFamily: FONT_BODY, fontWeight: 700, fontSize: 13, width: 20, textAlign: "center" }}>{item.qty}</span>
-                  <button onClick={(e) => adjust(item, 1, e)} disabled={!canWrite(role)} style={{ border: `1px solid ${C.line}`, background: "#fff", width: 24, height: 24, borderRadius: 3, cursor: canWrite(role) ? "pointer" : "not-allowed", opacity: canWrite(role) ? 1 : 0.4 }}>+</button>
+                  <button onClick={(e) => adjust(item, 1, e)} disabled={!canWrite(role)} style={{ border: `1px solid ${C.line}`, background: C.panel, width: 24, height: 24, borderRadius: 3, cursor: canWrite(role) ? "pointer" : "not-allowed", opacity: canWrite(role) ? 1 : 0.4 }}>+</button>
                 </div>
                 {item.cost && <span style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint }}>${item.cost}</span>}
               </div>
@@ -2731,7 +2813,7 @@ function ScheduleView({ data, role, currentUserId, goToOrder }) {
               const isToday = dateStr === todayStr;
               const dayEvents = inMonth ? (eventsByDay[dayNum] || []) : [];
               return (
-                <div key={i} style={{ minHeight: 92, border: `1px solid ${C.lineSoft}`, borderRadius: 3, padding: 5, background: inMonth ? (isToday ? C.orangeSoft : "#fff") : C.panelAlt, opacity: inMonth ? 1 : 0.5 }}>
+                <div key={i} style={{ minHeight: 92, border: `1px solid ${C.lineSoft}`, borderRadius: 3, padding: 5, background: inMonth ? (isToday ? C.orangeSoft : C.panel) : C.panelAlt, opacity: inMonth ? 1 : 0.5 }}>
                   {inMonth && (
                     <>
                       <div style={{ fontFamily: FONT_BODY, fontSize: 11, fontWeight: isToday ? 700 : 600, color: isToday ? C.orange : C.inkFaint, marginBottom: 3 }}>{dayNum}</div>
@@ -3189,6 +3271,9 @@ export default function HomeKeepApp() {
   const [openOrderId, setOpenOrderId] = useState(null);
   const [pendingFilter, setPendingFilter] = useState(null);
   const [installPrompt, setInstallPrompt] = useState(null);
+  const [theme, setTheme] = useState(() => {
+    try { return localStorage.getItem("hk-theme") || "auto"; } catch { return "auto"; }
+  });
   const saveTimer = useRef(null);
 
   useEffect(() => {
@@ -3208,6 +3293,18 @@ export default function HomeKeepApp() {
     setInstallPrompt(null);
   };
 
+  // Theme: "auto" follows the OS/browser color-scheme preference (via CSS,
+  // see GlobalStyle); "light"/"dark" force it via a data-theme attribute
+  // on <html>, and the choice is remembered for next time.
+  useEffect(() => {
+    if (theme === "auto") document.documentElement.removeAttribute("data-theme");
+    else document.documentElement.setAttribute("data-theme", theme);
+    try { localStorage.setItem("hk-theme", theme); } catch {}
+  }, [theme]);
+  const cycleTheme = () => setTheme((t) => (t === "auto" ? "light" : t === "light" ? "dark" : "auto"));
+  const themeIcon = theme === "auto" ? <MonitorSmartphone size={17} /> : theme === "light" ? <Sun size={17} /> : <Moon size={17} />;
+  const themeLabel = theme === "auto" ? "Theme: matching your device" : theme === "light" ? "Theme: light" : "Theme: dark";
+
   useEffect(() => { api.me().then(setUser).catch(() => setUser(false)); }, []);
   useEffect(() => { if (!user) return; api.getData().then(setDataRaw).catch(() => setDataRaw(null)); }, [user]);
 
@@ -3225,7 +3322,7 @@ export default function HomeKeepApp() {
   const goToOrder = (id) => { setTabRaw("orders"); setOpenOrderId(id); setPendingFilter(null); };
   const goToRequest = (id) => { setTabRaw("requests"); setPendingFilter(null); };
 
-  if (user === null) return <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: C.bg }}><Loader2 className="animate-spin" size={20} color={C.inkSoft} /></div>;
+  if (user === null) return <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: C.bg }}><GlobalStyle /><Loader2 className="animate-spin" size={20} color={C.inkSoft} /></div>;
   if (!user) return <AuthScreen onAuthed={setUser} />;
   if (!data) {
     return (
@@ -3270,6 +3367,9 @@ export default function HomeKeepApp() {
               {installPrompt && (
                 <Btn small variant="ghost" onClick={doInstall}><Download size={13} /> Install app</Btn>
               )}
+              <button onClick={cycleTheme} title={themeLabel} className="hk-tap" style={{ background: "none", border: `1px solid ${C.line}`, borderRadius: 3, cursor: "pointer", color: C.inkSoft, padding: 6, display: "flex", alignItems: "center" }}>
+                {themeIcon}
+              </button>
               <div style={{ position: "relative" }}>
                 <Bell size={17} color={C.inkSoft} />
                 {counts.requests > 0 && <span style={{ position: "absolute", top: -5, right: -6, background: C.orange, color: "#fff", fontSize: 9.5, fontWeight: 700, borderRadius: 8, padding: "1px 4px" }}>{counts.requests}</span>}

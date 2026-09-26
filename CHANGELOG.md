@@ -3,15 +3,51 @@
 Every entry below corresponds to one delivered `homekeep-docker` build
 (and, where noted, an updated functional spec). Versions **v0.1–v0.8**
 were pre-release builds. **v1** is the first official release, and is
-the point where the zip's top-level folder, the zip filename, and the
-functional spec filename all began carrying a matching `-vN` suffix,
-with the spec and this changelog included inside the zip itself.
+the point where the zip's top-level folder and the zip filename began
+carrying a matching `-vN` suffix, with the spec and this changelog
+included inside the zip itself. From v1 onward, the functional spec
+file (`Home_CMMS_Functional_Specification.md`) carries no version
+suffix of its own — it lives in the GitHub repo and is versioned by
+Git history instead.
 
 From v1 onward, each entry carries a **Commit short description**
 (≤50 characters, including the version number, meant to be pasted as
 the Git commit's summary line) and a **Commit extended description**
 (≤200 words, also naming the version, the commit body — i.e.
 `git commit -m "<short>" -m "<extended>"`).
+
+---
+
+## v1.1
+
+**Commit short description:** `v1.1: Add light/dark theme support`
+
+**Commit extended description:**
+v1.1 adds a dark theme. Every color in the app was already routed
+through one design-token object (`C`); that object now resolves to
+CSS custom properties instead of hard-coded hex values, with a light
+and a dark palette defined for those properties, so existing
+component styles needed no per-component dark-mode logic.
+
+By default the app follows the device/browser's `prefers-color-scheme`
+setting automatically — no action needed. A theme button in the top
+bar (next to the install-app button) lets the user override that:
+tapping it cycles Auto → Light → Dark → Auto, with a matching
+monitor/sun/moon icon, and the choice is remembered in the browser via
+localStorage so it persists across visits without needing an account
+setting.
+
+The dark palette keeps the same navy/orange/olive/rust/gold/teal
+accent identity as light mode, just rebalanced for contrast on a dark
+charcoal-green background instead of the light sage one, so status
+colors, tags, and priority badges stay recognizable in either theme.
+
+A few surfaces hard-coded to white (input fields, the "open link"
+button, calendar day cells, quantity +/- buttons) now use the
+theme-aware panel color instead, so they no longer stay white in dark
+mode.
+
+No backend or data changes in this release.
 
 ---
 

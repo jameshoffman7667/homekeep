@@ -1,7 +1,7 @@
 services:
   homekeep:
     # Pulled from Docker Hub — built and published automatically by
-    # .github/workflows/docker-publish.yml. Replace "jameshoffman7667"
+    # .github/workflows/docker-publish.yml. Replace "mybadreligon"
     # below with your own Docker Hub username if you're publishing
     # under a different account.
     #
@@ -10,7 +10,7 @@ services:
     # alone) never needs the Dockerfile or source tree, just Docker
     # Hub access. To build the image yourself instead of waiting on
     # CI, see "Prebuilding the image" in README.md.
-    image: jameshoffman7667/homekeep:latest
+    image: mybadreligon/homekeep:latest
     container_name: homekeep
     restart: unless-stopped
     environment:
