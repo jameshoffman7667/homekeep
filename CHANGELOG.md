@@ -18,6 +18,33 @@ the Git commit's summary line) and a **Commit extended description**
 
 ---
 
+## v1.4
+
+**Commit short description:** `v1.4: PM checklist builder`
+
+**Commit extended description:**
+v1.4 is the second of five "Bigger bets" releases. A PM Base can now
+carry a **checklist template** — an ordered set of steps, each a Task
+(check off), Numeric reading (with an optional expected min/max and
+unit, auto-flagged in/out of spec), Photo required (tracked as an
+acknowledgment checkbox for now — actual photo attachment is planned
+for the offline-sync release), or Pass/Fail. The template is built and
+reordered from the PM Base's own detail view, same as its trigger
+configuration, and is copied fresh onto every PM occurrence the base
+generates from then on.
+
+Filling in the checklist on a live PM work order is treated like
+adding a comment rather than editing the record: any user with write
+access — including an Executor, who otherwise gets a read-only view of
+a work order's other fields — can check off steps, log readings, and
+mark pass/fail while doing the work, and each change saves
+immediately. The filled-in checklist stays on the completed work order
+permanently, turning a PM from a single checkbox into a real
+inspection record. Existing PM Bases and occurrences are unaffected —
+a PM Base with no checklist template behaves exactly as before.
+
+---
+
 ## v1.3
 
 **Commit short description:** `v1.3: Meter & seasonal PM triggers`

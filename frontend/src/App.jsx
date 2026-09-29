@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useContext, createContext, useMemo } from "react";
 import {
   LayoutDashboard, MapPin, Wrench, ClipboardList, Package,
-  Users, DollarSign, Plus, ChevronRight, ChevronDown, X,
+  Users, DollarSign, Plus, ChevronRight, ChevronDown, ChevronUp, X,
   Check, AlertTriangle, Bell, Menu, Trash2, Pencil, ArrowRight,
   Layers, Search, Boxes, ChevronLeft, Loader2, LogOut, UserPlus, Shield,
   Calendar, FileDown, FileUp, Info, Archive, Download, ExternalLink, ShoppingCart,
@@ -385,6 +385,16 @@ function sameDateNextYear(dateISO) {
 function pmBaseHasActiveChild(d, baseId) {
   return d.workOrders.some((w) => w.sourcePmBaseId === baseId && (w.status === "Open" || w.status === "In Progress"));
 }
+// Fresh, unfilled copy of a PM Base's checklist template — stamped onto
+// each new PM occurrence at generation time. Occurrences don't share
+// checklist objects with each other or with the template.
+function freshChecklist(base) {
+  return (base.checklistTemplate || []).map((t) => ({
+    id: t.id, title: t.title, stepType: t.stepType,
+    expectedMin: t.expectedMin, expectedMax: t.expectedMax, unit: t.unit,
+    done: false, value: "", passFail: "", note: "",
+  }));
+}
 function spawnPmInstance(d, base, opts) {
   if (pmBaseHasActiveChild(d, base.id)) return;
   const afterDateISO = opts.afterDateISO;
@@ -413,6 +423,7 @@ function spawnPmInstance(d, base, opts) {
     scheduledDate: "", requiredByDate, completedDate: null, verifiedDate: null,
     cost: "", vendorId: base.vendorId || null, notes: "", parts: [], comments: [], partsDeducted: false, createdBy: base.createdBy || null,
     meterValueAtGeneration: triggerType === "meter" && opts.meterValueAtGeneration != null ? opts.meterValueAtGeneration : null,
+    checklist: freshChecklist(base),
   });
 }
 function regeneratePmAfterCompletion(d, completedWO) {
@@ -441,7 +452,7 @@ function regeneratePmAfterCompletion(d, completedWO) {
       priority: base.priority || "Medium", executorId: base.executorId || "",
       scheduledDate: "", requiredByDate, completedDate: null, verifiedDate: null,
       cost: "", vendorId: base.vendorId || null, notes: "", parts: [], comments: [], partsDeducted: false, createdBy: base.createdBy || null,
-      meterValueAtGeneration: null,
+      meterValueAtGeneration: null, checklist: freshChecklist(base),
     });
     return;
   }
@@ -457,7 +468,7 @@ function regeneratePmAfterCompletion(d, completedWO) {
       priority: base.priority || "Medium", executorId: base.executorId || "",
       scheduledDate: "", requiredByDate, completedDate: null, verifiedDate: null,
       cost: "", vendorId: base.vendorId || null, notes: "", parts: [], comments: [], partsDeducted: false, createdBy: base.createdBy || null,
-      meterValueAtGeneration: null,
+      meterValueAtGeneration: null, checklist: freshChecklist(base),
     });
   } else {
     spawnPmInstance(d, base, { afterDateISO: completedWO.completedDate || todayISO(), fixedDate: null });
@@ -1034,7 +1045,7 @@ function Sidebar({ tab, setTab, open, role, counts, onNavigate }) {
         })}
       </div>
       <div style={{ padding: 14, borderTop: "1px solid rgba(255,255,255,0.12)", fontFamily: FONT_BODY, fontSize: 11, color: "#8FA0AF" }}>
-        v1.3 · matches the HomeKeep functional spec
+        v1.4 · matches the HomeKeep functional spec
       </div>
     </div>
   );
@@ -1774,6 +1785,106 @@ function PartsPicker({ data, update, value, onChange, defaultLocationId, current
   );
 }
 
+// Editor for a PM Base's checklist template — the ordered steps copied
+// onto every PM occurrence it generates. Structure (titles, step types,
+// expected ranges) is only ever edited here, at the template; individual
+// occurrences just fill the values in (see ChecklistRunner).
+function ChecklistTemplateEditor({ steps, setSteps }) {
+  const list = steps || [];
+  const add = () => setSteps([...list, { id: uid("cl"), title: "", stepType: "task", expectedMin: "", expectedMax: "", unit: "" }]);
+  const remove = (i) => setSteps(list.filter((_, idx) => idx !== i));
+  const move = (i, dir) => {
+    const j = i + dir;
+    if (j < 0 || j >= list.length) return;
+    const arr = [...list];
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+    setSteps(arr);
+  };
+  const updateStep = (i, patch) => setSteps(list.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
+
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <label style={fieldLabelStyle(false)}>Checklist template (optional)</label>
+      {list.map((s, i) => (
+        <div key={s.id} style={{ border: `1px solid ${C.lineSoft}`, borderRadius: 4, padding: 8, marginBottom: 6 }}>
+          <div style={{ display: "flex", gap: 6, marginBottom: s.stepType === "numeric" ? 6 : 0, alignItems: "center" }}>
+            <input style={{ ...inputStyle, flex: 1 }} placeholder="Step description" value={s.title} onChange={(e) => updateStep(i, { title: e.target.value })} />
+            <select style={{ ...inputStyle, width: 150 }} value={s.stepType} onChange={(e) => updateStep(i, { stepType: e.target.value })}>
+              <option value="task">Task (check off)</option>
+              <option value="numeric">Numeric reading</option>
+              <option value="photo">Photo required</option>
+              <option value="pass-fail">Pass / fail</option>
+            </select>
+            <button onClick={() => move(i, -1)} disabled={i === 0} title="Move up" style={{ background: "none", border: "none", cursor: i === 0 ? "default" : "pointer", color: i === 0 ? C.inkFaint : C.inkSoft }}><ChevronUp size={14} /></button>
+            <button onClick={() => move(i, 1)} disabled={i === list.length - 1} title="Move down" style={{ background: "none", border: "none", cursor: i === list.length - 1 ? "default" : "pointer", color: i === list.length - 1 ? C.inkFaint : C.inkSoft }}><ChevronDown size={14} /></button>
+            <button onClick={() => remove(i)} style={{ background: "none", border: "none", color: C.rust, cursor: "pointer" }}><X size={16} /></button>
+          </div>
+          {s.stepType === "numeric" && (
+            <div style={{ display: "flex", gap: 6 }}>
+              <input type="number" style={{ ...inputStyle, width: 100 }} placeholder="Min (optional)" value={s.expectedMin} onChange={(e) => updateStep(i, { expectedMin: e.target.value })} />
+              <input type="number" style={{ ...inputStyle, width: 100 }} placeholder="Max (optional)" value={s.expectedMax} onChange={(e) => updateStep(i, { expectedMax: e.target.value })} />
+              <input style={{ ...inputStyle, width: 100 }} placeholder="Unit" value={s.unit} onChange={(e) => updateStep(i, { unit: e.target.value })} />
+            </div>
+          )}
+        </div>
+      ))}
+      <Btn small variant="ghost" onClick={add}><Plus size={12} /> Add step</Btn>
+      <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: 6 }}>
+        Copied onto every PM occurrence this base generates — editing it here only affects occurrences generated afterward. A "Photo required" step is tracked as an acknowledgment checkbox for now; attaching the actual photo is planned for a later release.
+      </div>
+    </div>
+  );
+}
+// Fills in a PM occurrence's checklist — copied from its PM Base's
+// template at generation time. Any user with write access can fill this
+// in (including an Executor, who otherwise gets a read-only work order),
+// since it's meant to be completed while doing the work; it live-saves
+// per step rather than going through the buffered edit/Save flow.
+function ChecklistRunner({ steps, onUpdateStep, readOnly }) {
+  return (
+    <div style={{ marginTop: 4, marginBottom: 14, paddingTop: 12, borderTop: `1px solid ${C.lineSoft}` }}>
+      <div style={{ fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 8 }}>Checklist</div>
+      {steps.map((s, i) => {
+        const hasRange = s.expectedMin !== "" && s.expectedMin != null && s.expectedMax !== "" && s.expectedMax != null;
+        const hasValue = s.value !== "" && s.value != null;
+        const inSpec = hasRange && hasValue ? (Number(s.value) >= Number(s.expectedMin) && Number(s.value) <= Number(s.expectedMax)) : null;
+        return (
+          <div key={s.id} style={{ padding: "7px 0", borderTop: i === 0 ? "none" : `1px solid ${C.lineSoft}` }}>
+            {(s.stepType === "task" || s.stepType === "photo") && (
+              <label style={{ display: "flex", alignItems: "center", gap: 7, fontFamily: FONT_BODY, fontSize: 13, color: C.ink, cursor: readOnly ? "default" : "pointer" }}>
+                <input type="checkbox" disabled={readOnly} checked={!!s.done} onChange={(e) => onUpdateStep(s.id, { done: e.target.checked })} />
+                {s.title || "(untitled step)"}{s.stepType === "photo" ? " — photo taken" : ""}
+              </label>
+            )}
+            {s.stepType === "pass-fail" && (
+              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                <span style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.ink }}>{s.title || "(untitled step)"}</span>
+                <label style={{ display: "flex", alignItems: "center", gap: 4, fontFamily: FONT_BODY, fontSize: 12, color: C.ink, cursor: readOnly ? "default" : "pointer" }}>
+                  <input type="radio" disabled={readOnly} name={`pf-${s.id}`} checked={s.passFail === "pass"} onChange={() => onUpdateStep(s.id, { passFail: "pass" })} /> Pass
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: 4, fontFamily: FONT_BODY, fontSize: 12, color: C.ink, cursor: readOnly ? "default" : "pointer" }}>
+                  <input type="radio" disabled={readOnly} name={`pf-${s.id}`} checked={s.passFail === "fail"} onChange={() => onUpdateStep(s.id, { passFail: "fail" })} /> Fail
+                </label>
+                {s.passFail === "fail" && <Tag text="Fail" color={C.rust} soft={C.rustSoft} />}
+              </div>
+            )}
+            {s.stepType === "numeric" && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <span style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.ink }}>{s.title || "(untitled step)"}</span>
+                <input type="number" disabled={readOnly} style={{ ...inputStyle, width: 90 }} value={s.value ?? ""} onChange={(e) => onUpdateStep(s.id, { value: e.target.value })} />
+                {s.unit && <span style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint }}>{s.unit}</span>}
+                {hasRange && <span style={{ fontFamily: FONT_BODY, fontSize: 11, color: C.inkFaint }}>(expect {s.expectedMin}–{s.expectedMax}{s.unit ? " " + s.unit : ""})</span>}
+                {inSpec === true && <Tag text="In spec" color={C.teal} soft={C.tealSoft} />}
+                {inSpec === false && <Tag text="Out of spec" color={C.rust} soft={C.rustSoft} />}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ============================================================
    WORK REQUESTS
 ============================================================ */
@@ -1861,6 +1972,8 @@ function PmBaseFields({ form, setForm, data }) {
       <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 12 }}>
         A PM Base is never scheduled or completed itself — it's a template. Creating it generates the first PM work order copied from it (meter-based PM instead waits until the linked asset's reading crosses the interval). Only one occurrence can be Open or In Progress per PM Base at a time — if multiple fixed dates are configured, only the earliest upcoming one is generated now; the rest follow once the active occurrence is completed.
       </div>
+
+      <ChecklistTemplateEditor steps={form.checklistTemplate || []} setSteps={(steps) => setForm({ ...form, checklistTemplate: steps })} />
     </>
   );
 }
@@ -1923,7 +2036,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
       scheduledDate: todayISO(), requiredByDate: wr.requiredByDate || "", reason: "", mergeInto: "",
       pmMode: "Non-fixed", frequencyValue: "3", frequencyUnit: "months", fixedDates: [],
       triggerType: "calendar", meterIntervalValue: "", seasonalAnchor: "Spring", seasonalOffsetDays: "0",
-      assetId: wr.assetId,
+      assetId: wr.assetId, checklistTemplate: [],
     });
     setModal({ action, wr });
   };
@@ -1943,6 +2056,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
           scheduledDate: "", requiredByDate: "", completedDate: null, verifiedDate: null,
           cost: "", vendorId: null, notes: "", parts: wr.suggestedParts || [], comments: [], partsDeducted: false, createdBy: currentUser,
           pmMode: reviewForm.pmMode, triggerType: reviewForm.triggerType || "calendar",
+          checklistTemplate: (reviewForm.checklistTemplate || []).map((s) => ({ ...s })),
         };
         if (base.triggerType === "meter") {
           base.meterIntervalValue = Number(reviewForm.meterIntervalValue);
@@ -2281,6 +2395,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
     priority: "Medium", pmMode: "Non-fixed", frequencyValue: "3", frequencyUnit: "months", fixedDates: [], parts: [],
     failureCode: "", rootCause: "",
     triggerType: "calendar", meterIntervalValue: "", seasonalAnchor: "Spring", seasonalOffsetDays: "0",
+    checklistTemplate: [],
   };
   const [form, setForm] = useState(blank);
   const initial = useRef(null);
@@ -2346,6 +2461,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
       };
       if (form.type === "PM Base") {
         wo.triggerType = form.triggerType || "calendar";
+        wo.checklistTemplate = (form.checklistTemplate || []).map((s) => ({ ...s }));
         if (wo.triggerType === "meter") {
           wo.meterIntervalValue = Number(form.meterIntervalValue);
           const linkedAsset = d.assets.find((a) => a.id === form.assetId);
@@ -2417,6 +2533,16 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
       return d;
     });
     setCommentDraft("");
+  };
+  // Checklist steps live-save (bypassing the buffered detailEdits/Save
+  // flow) so an Executor — who otherwise gets a read-only view of a work
+  // order — can still fill in the checklist while doing the work.
+  const updateChecklistStep = (stepId, patch) => {
+    update((d) => {
+      const w = d.workOrders.find((x) => x.id === openWO.id);
+      w.checklist = (w.checklist || []).map((s) => (s.id === stepId ? { ...s, ...patch } : s));
+      return d;
+    });
   };
   const updateBenchmarkFromWO = async () => {
     if (!openWO.sourceBenchmarkId) return;
@@ -2576,6 +2702,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                           <Tag text="PM Base" color={WO_TYPE_COLORS["PM Base"]} soft={C.tealSoft} />
                           <Tag text={pmBaseScheduleLabel(b, data)} color={C.inkSoft} soft={C.panelAlt} />
                           <Tag text={`${openLinked.length} open`} color={C.navy} soft={C.navySoft} />
+                          {(b.checklistTemplate || []).length > 0 && <Tag text={`${b.checklistTemplate.length}-step checklist`} color={C.gold} soft={C.goldSoft} />}
                         </div>
                       </div>
                     </Panel>
@@ -2818,6 +2945,10 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                     </div>
                   )}
                 </div>
+              )}
+
+              {openWO.type === "PM" && (openWO.checklist || []).length > 0 && (
+                <ChecklistRunner steps={openWO.checklist} onUpdateStep={updateChecklistStep} readOnly={!canWrite(role)} />
               )}
 
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6, flexWrap: "wrap", gap: 8 }}>
@@ -3244,6 +3375,8 @@ const SHEET_SPECS = [
       triggerType: w.triggerType || "", meterIntervalValue: w.meterIntervalValue || "", meterBaselineValue: w.meterBaselineValue || "",
       seasonalAnchor: w.seasonalAnchor || "", seasonalOffsetDays: w.seasonalOffsetDays || "",
       meterValueAtGeneration: w.meterValueAtGeneration != null ? w.meterValueAtGeneration : "",
+      checklistTemplate: (w.checklistTemplate && w.checklistTemplate.length) ? JSON.stringify(w.checklistTemplate) : "",
+      checklist: (w.checklist && w.checklist.length) ? JSON.stringify(w.checklist) : "",
     }),
     fromRow: (r) => {
       const fixedDates = String(r.fixedDates || "").split(",").map((s) => s.trim()).filter(Boolean).map((tok) => {
@@ -3274,6 +3407,8 @@ const SHEET_SPECS = [
         seasonalAnchor: r.seasonalAnchor || undefined,
         seasonalOffsetDays: r.seasonalOffsetDays !== "" && r.seasonalOffsetDays != null ? Number(r.seasonalOffsetDays) : undefined,
         meterValueAtGeneration: r.meterValueAtGeneration !== "" && r.meterValueAtGeneration != null ? Number(r.meterValueAtGeneration) : null,
+        checklistTemplate: (() => { try { return r.checklistTemplate ? JSON.parse(r.checklistTemplate) : undefined; } catch { return undefined; } })(),
+        checklist: (() => { try { return r.checklist ? JSON.parse(r.checklist) : undefined; } catch { return undefined; } })(),
       };
     },
   },
