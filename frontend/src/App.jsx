@@ -6,11 +6,12 @@ import {
   Layers, Search, Boxes, ChevronLeft, Loader2, LogOut, UserPlus, Shield,
   Calendar, FileDown, FileUp, Info, Archive, Download, ExternalLink, ShoppingCart,
   Building2, DoorOpen, Square, Box, Sun, Moon, MonitorSmartphone, QrCode,
-  Gauge, Snowflake, Wand2,
+  Gauge, Snowflake, Wand2, Camera, WifiOff, RefreshCw,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
 import { api } from "./api.js";
+import { queueItem, getQueuedItems, removeQueuedItem, updateQueuedItem } from "./offlineQueue.js";
 
 /* ============================================================
    DESIGN TOKENS
@@ -954,7 +955,7 @@ const PAGE_INFO = {
     purpose: "The inbox for anything in the household that needs attention, before it becomes scheduled work.",
     workflow: "Anyone submits a request describing the issue and when it's needed by; an Owner or Manager reviews it and converts it into a work order, merges it into an existing one, asks for more detail, or declines it.",
     permissions: "Everyone can submit a request and edit their own while it's awaiting review. Owners and Managers can edit or delete any request and can review, convert, merge, or decline.",
-    features: ["Required-by date and priority", "Suggested work order type and suggested parts", "Location hierarchy, priority, and status filters", "Search by title or number"],
+    features: ["Required-by date and priority", "Suggested work order type and suggested parts", "Location hierarchy, priority, and status filters", "Search by title or number", "Attach up to 5 photos when submitting, carried onto the work order once converted", "Works offline — a request submitted with no connection is saved on the device and syncs automatically once you're back online"],
   },
   orders: {
     purpose: "The record of all maintenance work in the household — planned, recurring, and reactive — from the moment it's opened to the moment it's verified done.",
@@ -1123,7 +1124,7 @@ function Sidebar({ tab, setTab, open, role, counts, onNavigate }) {
         })}
       </div>
       <div style={{ padding: 14, borderTop: "1px solid rgba(255,255,255,0.12)", fontFamily: FONT_BODY, fontSize: 11, color: "#8FA0AF" }}>
-        v1.5 · matches the HomeKeep functional spec
+        v1.6 · matches the HomeKeep functional spec
       </div>
     </div>
   );
@@ -1909,6 +1910,60 @@ function PartEditModal({ data, update, part, currentUser, role, onClose, onSaved
   );
 }
 
+// Photo attachments (v1.6). PhotoPicker collects not-yet-uploaded File
+// objects (used while composing a new work request, online or off —
+// upload/queueing happens on submit, not per-photo). AttachmentThumbs
+// renders already-uploaded photos by attachment id, once they exist on
+// the server.
+function PhotoPicker({ files, onChange, maxFiles = 5 }) {
+  const inputRef = useRef(null);
+  const urlsRef = useRef(new Map());
+  useEffect(() => () => { urlsRef.current.forEach((u) => URL.revokeObjectURL(u)); }, []);
+  const urlFor = (file) => {
+    if (!urlsRef.current.has(file)) urlsRef.current.set(file, URL.createObjectURL(file));
+    return urlsRef.current.get(file);
+  };
+  const addFiles = (fileList) => {
+    const incoming = Array.from(fileList || []).filter((f) => f.type.startsWith("image/"));
+    if (incoming.length) onChange([...files, ...incoming].slice(0, maxFiles));
+  };
+  return (
+    <div>
+      {files.length > 0 && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+          {files.map((f, i) => (
+            <div key={i} style={{ position: "relative", width: 60, height: 60 }}>
+              <img src={urlFor(f)} alt="" style={{ width: 60, height: 60, objectFit: "cover", borderRadius: 4, border: `1px solid ${C.line}` }} />
+              <button type="button" onClick={() => onChange(files.filter((_, j) => j !== i))} title="Remove photo"
+                style={{ position: "absolute", top: -6, right: -6, background: C.ink, color: "#fff", border: "none", borderRadius: "50%", width: 18, height: 18, fontSize: 11, lineHeight: "16px", cursor: "pointer" }}>×</button>
+            </div>
+          ))}
+        </div>
+      )}
+      {files.length < maxFiles && (
+        <Btn small variant="ghost" type="button" onClick={() => inputRef.current && inputRef.current.click()}>
+          <Camera size={13} /> Add photo
+        </Btn>
+      )}
+      <input ref={inputRef} type="file" accept="image/*" capture="environment" multiple hidden
+        onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }} />
+    </div>
+  );
+}
+
+function AttachmentThumbs({ ids, size = 56 }) {
+  if (!ids || ids.length === 0) return null;
+  return (
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+      {ids.map((id) => (
+        <a key={id} href={api.attachmentUrl(id)} target="_blank" rel="noreferrer" title="Open full size">
+          <img src={api.attachmentUrl(id)} alt="Attached photo" style={{ width: size, height: size, objectFit: "cover", borderRadius: 4, border: `1px solid ${C.line}`, display: "block" }} />
+        </a>
+      ))}
+    </div>
+  );
+}
+
 function PartsPicker({ data, update, value, onChange, defaultLocationId, currentUser, role }) {
   const [locFilter, setLocFilter] = useState(defaultLocationId || null);
   const [bomFilter, setBomFilter] = useState(null);
@@ -2184,7 +2239,7 @@ function PmBaseFields({ form, setForm, data }) {
   );
 }
 
-function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingFilter, consumeFilter }) {
+function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingFilter, consumeFilter, isOnline, queueWorkRequest }) {
   const dialog = useDialog();
   const closeGuard = useCloseGuard(dialog);
   const [modal, setModal] = useState(null);
@@ -2192,10 +2247,11 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
   const [search, setSearch] = useState("");
   const [priorityFilter, setPriorityFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState(pendingFilter?.status || "all");
-  const blank = { title: "", description: "", assetId: null, bomNodeId: null, locationId: "", priority: "Medium", requiredByDate: "", suggestedType: "Corrective", suggestedParts: [] };
+  const blank = { title: "", description: "", assetId: null, bomNodeId: null, locationId: "", priority: "Medium", requiredByDate: "", suggestedType: "Corrective", suggestedParts: [], photos: [] };
   const [form, setForm] = useState(blank);
   const initial = useRef(null);
   const [reviewForm, setReviewForm] = useState({});
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => { if (pendingFilter) consumeFilter(); }, []); // eslint-disable-line
 
@@ -2214,17 +2270,41 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
   };
   const submitRequest = async () => {
     if (!form.title.trim() || !form.locationId || !form.requiredByDate) { await dialog.alertMsg("Title, location, and a required-by date are required."); return; }
-    update((d) => {
-      d.counters = d.counters || { wo: 0, wr: 0, part: 0 };
-      d.counters.wr += 1;
-      d.workRequests.push({
-        id: uid("wr"), number: d.counters.wr, ...form, title: form.title.trim(),
-        requestedBy: currentUser, dateSubmitted: todayISO(),
-        status: "Submitted", reviewNote: "", workOrderId: null, createdBy: currentUser,
+    const { photos: photoFiles, ...fields } = form;
+    // Offline (or a flaky connection that drops the upload mid-flight):
+    // queue it locally instead of failing the submission outright. The
+    // photos stay as File objects in IndexedDB until sync uploads them —
+    // see offlineQueue.js and HomeKeepApp's syncNow.
+    if (!isOnline) {
+      await queueWorkRequest({ fields, photoFiles, requestedBy: currentUser });
+      setModal(null);
+      await dialog.alertMsg("You're offline — this request is saved on your device and will be submitted automatically once you're back online.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const photoIds = [];
+      for (const file of photoFiles) photoIds.push((await api.uploadAttachment(file)).id);
+      update((d) => {
+        d.counters = d.counters || { wo: 0, wr: 0, part: 0 };
+        d.counters.wr += 1;
+        d.workRequests.push({
+          id: uid("wr"), number: d.counters.wr, ...fields, title: fields.title.trim(), photos: photoIds,
+          requestedBy: currentUser, dateSubmitted: todayISO(),
+          status: "Submitted", reviewNote: "", workOrderId: null, createdBy: currentUser,
+        });
+        return d;
       });
-      return d;
-    });
-    setModal(null);
+      setModal(null);
+    } catch (e) {
+      // Network blip that navigator.onLine didn't catch — fall back to the
+      // offline queue rather than losing the report and its photos.
+      await queueWorkRequest({ fields, photoFiles, requestedBy: currentUser });
+      setModal(null);
+      await dialog.alertMsg("Couldn't reach the server — this request is saved on your device and will be submitted automatically once you're back online.");
+    } finally {
+      setSubmitting(false);
+    }
   };
   const saveEditRequest = async () => {
     if (!form.title.trim() || !form.locationId || !form.requiredByDate) { await dialog.alertMsg("Title, location, and a required-by date are required."); return; }
@@ -2260,7 +2340,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
           description: wr.description, sourceRequestId: wr.id, sourceBenchmarkId: null,
           sourcePmBaseId: null, sourceFixedDate: null, priority: wr.priority || "Medium", executorId: "",
           scheduledDate: "", requiredByDate: "", completedDate: null, verifiedDate: null,
-          cost: "", vendorId: null, notes: "", parts: wr.suggestedParts || [], comments: [], partsDeducted: false, createdBy: currentUser,
+          cost: "", vendorId: null, notes: "", parts: wr.suggestedParts || [], comments: [], photos: wr.photos || [], partsDeducted: false, createdBy: currentUser,
           pmMode: reviewForm.pmMode, triggerType: reviewForm.triggerType || "calendar",
           checklistTemplate: (reviewForm.checklistTemplate || []).map((s) => ({ ...s })),
         };
@@ -2301,7 +2381,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
           sourcePmBaseId: null, sourceFixedDate: null, priority: wr.priority || "Medium", executorId: "",
           scheduledDate: reviewForm.scheduledDate, requiredByDate: reviewForm.requiredByDate || wr.requiredByDate || "",
           completedDate: null, verifiedDate: null, cost: "", vendorId: null,
-          notes: "", parts: wr.suggestedParts || [], comments: [], partsDeducted: false, createdBy: currentUser,
+          notes: "", parts: wr.suggestedParts || [], comments: [], photos: wr.photos || [], partsDeducted: false, createdBy: currentUser,
         });
         const req = d.workRequests.find((r) => r.id === wr.id);
         req.status = "Approved"; req.workOrderId = woId;
@@ -2394,6 +2474,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
                   </div>
                 </div>
                 {wr.description && <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.inkSoft, marginTop: 8 }}>{wr.description}</div>}
+                <AttachmentThumbs ids={wr.photos} />
                 {wr.reviewNote && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.gold, marginTop: 6, fontStyle: "italic" }}>{wr.reviewNote}</div>}
                 {wr.workOrderId && (
                   <div onClick={() => goToOrder(wr.workOrderId)} style={{ marginTop: 8, cursor: "pointer", fontFamily: FONT_BODY, fontSize: 12.5, color: C.navy, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 4 }}>
@@ -2453,9 +2534,21 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
             </Field>
           </div>
           <PartsPicker data={data} update={update} value={form.suggestedParts} onChange={(v) => setForm({ ...form, suggestedParts: v })} defaultLocationId={form.locationId} currentUser={currentUser} role={role} />
+          {modal === "new" && (
+            <Field label="Photos">
+              <PhotoPicker files={form.photos} onChange={(v) => setForm({ ...form, photos: v })} />
+              {!isOnline && (
+                <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: 6, display: "flex", alignItems: "center", gap: 5 }}>
+                  <WifiOff size={12} /> You're offline — this will be saved on your device and submitted automatically once you're back online.
+                </div>
+              )}
+            </Field>
+          )}
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
             <Btn variant="ghost" onClick={() => closeGuard(isDirty, modal === "new" ? submitRequest : saveEditRequest, () => setModal(null))}>Cancel</Btn>
-            <Btn variant="primary" onClick={modal === "new" ? submitRequest : saveEditRequest}>{modal === "new" ? "Submit" : "Save changes"}</Btn>
+            <Btn variant="primary" disabled={submitting} onClick={modal === "new" ? submitRequest : saveEditRequest}>
+              {modal === "new" ? (submitting ? "Submitting…" : isOnline ? "Submit" : "Save offline") : "Save changes"}
+            </Btn>
           </div>
         </Modal>
       )}
@@ -3103,6 +3196,9 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                   )}
                   <PartsPicker data={data} update={update} value={detailEdits.parts || []} onChange={(v) => setDetailEdits({ ...detailEdits, parts: v })} defaultLocationId={openWO.locationId} currentUser={currentUser} role={role} />
                   <Field label="Notes / checklist"><textarea style={{ ...inputStyle, minHeight: 80 }} value={detailEdits.notes || ""} onChange={(e) => setDetailEdits({ ...detailEdits, notes: e.target.value })} /></Field>
+                  {(openWO.photos || []).length > 0 && (
+                    <Field label="Photos"><AttachmentThumbs ids={openWO.photos} /></Field>
+                  )}
                 </>
               ) : (
                 <div style={{ marginBottom: 12 }}>
@@ -3148,6 +3244,12 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                     <div>
                       <div style={{ fontFamily: FONT_BODY, fontSize: 10.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: "0.03em", marginBottom: 4 }}>Notes / checklist</div>
                       <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink }}>{openWO.notes}</div>
+                    </div>
+                  )}
+                  {(openWO.photos || []).length > 0 && (
+                    <div style={{ marginTop: 10 }}>
+                      <div style={{ fontFamily: FONT_BODY, fontSize: 10.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: "0.03em", marginBottom: 4 }}>Photos</div>
+                      <AttachmentThumbs ids={openWO.photos} />
                     </div>
                   )}
                 </div>
@@ -3560,8 +3662,8 @@ const SHEET_SPECS = [
   },
   {
     key: "workRequests", sheetName: "Work Requests", idPrefix: "wr",
-    toRow: (w) => ({ id: w.id, number: w.number || "", title: w.title, description: w.description || "", assetId: w.assetId || "", bomNodeId: w.bomNodeId || "", locationId: w.locationId || "", requestedBy: w.requestedBy || "", dateSubmitted: w.dateSubmitted || "", requiredByDate: w.requiredByDate || "", priority: w.priority || "", suggestedType: w.suggestedType || "", suggestedParts: serializePartsList(w.suggestedParts), status: w.status || "", reviewNote: w.reviewNote || "", workOrderId: w.workOrderId || "", createdBy: w.createdBy || "" }),
-    fromRow: (r) => ({ id: r.id, number: r.number ? Number(r.number) : undefined, title: String(r.title || ""), description: String(r.description || ""), assetId: r.assetId ? String(r.assetId) : null, bomNodeId: r.bomNodeId ? String(r.bomNodeId) : null, locationId: r.locationId ? String(r.locationId) : "", requestedBy: String(r.requestedBy || ""), dateSubmitted: String(r.dateSubmitted || ""), requiredByDate: String(r.requiredByDate || ""), priority: String(r.priority || "Medium"), suggestedType: String(r.suggestedType || "Corrective"), suggestedParts: deserializePartsList(r.suggestedParts), status: String(r.status || "Submitted"), reviewNote: String(r.reviewNote || ""), workOrderId: r.workOrderId ? String(r.workOrderId) : null, createdBy: r.createdBy || null }),
+    toRow: (w) => ({ id: w.id, number: w.number || "", title: w.title, description: w.description || "", assetId: w.assetId || "", bomNodeId: w.bomNodeId || "", locationId: w.locationId || "", requestedBy: w.requestedBy || "", dateSubmitted: w.dateSubmitted || "", requiredByDate: w.requiredByDate || "", priority: w.priority || "", suggestedType: w.suggestedType || "", suggestedParts: serializePartsList(w.suggestedParts), status: w.status || "", reviewNote: w.reviewNote || "", workOrderId: w.workOrderId || "", photos: (w.photos || []).join(","), createdBy: w.createdBy || "" }),
+    fromRow: (r) => ({ id: r.id, number: r.number ? Number(r.number) : undefined, title: String(r.title || ""), description: String(r.description || ""), assetId: r.assetId ? String(r.assetId) : null, bomNodeId: r.bomNodeId ? String(r.bomNodeId) : null, locationId: r.locationId ? String(r.locationId) : "", requestedBy: String(r.requestedBy || ""), dateSubmitted: String(r.dateSubmitted || ""), requiredByDate: String(r.requiredByDate || ""), priority: String(r.priority || "Medium"), suggestedType: String(r.suggestedType || "Corrective"), suggestedParts: deserializePartsList(r.suggestedParts), status: String(r.status || "Submitted"), reviewNote: String(r.reviewNote || ""), workOrderId: r.workOrderId ? String(r.workOrderId) : null, photos: String(r.photos || "").split(",").map((s) => s.trim()).filter(Boolean), createdBy: r.createdBy || null }),
   },
   {
     key: "workOrders", sheetName: "Work Orders", idPrefix: "wo",
@@ -3583,6 +3685,7 @@ const SHEET_SPECS = [
       meterValueAtGeneration: w.meterValueAtGeneration != null ? w.meterValueAtGeneration : "",
       checklistTemplate: (w.checklistTemplate && w.checklistTemplate.length) ? JSON.stringify(w.checklistTemplate) : "",
       checklist: (w.checklist && w.checklist.length) ? JSON.stringify(w.checklist) : "",
+      photos: (w.photos || []).join(","),
     }),
     fromRow: (r) => {
       const fixedDates = String(r.fixedDates || "").split(",").map((s) => s.trim()).filter(Boolean).map((tok) => {
@@ -3615,6 +3718,7 @@ const SHEET_SPECS = [
         meterValueAtGeneration: r.meterValueAtGeneration !== "" && r.meterValueAtGeneration != null ? Number(r.meterValueAtGeneration) : null,
         checklistTemplate: (() => { try { return r.checklistTemplate ? JSON.parse(r.checklistTemplate) : undefined; } catch { return undefined; } })(),
         checklist: (() => { try { return r.checklist ? JSON.parse(r.checklist) : undefined; } catch { return undefined; } })(),
+        photos: String(r.photos || "").split(",").map((s) => s.trim()).filter(Boolean),
       };
     },
   },
@@ -4075,12 +4179,107 @@ export default function HomeKeepApp() {
   };
   const update = (fn) => {
     setDataRaw((prev) => {
+      // Guards a sync-queue flush (below) that can, in principle, land
+      // between login and the first /api/data response — nothing else in
+      // the app calls update() before data has loaded.
+      if (!prev) return prev;
       const next = checkMeterPmTriggers(fn(structuredClone(prev)));
       persist(next);
       return next;
     });
   };
   const logout = async () => { await api.logout().catch(() => {}); setUser(false); setDataRaw(null); };
+
+  /* -----------------------------------------------------------
+     v1.6 — offline work-request queue & sync. A request submitted
+     with no connection (or one whose upload/save fails mid-flight)
+     is written to IndexedDB by WorkRequestsView's queueWorkRequest
+     instead of failing outright; syncNow drains that queue — upload
+     each photo, then create the work request normally — whenever the
+     browser comes back online, on app load, on a "Sync now" click, or
+     every couple of minutes as a fallback for the cases (notably iOS
+     Safari PWAs) where the 'online' event doesn't fire reliably.
+  ----------------------------------------------------------- */
+  const [isOnline, setIsOnline] = useState(() => (typeof navigator === "undefined" ? true : navigator.onLine));
+  const [queueCount, setQueueCount] = useState(0);
+  const [queueFailedCount, setQueueFailedCount] = useState(0);
+  const [syncing, setSyncing] = useState(false);
+  const syncingRef = useRef(false);
+
+  const refreshQueueCounts = async () => {
+    try {
+      const items = await getQueuedItems();
+      setQueueCount(items.length);
+      setQueueFailedCount(items.filter((i) => i.status === "failed").length);
+    } catch (e) {
+      // IndexedDB unavailable (private browsing, very old browser, etc.) —
+      // the offline queue is simply not offered; online submission still
+      // works normally.
+    }
+  };
+
+  const queueWorkRequest = async ({ fields, photoFiles, requestedBy }) => {
+    await queueItem({
+      id: `queued_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      type: "workRequest",
+      form: fields,
+      photos: photoFiles || [],
+      requestedBy,
+      queuedAt: new Date().toISOString(),
+      status: "pending",
+      error: "",
+    });
+    await refreshQueueCounts();
+  };
+
+  const syncNow = async () => {
+    if (syncingRef.current) return;
+    syncingRef.current = true;
+    setSyncing(true);
+    try {
+      const items = await getQueuedItems();
+      for (const item of items) {
+        if (item.type !== "workRequest") continue;
+        try {
+          await updateQueuedItem(item.id, { status: "syncing", error: "" });
+          const photoIds = [];
+          for (const file of item.photos || []) photoIds.push((await api.uploadAttachment(file)).id);
+          update((d) => {
+            d.counters = d.counters || { wo: 0, wr: 0, part: 0 };
+            d.counters.wr += 1;
+            d.workRequests.push({
+              id: uid("wr"), number: d.counters.wr, ...item.form, title: (item.form.title || "").trim(), photos: photoIds,
+              requestedBy: item.requestedBy, dateSubmitted: (item.queuedAt || todayISO()).slice(0, 10),
+              status: "Submitted", reviewNote: "", workOrderId: null, createdBy: item.requestedBy,
+            });
+            return d;
+          });
+          await removeQueuedItem(item.id);
+        } catch (e) {
+          await updateQueuedItem(item.id, { status: "failed", error: (e && e.message) || "Sync failed" });
+        }
+      }
+    } finally {
+      await refreshQueueCounts();
+      setSyncing(false);
+      syncingRef.current = false;
+    }
+  };
+
+  useEffect(() => {
+    const onOnline = () => { setIsOnline(true); syncNow(); };
+    const onOffline = () => setIsOnline(false);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    refreshQueueCounts();
+    if (typeof navigator !== "undefined" && navigator.onLine) syncNow();
+    const interval = setInterval(() => { if (typeof navigator === "undefined" || navigator.onLine) syncNow(); }, 120000);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+      clearInterval(interval);
+    };
+  }, []); // eslint-disable-line
 
   const setTab = (t) => { setTabRaw(t); setOpenOrderId(null); setPendingFilter(null); };
   const applyFilter = (t, filter) => { setTabRaw(t); setOpenOrderId(null); setPendingFilter(filter); };
@@ -4112,7 +4311,7 @@ export default function HomeKeepApp() {
     dashboard: <Dashboard data={data} setTab={setTab} role={role} applyFilter={applyFilter} goToOrder={goToOrder} goToRequest={goToRequest} />,
     locations: <LocationsView data={data} update={update} role={role} />,
     assets: <AssetsView data={data} update={update} role={role} goToOrder={goToOrder} deepLinkAssetId={tab === "assets" ? deepLinkAssetId.current : null} onConsumeDeepLink={consumeDeepLinkAsset} onNewOrderForAsset={goToNewOrderForAsset} />,
-    requests: <WorkRequestsView data={data} update={update} role={role} currentUser={user.username} goToOrder={goToOrder} pendingFilter={tab === "requests" ? pendingFilter : null} consumeFilter={() => setPendingFilter(null)} />,
+    requests: <WorkRequestsView data={data} update={update} role={role} currentUser={user.username} goToOrder={goToOrder} pendingFilter={tab === "requests" ? pendingFilter : null} consumeFilter={() => setPendingFilter(null)} isOnline={isOnline} queueWorkRequest={queueWorkRequest} />,
     orders: <WorkOrdersView data={data} update={update} role={role} currentUser={user.username} currentUserId={user.id} openId={openOrderId} setOpenId={setOpenOrderId} pendingFilter={tab === "orders" ? pendingFilter : null} consumeFilter={() => setPendingFilter(null)} prefillOrder={tab === "orders" ? prefillOrder : null} consumePrefill={() => setPrefillOrder(null)} />,
     schedule: <ScheduleView data={data} role={role} currentUserId={user.id} goToOrder={goToOrder} />,
     vendors: <VendorsView data={data} update={update} role={role} currentUser={user.username} />,
@@ -4136,6 +4335,18 @@ export default function HomeKeepApp() {
             <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
               {installPrompt && (
                 <Btn small variant="ghost" onClick={doInstall}><Download size={13} /> Install app</Btn>
+              )}
+              {!isOnline && (
+                <span title="No connection — work requests you submit will be saved on this device and sync automatically once you're back online" style={{ display: "flex", alignItems: "center", gap: 4, fontFamily: FONT_BODY, fontSize: 11.5, fontWeight: 600, color: C.orange, border: `1px solid ${C.orange}`, borderRadius: 3, padding: "4px 7px" }}>
+                  <WifiOff size={12} /> Offline
+                </span>
+              )}
+              {queueCount > 0 && (
+                <button onClick={syncNow} disabled={syncing || !isOnline} title={!isOnline ? "Will sync once you're back online" : "Sync now"} className="hk-tap"
+                  style={{ display: "flex", alignItems: "center", gap: 5, background: "none", border: `1px solid ${queueFailedCount > 0 ? C.rust : C.line}`, borderRadius: 3, cursor: (syncing || !isOnline) ? "default" : "pointer", color: queueFailedCount > 0 ? C.rust : C.inkSoft, padding: "4px 8px", fontFamily: FONT_BODY, fontSize: 11.5, fontWeight: 600 }}>
+                  <RefreshCw size={12} className={syncing ? "animate-spin" : undefined} />
+                  {queueFailedCount > 0 ? `${queueFailedCount} failed to sync` : `${queueCount} pending sync`}
+                </button>
               )}
               <button onClick={cycleTheme} title={themeLabel} className="hk-tap" style={{ background: "none", border: `1px solid ${C.line}`, borderRadius: 3, cursor: "pointer", color: C.inkSoft, padding: 6, display: "flex", alignItems: "center" }}>
                 {themeIcon}

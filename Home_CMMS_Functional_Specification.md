@@ -100,7 +100,9 @@ Two mechanisms exist for recurring maintenance, at different levels of structure
   - Priority: **High**, **Medium**, or **Low**
   - **Suggested work order type** — the submitter's guess at what kind of work order this should become (PM, PM Base, Benchmark, or Corrective — not Unplanned; see 3.6.2), offered to the reviewer as a starting point during conversion
   - **Suggested parts** — parts from the Parts Catalogue (3.9) the submitter believes will be needed, picked with the same location/BOM-scoped part search used on work orders (3.6.6); carried over automatically if the request is converted
+  - **Photos (optional, up to 5)** — attached from the device's camera or photo library at submission time; carried over automatically if the request is converted into a work order. Stored on the server as files referenced by id, not embedded in the household data
   - Requested-by (auto-filled) and date submitted
+- **Offline submission (v1.6):** submitting a work request works without a connection. If the device is offline — or the submission fails partway through (e.g. a dropped upload) — the request, including its photos, is saved on the device instead of being lost, and a pending-sync count appears in the top bar. It's submitted for real automatically the next time the device is online (detected immediately when possible, checked periodically as a fallback, or triggered manually with a "Sync now" action); a request that fails to sync stays queued and flagged rather than being silently dropped. This applies to Work Requests specifically — the reporting entry point already open to every write-access role — not to direct Work Order creation, which remains an Owner/Manager planning action typically done with a connection.
 - Work request lifecycle: **Submitted → Under Review → Approved (converted to Work Order) / Declined / Merged (duplicate)**
 - Requests land in a review queue visible to Owners and Managers
 - The submitter (or an Owner/Manager) can **edit** a request's fields while it is still Submitted or Under Review; once it's Approved, Declined, or Merged it becomes a locked historical record
@@ -288,6 +290,7 @@ A **PM Base** is a template work order that is never itself scheduled or complet
 - **Asset** (0 or 1) → **Parts** (many, optional link); **BOM Node** (0 or 1) → **Parts** (many, optional link, more specific than Asset)
 - **Household** (1) → **Vendors** (many); **Household** (1) → **Parts** (many)
 - Every Location, Asset, Vendor, Part, Benchmark, Work Request, and Work Order record stores the User who created it, used to scope Manager delete permissions (2)
+- **Attachment** (v1.6) — a stored photo file (id, original filename, MIME type, size, uploader, upload timestamp), kept in its own table/directory rather than in the household JSON document. A **Work Request** (0 or many) → **Attachments**, and its **Work Order** (0 or many) → **Attachments** once converted (carried over by reference, not re-uploaded); the household document itself stores only attachment ids.
 
 ---
 

@@ -1,6 +1,8 @@
 const express = require("express");
 const cookieParser = require("cookie-parser");
 const path = require("path");
+const fs = require("fs");
+const multer = require("multer");
 const { randomUUID } = require("crypto");
 const db = require("./db");
 const SEED = require("./seed");
@@ -9,6 +11,26 @@ const { startNotificationScheduler } = require("./notify");
 
 const app = express();
 const PORT = process.env.PORT || 8040;
+
+// Photo/document attachments (v1.6) — stored on disk under the same
+// mounted-volume DATA_DIR the SQLite file lives in, so they survive
+// container restarts/rebuilds the same way the database does. Only the
+// attachment's id (not the file itself) is ever stored in the household
+// JSON blob — see PUT /api/data's 2mb body limit above, which a photo
+// would blow past in no time if it were embedded inline.
+const ATTACH_DIR = path.join(db.DATA_DIR, "attachments");
+if (!fs.existsSync(ATTACH_DIR)) fs.mkdirSync(ATTACH_DIR, { recursive: true });
+const attachmentUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, ATTACH_DIR),
+    filename: (req, file, cb) => cb(null, randomUUID() + path.extname(file.originalname || "").slice(0, 10)),
+  }),
+  limits: { fileSize: 8 * 1024 * 1024, files: 1 },
+  fileFilter: (req, file, cb) => {
+    if (!/^image\//.test(file.mimetype)) return cb(new Error("Only image attachments are supported"));
+    cb(null, true);
+  },
+});
 
 app.use(express.json({ limit: "2mb" }));
 app.use(cookieParser());
@@ -166,6 +188,44 @@ app.put("/api/data", requireAuth, (req, res) => {
   db.prepare(
     "INSERT INTO household (id, data) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data"
   ).run(JSON.stringify(payload));
+  res.json({ ok: true });
+});
+
+/* -------------------------------------------------------------
+   Photo attachments (v1.6). A work request (or, once synced, a work
+   order carried over from one) references attachments only by id —
+   the JSON household blob never holds raw image data. Upload is
+   multipart/form-data with a single "file" field; everything else
+   here is plain JSON like the rest of the API.
+------------------------------------------------------------- */
+app.post("/api/attachments", requireAuth, (req, res) => {
+  attachmentUpload.single("file")(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message || "Upload failed" });
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+    const id = randomUUID();
+    const uploadedAt = new Date().toISOString();
+    db.prepare(
+      "INSERT INTO attachments (id, filename, stored_name, mime_type, size, uploaded_by, created_at) VALUES (?,?,?,?,?,?,?)"
+    ).run(id, req.file.originalname || req.file.filename, req.file.filename, req.file.mimetype, req.file.size, req.user.username, uploadedAt);
+    res.json({ id, filename: req.file.originalname || req.file.filename, mimeType: req.file.mimetype, size: req.file.size, uploadedBy: req.user.username, uploadedAt });
+  });
+});
+
+app.get("/api/attachments/:id/file", requireAuth, (req, res) => {
+  const row = db.prepare("SELECT * FROM attachments WHERE id = ?").get(req.params.id);
+  if (!row) return res.status(404).json({ error: "Attachment not found" });
+  const filePath = path.join(ATTACH_DIR, row.stored_name);
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: "Attachment file missing on disk" });
+  res.setHeader("Content-Type", row.mime_type || "application/octet-stream");
+  res.setHeader("Cache-Control", "private, max-age=86400");
+  res.sendFile(filePath);
+});
+
+app.delete("/api/attachments/:id", requireAuth, (req, res) => {
+  const row = db.prepare("SELECT * FROM attachments WHERE id = ?").get(req.params.id);
+  if (!row) return res.status(404).json({ error: "Attachment not found" });
+  try { fs.unlinkSync(path.join(ATTACH_DIR, row.stored_name)); } catch (e) { /* already gone — fine */ }
+  db.prepare("DELETE FROM attachments WHERE id = ?").run(req.params.id);
   res.json({ ok: true });
 });
 

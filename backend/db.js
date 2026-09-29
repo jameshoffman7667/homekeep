@@ -58,6 +58,16 @@ db.exec(`
     id INTEGER PRIMARY KEY CHECK (id = 1),
     data TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS attachments (
+    id TEXT PRIMARY KEY,
+    filename TEXT NOT NULL,
+    stored_name TEXT NOT NULL,
+    mime_type TEXT,
+    size INTEGER,
+    uploaded_by TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `);
 
 // Safety net: covers a table that already had the new constraint but
@@ -83,4 +93,8 @@ try {
   console.error("[homekeep] notification-columns migration failed:", e.message);
 }
 
+// Exposed so server.js can put uploaded attachment files under the same
+// mounted-volume root the database itself lives in (DATA_DIR), without
+// duplicating the env-var-vs-default logic above.
 module.exports = db;
+module.exports.DATA_DIR = DATA_DIR;

@@ -44,4 +44,24 @@ export const api = {
 
   getData: () => request("/api/data"),
   saveData: (data) => request("/api/data", { method: "PUT", body: JSON.stringify(data) }),
+
+  // Attachments (v1.6). Upload is multipart — deliberately not run through
+  // request() above, since that helper always sets a JSON Content-Type and
+  // JSON.stringify's the body; a FormData body needs the browser to set
+  // its own multipart boundary header instead.
+  uploadAttachment: async (file) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch(withBase("/api/attachments"), { method: "POST", credentials: "include", body: fd });
+    let body = null;
+    try { body = await res.json(); } catch (e) { body = null; }
+    if (!res.ok) {
+      const err = new Error((body && body.error) || `Upload failed (${res.status})`);
+      err.status = res.status;
+      throw err;
+    }
+    return body;
+  },
+  attachmentUrl: (id) => withBase(`/api/attachments/${id}/file`),
+  deleteAttachment: (id) => request(`/api/attachments/${id}`, { method: "DELETE" }),
 };

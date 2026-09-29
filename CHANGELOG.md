@@ -18,6 +18,31 @@ the Git commit's summary line) and a **Commit extended description**
 
 ---
 
+## v1.6
+
+**Commit short description:** `v1.6: Offline work-request sync + photos`
+
+**Commit extended description:**
+v1.6 is the fourth of five "Bigger bets" releases, and the first to
+touch the backend. Work requests can now carry up to 5 photos,
+attached from the phone's camera or library — a new `/api/attachments`
+endpoint stores them on disk (under the same mounted data volume as
+the SQLite database) and the household JSON blob only ever references
+their ids, never the image bytes. More importantly, submitting a work
+request now works with no connection at all: if the app is offline (or
+a submission's upload fails partway through), the request and its
+photos are saved to the device via IndexedDB instead of being lost,
+and a "N pending sync" indicator appears in the top bar. Once the
+device is back online — detected automatically, or via a manual "Sync
+now" click — each queued request is uploaded and submitted for real,
+in order, with failures kept in the queue (flagged in red) for the
+next sync attempt rather than silently dropped. This is scoped to Work
+Requests specifically (the entry point every household role, not just
+Owners/Managers, already uses to report something that needs
+attention) rather than direct Work Order creation, which stays an
+Owner/Manager planning action; photos carry over automatically if a
+request is later converted into a work order.
+
 ## v1.5
 
 **Commit short description:** `v1.5: Address/climate-seeded PM wizard`

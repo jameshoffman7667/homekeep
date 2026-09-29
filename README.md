@@ -307,8 +307,10 @@ without router configuration or a reverse proxy of your own. Set
 
 ## 9. Data & backups
 
-All data lives in the `homekeep_data` Docker volume (a single SQLite
-file). To back it up:
+All data lives in the `homekeep_data` Docker volume — the SQLite
+database plus, as of v1.6, an `attachments/` folder of uploaded work
+request photos. The command below backs up the whole volume, so both
+are covered automatically:
 
 ```bash
 docker run --rm -v homekeep_homekeep_data:/data -v "$PWD":/backup \
@@ -323,7 +325,9 @@ the container.
 
 HomeKeep also has its own in-app backup, independent of the above: as
 an Owner, use **Owner Tools → Backup & bulk edit** to export the whole
-household to an Excel file, or re-import one.
+household to an Excel file, or re-import one. Note that this only
+carries attachment *ids*, not the photo files themselves (see v1.6
+above) — the volume-level backup is what covers the actual images.
 
 ## 10. Updating
 
@@ -365,8 +369,21 @@ The database volume is untouched by any of the above.
   digest (v1.2, requires SMTP configuration — see Section 6) — no push
   or SMS yet. Adding push notifications would mean integrating a
   service like Firebase Cloud Messaging for the Android PWA.
-- **Offline support** is limited to the app shell loading while
-  offline; work order/request data still requires a live connection.
+- **Offline support (v1.6)** covers the app shell (loads while offline)
+  plus submitting a **Work Request** with photos while offline — it's
+  saved on the device and synced automatically once you're back
+  online. Everything else (Work Orders, Assets, Locations, Parts, etc.)
+  still requires a live connection to view or edit; direct Work Order
+  creation (an Owner/Manager action) isn't queued for offline use.
+  Sync is triggered by the browser's online/offline events, on app
+  load, a manual "Sync now" click, and a 2-minute fallback check — not
+  the Background Sync API, which isn't supported everywhere (notably
+  iOS Safari), so a sync can be a little delayed if the app isn't open
+  when connectivity returns.
+- **Photo attachments (v1.6)** are capped at 5 per work request, 8MB
+  and images only per file, stored as plain files under `DATA_DIR`
+  (see Section 9) — back up that whole directory, not just the SQLite
+  file, if you want photos included in your backups.
 - There isn't a calendar-export (ICS) feature yet.
 - **Seasonal PM triggers** (v1.3) use fixed Northern Hemisphere
   meteorological season boundaries (Mar 1 / Jun 1 / Sep 1 / Dec 1)
