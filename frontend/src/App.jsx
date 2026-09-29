@@ -7,6 +7,7 @@ import {
   Calendar, FileDown, FileUp, Info, Archive, Download, ExternalLink, ShoppingCart,
   Building2, DoorOpen, Square, Box, Sun, Moon, MonitorSmartphone, QrCode,
   Gauge, Snowflake, Wand2, Camera, WifiOff, RefreshCw,
+  Siren, Key, Copy, Eye, EyeOff, Link2,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
@@ -999,6 +1000,12 @@ const PAGE_INFO = {
     permissions: "Owners and Managers only.",
     features: ["Grouped by work order", "Shows quantity needed, on hand, and the shortfall to buy", "Click through to the work order"],
   },
+  alarms: {
+    purpose: "A queue for sensor-triggered alerts pushed in from Home Assistant — a leak, a smoke/CO alarm, a freezer running warm — upstream of Work Requests, since not every sensor trip should become a work item.",
+    workflow: "Home Assistant does its own threshold/debounce/duration logic and POSTs to HomeKeep's webhook only when it decides something's actually wrong. Each alarm can be acknowledged as a false alarm (with a reason, to help tune noisy sensors), turned into a new Work Request, or linked onto an existing Work Order as evidence.",
+    permissions: "Owners and Managers only. The webhook API key and sensor-to-asset mappings are configured here too.",
+    features: ["Open queue sorted by severity and age, plus a resolved/false-alarm history", "Acknowledge as false alarm, create Work Request, or link to an existing Work Order", "Entity-to-asset/location mapping so a repeat alert from the same sensor auto-links", "Webhook URL and API key, with a Home Assistant rest_command example", "Source-agnostic design — 'home_assistant' today, room for other push sources later"],
+  },
 };
 
 /* ============================================================
@@ -1083,6 +1090,7 @@ const NAV = [
   { id: "parts", label: "Parts Catalogue", icon: Package },
   { id: "budget", label: "Budget", icon: DollarSign },
   { id: "purchasing", label: "Purchasing", icon: ShoppingCart, adminOnly: true },
+  { id: "alarms", label: "Alarms", icon: Siren, adminOnly: true },
   { id: "owner", label: "Owner Tools", icon: Shield, ownerOnly: true },
 ];
 
@@ -1124,7 +1132,7 @@ function Sidebar({ tab, setTab, open, role, counts, onNavigate }) {
         })}
       </div>
       <div style={{ padding: 14, borderTop: "1px solid rgba(255,255,255,0.12)", fontFamily: FONT_BODY, fontSize: 11, color: "#8FA0AF" }}>
-        v1.6 · matches the HomeKeep functional spec
+        v1.7 · matches the HomeKeep functional spec
       </div>
     </div>
   );
@@ -4057,6 +4065,308 @@ function PurchasingView({ data, goToOrder }) {
   );
 }
 
+const ALARM_SEVERITY_LABELS = { critical: "Critical", warning: "Warning", info: "Info" };
+
+function AlarmsView({ data, update, role, currentUser, onAlarmsChanged }) {
+  const dialog = useDialog();
+  const [tab, setTab] = useState("open");
+  const [alarms, setAlarms] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [mappings, setMappings] = useState([]);
+  const [showSetup, setShowSetup] = useState(false);
+  const [webhookKey, setWebhookKey] = useState(null);
+  const [showKey, setShowKey] = useState(false);
+  const [modal, setModal] = useState(null);
+  const [actionForm, setActionForm] = useState({});
+  const [mapForm, setMapForm] = useState(null);
+
+  const load = () => {
+    setLoading(true);
+    api.listAlarms().then((rows) => { setAlarms(rows); setLoading(false); }).catch(() => setLoading(false));
+  };
+  useEffect(() => { load(); api.listAlarmMappings().then(setMappings).catch(() => setMappings([])); }, []); // eslint-disable-line
+  useEffect(() => { if (role === "Owner") api.getWebhookKey().then((r) => setWebhookKey(r.key)).catch(() => {}); }, [role]);
+
+  const afterChange = () => { load(); onAlarmsChanged && onAlarmsChanged(); };
+
+  const SEVERITY_ORDER = { critical: 0, warning: 1, info: 2 };
+  const SEVERITY_COLORS = { critical: C.rust, warning: C.orange, info: C.navy };
+  const openAlarms = alarms.filter((a) => a.status === "open")
+    .sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 1) - (SEVERITY_ORDER[b.severity] ?? 1) || (b.triggeredAt || "").localeCompare(a.triggeredAt || ""));
+  const historyAlarms = alarms.filter((a) => a.status !== "open")
+    .sort((a, b) => (b.resolvedAt || b.triggeredAt || "").localeCompare(a.resolvedAt || a.triggeredAt || ""));
+  const shown = tab === "open" ? openAlarms : historyAlarms;
+
+  const openWOOptions = data.workOrders.filter((w) => w.status !== "Completed" && w.status !== "Verified" && w.type !== "PM Base");
+
+  const openAction = (action, alarm) => {
+    setActionForm({
+      reason: "",
+      title: alarm.friendlyName || alarm.message || "Sensor alert",
+      description: alarm.message || "",
+      locationId: alarm.locationId || data.locations[0]?.id || "",
+      assetId: alarm.assetId || null,
+      priority: alarm.severity === "critical" ? "High" : alarm.severity === "info" ? "Low" : "Medium",
+      requiredByDate: todayISO(),
+      mergeInto: "",
+    });
+    setModal({ action, alarm });
+  };
+
+  const doAcknowledgeFalse = async () => {
+    if (!actionForm.reason.trim()) { await dialog.alertMsg("A reason is required."); return; }
+    await api.updateAlarm(modal.alarm.id, { status: "acknowledged_false", resolutionReason: actionForm.reason.trim() });
+    setModal(null);
+    afterChange();
+  };
+  const doCreateRequest = async () => {
+    if (!actionForm.title.trim() || !actionForm.locationId) { await dialog.alertMsg("Title and location are required."); return; }
+    const alarm = modal.alarm;
+    const newId = uid("wr");
+    update((d) => {
+      d.counters = d.counters || { wo: 0, wr: 0, part: 0 };
+      d.counters.wr += 1;
+      d.workRequests.push({
+        id: newId, number: d.counters.wr, title: actionForm.title.trim(), description: actionForm.description || "",
+        assetId: actionForm.assetId || null, bomNodeId: null, locationId: actionForm.locationId,
+        priority: actionForm.priority || "Medium", requiredByDate: actionForm.requiredByDate || todayISO(),
+        suggestedType: "Corrective", suggestedParts: [], photos: [],
+        requestedBy: currentUser, dateSubmitted: todayISO(),
+        status: "Submitted", reviewNote: `From alarm: ${alarm.message || alarm.friendlyName || alarm.sourceEntityId || ""}`.trim(),
+        workOrderId: null, createdBy: currentUser,
+      });
+      return d;
+    });
+    await api.updateAlarm(alarm.id, { status: "linked_to_work_request", resolutionType: "work_request", resolutionRef: newId });
+    setModal(null);
+    afterChange();
+  };
+  const doLinkWO = async () => {
+    if (!actionForm.mergeInto) { await dialog.alertMsg("Choose a work order."); return; }
+    await api.updateAlarm(modal.alarm.id, { status: "linked_to_work_order", resolutionType: "work_order", resolutionRef: actionForm.mergeInto });
+    setModal(null);
+    afterChange();
+  };
+
+  const openMapForm = (m) => setMapForm(m ? { ...m } : { entityId: "", assetId: "", locationId: "", label: "" });
+  const isEditingMap = mapForm && mappings.some((m) => m.entityId === mapForm.entityId);
+  const saveMap = async () => {
+    if (!mapForm.entityId.trim()) { await dialog.alertMsg("An entity id is required."); return; }
+    const saved = await api.saveAlarmMapping(mapForm.entityId.trim(), { assetId: mapForm.assetId || null, locationId: mapForm.locationId || null, label: mapForm.label || "" });
+    setMappings((prev) => [...prev.filter((m) => m.entityId !== saved.entityId), saved].sort((a, b) => a.entityId.localeCompare(b.entityId)));
+    setMapForm(null);
+  };
+  const deleteMap = async (entityId) => {
+    const ok = await dialog.confirm(`Remove the mapping for "${entityId}"?`);
+    if (!ok) return;
+    await api.deleteAlarmMapping(entityId);
+    setMappings((prev) => prev.filter((m) => m.entityId !== entityId));
+  };
+  const regenerateKey = async () => {
+    const ok = await dialog.confirm("Regenerate the webhook API key? Any Home Assistant automation using the old key will stop working until it's updated there too.");
+    if (!ok) return;
+    const r = await api.regenerateWebhookKey();
+    setWebhookKey(r.key);
+  };
+  const copyText = async (text) => { try { await navigator.clipboard.writeText(text); } catch (e) { /* no clipboard access — nothing to fall back to */ } };
+
+  return (
+    <div>
+      <SectionHeader
+        title="Alarms"
+        subtitle="Sensor-triggered alerts pushed in from Home Assistant, upstream of Work Requests."
+        info={PAGE_INFO.alarms}
+        action={isAdmin(role) && <Btn small variant="ghost" onClick={() => setShowSetup((s) => !s)}><Key size={13} /> Webhook & sensor setup</Btn>}
+      />
+
+      {showSetup && isAdmin(role) && (
+        <Panel style={{ padding: 16, marginBottom: 16 }}>
+          {role === "Owner" && (
+            <>
+              <div style={{ fontFamily: FONT_HEAD, fontSize: 13.5, fontWeight: 600, color: C.ink, marginBottom: 10 }}>Home Assistant webhook</div>
+              <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
+                <div>
+                  <div style={{ fontFamily: FONT_BODY, fontSize: 10.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: "0.03em", marginBottom: 4 }}>Webhook URL</div>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <code style={{ fontFamily: "monospace", fontSize: 11.5, color: C.ink, background: C.panelAlt, padding: "5px 8px", borderRadius: 3, overflowX: "auto", whiteSpace: "nowrap", flex: 1 }}>{api.webhookUrl()}</code>
+                    <button onClick={() => copyText(api.webhookUrl())} title="Copy" className="hk-tap" style={{ background: "none", border: `1px solid ${C.line}`, borderRadius: 3, cursor: "pointer", color: C.inkSoft, padding: 6 }}><Copy size={13} /></button>
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontFamily: FONT_BODY, fontSize: 10.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: "0.03em", marginBottom: 4 }}>API key</div>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <code style={{ fontFamily: "monospace", fontSize: 11.5, color: C.ink, background: C.panelAlt, padding: "5px 8px", borderRadius: 3, overflowX: "auto", whiteSpace: "nowrap", flex: 1 }}>
+                      {webhookKey ? (showKey ? webhookKey : "•".repeat(24)) : "loading…"}
+                    </code>
+                    <button onClick={() => setShowKey((s) => !s)} title={showKey ? "Hide" : "Reveal"} className="hk-tap" style={{ background: "none", border: `1px solid ${C.line}`, borderRadius: 3, cursor: "pointer", color: C.inkSoft, padding: 6 }}>{showKey ? <EyeOff size={13} /> : <Eye size={13} />}</button>
+                    <button onClick={() => webhookKey && copyText(webhookKey)} title="Copy" className="hk-tap" style={{ background: "none", border: `1px solid ${C.line}`, borderRadius: 3, cursor: "pointer", color: C.inkSoft, padding: 6 }}><Copy size={13} /></button>
+                  </div>
+                  <Btn small variant="ghost" onClick={regenerateKey}>Regenerate</Btn>
+                </div>
+              </div>
+              <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginBottom: 8 }}>
+                POST a JSON body with header <code>X-Api-Key</code> (or <code>Authorization: Bearer …</code>). Fields: <code>entity_id</code>, <code>friendly_name</code>, <code>state</code>, <code>attributes</code>, <code>message</code>, <code>severity</code> (info/warning/critical, defaults to warning), <code>timestamp</code> — only <code>entity_id</code> or <code>message</code> is required. Example Home Assistant <code>rest_command</code>:
+              </div>
+              <pre style={{ fontFamily: "monospace", fontSize: 11, color: C.ink, background: C.panelAlt, padding: 10, borderRadius: 4, overflowX: "auto", marginBottom: 16 }}>
+{`rest_command:
+  homekeep_alarm:
+    url: "${api.webhookUrl()}"
+    method: POST
+    headers:
+      X-Api-Key: "<your key>"
+    content_type: "application/json"
+    payload: >
+      {"entity_id": "{{ entity_id }}", "friendly_name": "{{ friendly_name }}",
+       "state": "{{ state }}", "severity": "warning",
+       "message": "{{ friendly_name }} reads {{ state }}"}`}
+              </pre>
+            </>
+          )}
+          <div style={{ fontFamily: FONT_HEAD, fontSize: 13.5, fontWeight: 600, color: C.ink, marginBottom: 6 }}>Sensor mappings</div>
+          <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginBottom: 10 }}>Map an HA entity id to an asset/location so alerts from it arrive already linked, instead of unassigned.</div>
+          {mappings.length === 0 && <Empty text="No sensor mappings yet." />}
+          {mappings.map((m) => (
+            <div key={m.entityId} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderTop: `1px solid ${C.lineSoft}` }}>
+              <div>
+                <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, fontWeight: 600, color: C.ink }}>{m.entityId}{m.label ? ` · ${m.label}` : ""}</div>
+                <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint }}>
+                  {m.assetId ? nameOf(data.assets, m.assetId) : "no asset"}{m.locationId ? ` · ${locationPath(data.locations, m.locationId)}` : ""}
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <Btn small variant="ghost" onClick={() => openMapForm(m)}><Pencil size={12} /></Btn>
+                <Btn small variant="danger" onClick={() => deleteMap(m.entityId)}><Trash2 size={12} /></Btn>
+              </div>
+            </div>
+          ))}
+          <Btn small variant="ghost" onClick={() => openMapForm(null)} style={{ marginTop: 10 }}><Plus size={13} /> Add mapping</Btn>
+        </Panel>
+      )}
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+        <Btn small variant={tab === "open" ? "primary" : "ghost"} onClick={() => setTab("open")}>Open ({openAlarms.length})</Btn>
+        <Btn small variant={tab === "history" ? "primary" : "ghost"} onClick={() => setTab("history")}>History</Btn>
+      </div>
+
+      <Panel>
+        {loading && <div style={{ padding: 20 }}><Loader2 className="animate-spin" size={16} color={C.inkSoft} /></div>}
+        {!loading && shown.length === 0 && <Empty text={tab === "open" ? "No open alarms." : "No resolved alarms yet."} />}
+        {!loading && shown.map((a) => (
+          <div key={a.id} style={{ padding: "14px 18px", borderTop: `1px solid ${C.lineSoft}` }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontFamily: FONT_BODY, fontSize: 14, fontWeight: 700, color: C.ink }}>{a.message || a.friendlyName || "Sensor alert"}</div>
+                <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint, marginTop: 2 }}>
+                  {a.sourceEntityId ? `${a.sourceEntityId} · ` : ""}
+                  {a.assetId ? `${nameOf(data.assets, a.assetId)} · ` : ""}
+                  {a.locationId ? `${locationPath(data.locations, a.locationId)} · ` : ""}
+                  {fmtDate((a.triggeredAt || "").slice(0, 10))}
+                </div>
+              </div>
+              <Tag text={ALARM_SEVERITY_LABELS[a.severity] || a.severity} color={SEVERITY_COLORS[a.severity] || C.navy} soft={C.panelAlt} />
+            </div>
+            {tab === "open" && (
+              <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                <Btn small variant="primary" onClick={() => openAction("convert", a)}><Plus size={12} /> Create work request</Btn>
+                <Btn small variant="ghost" onClick={() => openAction("link", a)}><Link2 size={12} /> Link to work order</Btn>
+                <Btn small variant="danger" onClick={() => openAction("false", a)}>Acknowledge as false</Btn>
+              </div>
+            )}
+            {tab === "history" && (
+              <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint, marginTop: 8 }}>
+                {a.status === "acknowledged_false" && `Acknowledged as false alarm${a.resolutionReason ? `: ${a.resolutionReason}` : ""}`}
+                {a.status === "linked_to_work_request" && "Linked to a work request"}
+                {a.status === "linked_to_work_order" && "Linked to a work order"}
+              </div>
+            )}
+          </div>
+        ))}
+      </Panel>
+
+      {modal && modal.action === "false" && (
+        <Modal title="Acknowledge as false alarm" onClose={() => setModal(null)}>
+          <Field label="Reason (helps tune this sensor later)" required>
+            <textarea style={{ ...inputStyle, minHeight: 70 }} value={actionForm.reason} onChange={(e) => setActionForm({ ...actionForm, reason: e.target.value })} autoFocus />
+          </Field>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <Btn variant="ghost" onClick={() => setModal(null)}>Cancel</Btn>
+            <Btn variant="danger" onClick={doAcknowledgeFalse}>Acknowledge as false</Btn>
+          </div>
+        </Modal>
+      )}
+      {modal && modal.action === "convert" && (
+        <Modal title="Create a work request from this alarm" onClose={() => setModal(null)} wide>
+          <Field label="Title" required><input style={inputStyle} value={actionForm.title} onChange={(e) => setActionForm({ ...actionForm, title: e.target.value })} autoFocus /></Field>
+          <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 60 }} value={actionForm.description} onChange={(e) => setActionForm({ ...actionForm, description: e.target.value })} /></Field>
+          <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <Field label="Location" required>
+              <select style={inputStyle} value={actionForm.locationId} onChange={(e) => setActionForm({ ...actionForm, locationId: e.target.value })}>
+                {flattenTree(data.locations, "parentId", null).map(({ item, depth }) => (
+                  <option key={item.id} value={item.id}>{"—".repeat(depth) + " " + item.name}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Priority">
+              <select style={inputStyle} value={actionForm.priority} onChange={(e) => setActionForm({ ...actionForm, priority: e.target.value })}>
+                {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </Field>
+          </div>
+          <Field label="Required by"><input type="date" style={inputStyle} value={actionForm.requiredByDate} onChange={(e) => setActionForm({ ...actionForm, requiredByDate: e.target.value })} /></Field>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <Btn variant="ghost" onClick={() => setModal(null)}>Cancel</Btn>
+            <Btn variant="primary" onClick={doCreateRequest}>Create work request</Btn>
+          </div>
+        </Modal>
+      )}
+      {modal && modal.action === "link" && (
+        <Modal title="Link to an existing work order" onClose={() => setModal(null)}>
+          <Field label="Work order" required>
+            <select style={inputStyle} value={actionForm.mergeInto} onChange={(e) => setActionForm({ ...actionForm, mergeInto: e.target.value })}>
+              <option value="">— choose —</option>
+              {openWOOptions.map((w) => <option key={w.id} value={w.id}>{formatWoNum(w.number)} · {w.title} ({w.type})</option>)}
+            </select>
+          </Field>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <Btn variant="ghost" onClick={() => setModal(null)}>Cancel</Btn>
+            <Btn variant="primary" onClick={doLinkWO}>Link</Btn>
+          </div>
+        </Modal>
+      )}
+      {mapForm && (
+        <Modal title={isEditingMap ? "Edit sensor mapping" : "Add sensor mapping"} onClose={() => setMapForm(null)}>
+          <Field label="Entity id" required>
+            <input style={inputStyle} value={mapForm.entityId} onChange={(e) => setMapForm({ ...mapForm, entityId: e.target.value })} placeholder="e.g. binary_sensor.basement_leak" autoFocus disabled={isEditingMap} />
+          </Field>
+          <Field label="Label (optional)"><input style={inputStyle} value={mapForm.label} onChange={(e) => setMapForm({ ...mapForm, label: e.target.value })} placeholder="e.g. Basement leak sensor" /></Field>
+          <Field label="Asset (optional)">
+            <select style={inputStyle} value={mapForm.assetId || ""} onChange={(e) => {
+              const assetId = e.target.value || "";
+              const asset = data.assets.find((a) => a.id === assetId);
+              setMapForm({ ...mapForm, assetId: assetId || null, locationId: asset ? asset.locationId : mapForm.locationId });
+            }}>
+              <option value="">— none —</option>
+              {data.assets.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Location (optional)">
+            <select style={inputStyle} value={mapForm.locationId || ""} onChange={(e) => setMapForm({ ...mapForm, locationId: e.target.value || null })}>
+              <option value="">— none —</option>
+              {flattenTree(data.locations, "parentId", null).map(({ item, depth }) => (
+                <option key={item.id} value={item.id}>{"—".repeat(depth) + " " + item.name}</option>
+              ))}
+            </select>
+          </Field>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <Btn variant="ghost" onClick={() => setMapForm(null)}>Cancel</Btn>
+            <Btn variant="primary" onClick={saveMap}>Save</Btn>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 function OwnerToolsView({ data, update, currentUser }) {
   return (
     <div>
@@ -4281,6 +4591,33 @@ export default function HomeKeepApp() {
     };
   }, []); // eslint-disable-line
 
+  /* -----------------------------------------------------------
+     v1.7 — open-alarm count for the sidebar badge. Alarms live in
+     their own SQL table (see AlarmsView), not the household JSON
+     blob, so they need their own fetch/poll rather than piggybacking
+     on `data`. Polling (not push) is the honest option here: Home
+     Assistant pushes to the *server*, but the browser has no
+     websocket/SSE channel to be pushed to in turn, so a new alarm
+     is only reflected here once this poll — or AlarmsView's own
+     refresh after an action — picks it up.
+  ----------------------------------------------------------- */
+  const [openAlarmCount, setOpenAlarmCount] = useState(0);
+  // Deliberately keyed off `user.role` rather than the `role` const
+  // declared further below (after this component's early returns) —
+  // a closure created on a render that bails out early (e.g. while
+  // `data` is still loading) would otherwise capture an uninitialized
+  // `role` binding and throw when this effect later fires.
+  const refreshAlarmCount = () => {
+    if (!user || !isAdmin(user.role)) return;
+    api.listAlarms("open").then((rows) => setOpenAlarmCount(rows.length)).catch(() => {});
+  };
+  useEffect(() => {
+    if (!user || !isAdmin(user.role)) return;
+    refreshAlarmCount();
+    const interval = setInterval(refreshAlarmCount, 30000);
+    return () => clearInterval(interval);
+  }, [user]); // eslint-disable-line
+
   const setTab = (t) => { setTabRaw(t); setOpenOrderId(null); setPendingFilter(null); };
   const applyFilter = (t, filter) => { setTabRaw(t); setOpenOrderId(null); setPendingFilter(filter); };
   const goToOrder = (id) => { setTabRaw("orders"); setOpenOrderId(id); setPendingFilter(null); };
@@ -4305,6 +4642,7 @@ export default function HomeKeepApp() {
   const counts = {
     requests: data.workRequests.filter((w) => w.status === "Submitted" || w.status === "Under Review").length,
     orders: data.workOrders.filter((w) => w.status === "Open" || w.status === "In Progress").length,
+    alarms: openAlarmCount,
   };
 
   const views = {
@@ -4318,6 +4656,7 @@ export default function HomeKeepApp() {
     parts: <PartsView data={data} update={update} role={role} currentUser={user.username} />,
     budget: <BudgetView data={data} />,
     purchasing: isAdmin(role) ? <PurchasingView data={data} goToOrder={goToOrder} /> : <Dashboard data={data} setTab={setTab} role={role} applyFilter={applyFilter} goToOrder={goToOrder} goToRequest={goToRequest} />,
+    alarms: isAdmin(role) ? <AlarmsView data={data} update={update} role={role} currentUser={user.username} onAlarmsChanged={refreshAlarmCount} /> : <Dashboard data={data} setTab={setTab} role={role} applyFilter={applyFilter} goToOrder={goToOrder} goToRequest={goToRequest} />,
     owner: role === "Owner" ? <OwnerToolsView data={data} update={update} currentUser={user} /> : <Dashboard data={data} setTab={setTab} role={role} applyFilter={applyFilter} goToOrder={goToOrder} goToRequest={goToRequest} />,
   };
 

@@ -68,6 +68,50 @@ db.exec(`
     uploaded_by TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
+
+  -- v1.7: small key/value store for things that aren't per-household
+  -- application data (the JSON blob) or a user account — currently just
+  -- the Home Assistant webhook's API key.
+  CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
+  );
+
+  -- v1.7: which HA entity id maps to which asset/location, so a repeat
+  -- alert from the same sensor auto-links without re-entering it. Kept
+  -- relational (not in the household JSON blob) since it's looked up on
+  -- every inbound webhook hit, independent of the app's own save cycle.
+  CREATE TABLE IF NOT EXISTS alarm_entity_map (
+    entity_id TEXT PRIMARY KEY,
+    asset_id TEXT,
+    location_id TEXT,
+    label TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- v1.7: the alarm queue itself, upstream of the Work Request queue —
+  -- not every sensor trip should become a work item. Relational for the
+  -- same reason as attachments/alarm_entity_map: written by an inbound
+  -- webhook that has no business going through the app's household-blob
+  -- save cycle.
+  CREATE TABLE IF NOT EXISTS alarms (
+    id TEXT PRIMARY KEY,
+    source TEXT NOT NULL DEFAULT 'home_assistant',
+    source_entity_id TEXT,
+    friendly_name TEXT,
+    asset_id TEXT,
+    location_id TEXT,
+    message TEXT,
+    severity TEXT NOT NULL DEFAULT 'warning',
+    status TEXT NOT NULL DEFAULT 'open',
+    resolution_type TEXT,
+    resolution_ref TEXT,
+    resolution_reason TEXT,
+    raw_payload TEXT,
+    triggered_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    resolved_at TEXT
+  );
 `);
 
 // Safety net: covers a table that already had the new constraint but

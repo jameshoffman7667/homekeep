@@ -30,13 +30,13 @@ This document defines the functional requirements for a Computerized Maintenance
 | Role | Description | Permissions |
 |---|---|---|
 | **Owner** | Primary household member(s) who set up the system | Full access everywhere, including Owner Tools (account management, backups, record deletion). Can delete any record. |
-| **Manager** | A trusted household member given elevated rights short of full ownership | Same rights as Owner everywhere *except*: no access to the Owner Tools page, and can only delete records they personally created (an Owner can still delete anything a Manager created). |
+| **Manager** | A trusted household member given elevated rights short of full ownership | Same rights as Owner everywhere *except*: no access to the Owner Tools page, can only delete records they personally created (an Owner can still delete anything a Manager created), and — on the Alarms tab (3.14) — can manage sensor mappings but cannot view or regenerate the webhook API key. |
 | **Executor** | The household member(s) who actually do the work (residents, family members) | View everything; submit and edit their own work requests while pending; create new work orders. On an existing work order, can only change its status (except Verified) and add comments — every other field is read-only. Cannot verify a work order, delete records, manage accounts, or review/convert requests. |
 | **Guest** | Read-only access for anyone who shouldn't make changes | Can view every page but cannot create, edit, delete, or submit anything. |
 
 Notes:
 - "Household Member" was the working name for this role in earlier drafts; it is now called **Executor** to better describe what the role does.
-- Role changes and account creation/removal are performed by an Owner from the Owner Tools page (see 3.14).
+- Role changes and account creation/removal are performed by an Owner from the Owner Tools page (see 3.16).
 - Authentication is username/password based, scoped to a single household per deployment.
 
 ---
@@ -111,7 +111,7 @@ Two mechanisms exist for recurring maintenance, at different levels of structure
   - **Decline:** with a required reason/comment, visible to the submitter
   - **Merge:** link the request to an existing open work order instead of creating a new one
   - **Request more info:** send the request back to the submitter with a comment, without declining it
-- Owners and Managers can delete any work request; a Manager's delete rights are additionally limited to requests they created themselves once an Owner exists to grant broader rights (see 2). Deletion is available both directly from the request and via search-by-number on the Owner Tools page (3.14)
+- Owners and Managers can delete any work request; a Manager's delete rights are additionally limited to requests they created themselves once an Owner exists to grant broader rights (see 2). Deletion is available both directly from the request and via search-by-number on the Owner Tools page (3.16)
 - Executors see and can act on their own submitted requests; Owners and Managers see and can act on all of them
 - The Work Requests page supports search by title or number, and filters for location (hierarchy), priority, and review status (all / awaiting review)
 - Full history of requests retained, including declined/merged ones, for reference
@@ -239,14 +239,29 @@ A **PM Base** is a template work order that is never itself scheduled or complet
 - Filterable by location hierarchy and by executor — the executor filter defaults to "all executors" for Owners, Managers, and Guests, and defaults to the logged-in user for an Executor
 - Clicking an entry opens that work order's detail view
 
-### 3.14 Multi-User Collaboration & Permissions
+### 3.14 Sensor Alarms (Home Assistant Integration)
+- **Ingestion model: push, not poll.** Home Assistant already normalizes household sensors (water leak, smoke/CO, freezer/fridge temperature probes, sump pump runtime, well pump cycles, power monitoring, humidity, door/window contacts) into entities, and already has a mature automation engine for thresholds, debouncing, and duration conditions — HomeKeep doesn't re-implement any of that. A Home Assistant automation fires a `rest_command` that POSTs to HomeKeep's webhook only once a condition is actually met (e.g., "sump pump ran continuously for more than 2 minutes," "freezer above 10°F for 15 minutes," "water sensor reads wet")
+- **Webhook:** `POST /api/alarms`, authenticated by a per-deployment API key (sent as an `X-Api-Key` header, or `Authorization: Bearer …`) rather than the cookie-based session auth used everywhere else in the app — Home Assistant has no browser to log into. The key is generated automatically on first use, shown (and regenerable) to Owners from the Alarms tab, along with the exact webhook URL and a ready-to-paste `rest_command` example
+- Accepted payload fields: `entity_id`, `friendly_name`, `state`, `attributes` (free-form, kept for audit), `message`, `severity` (`info` / `warning` / `critical`, defaults to `warning`), `timestamp`. Only `entity_id` or `message` is required
+- **Source-agnostic design:** each alarm records a `source` field (`home_assistant` today); the model doesn't hardcode to Home Assistant, so another system that can hit the same webhook shape could plug into the same queue later without a redesign
+- **Entity mapping:** a small table, managed from the Alarms tab, maps a Home Assistant entity id to a HomeKeep asset and/or location. A payload whose `entity_id` matches a saved mapping arrives already linked; one with no match (or no `entity_id` at all — a `message`-only alarm) arrives unassigned and can still be acted on
+- **Alarm queue — its own queue, upstream of Work Requests:** not every sensor trip should become a work item, so alarms don't automatically create one. Each alarm stores its source, source entity id, resolved asset/location (if mapped), message, severity, status, and the raw payload it arrived with (kept for auditing/debugging a flaky sensor)
+- Alarm lifecycle: **Open → Acknowledged as false / Linked to Work Request / Linked to Work Order**
+  - **Acknowledge as false alarm:** closes it with a required reason — useful later for spotting which physical sensor needs its Home-Assistant-side threshold retuned
+  - **Create Work Request:** opens a pre-filled Work Request form (title, description, location, asset, priority guessed from severity) from the alarm; submitting it both creates the request and marks the alarm linked
+  - **Link to existing Work Order:** ties the alarm on as supporting evidence against an already-open work order, without spawning a duplicate work item
+- The Alarms tab shows an **Open** queue (sorted by severity, then most recent) and a **History** view of everything acknowledged or linked, for the audit trail
+- Alarms and the entity-mapping table are stored separately from the rest of the household record (their own database tables, not the shared household document) since they're written by an inbound webhook independent of the app's normal save cycle; they are **not** included in the Owner Tools Excel backup/restore (3.16)
+- Visible only to Owners and Managers; only an Owner can view or regenerate the webhook API key
+
+### 3.15 Multi-User Collaboration & Permissions
 - Shared household view: all users see the same data, with UI controls shown or hidden based on role (2)
 - **Unsaved-changes protection:** closing a work order, work request, asset, location, vendor, or part form (via the X button or clicking outside it) while it has unsaved changes prompts the user to **Save**, **Discard changes**, or **Cancel** and keep editing — no silent data loss
 - **In-app help:** every page has an info icon beside its title that opens a short explanation of that page's purpose, typical workflow, who can do what, and its key features
 - **Required-field convention:** required field labels are shown in bold red text with a trailing asterisk; all other fields are shown in plain, non-bold black text — there is no reliance on the word "optional"
 - Full audit trail via each record's creator (`createdBy`), which also determines what a Manager is permitted to delete
 
-### 3.15 Owner Tools
+### 3.16 Owner Tools
 - Visible only to Owners
 - **Household members:** add or remove accounts, and set/change each member's role (Owner, Manager, Executor, Guest)
 - **Backup & bulk edit:** export the entire household to a multi-sheet Excel workbook (one sheet per record type — locations, assets, BOM nodes, PM tasks, work requests, work orders, benchmarks, vendors, parts) and re-import it after edits. Leaving a row's `id` blank on import creates a new record (letting bulk additions be done directly in Excel); keeping an existing `id` updates that record in place. Re-importing replaces the entire household dataset, with a confirmation prompt first.
@@ -262,7 +277,7 @@ A **PM Base** is a template work order that is never itself scheduled or complet
 | **Data retention** | Full history retained until explicitly deleted by a permitted user |
 | **Security** | Password-hashed accounts, signed session cookies, role-based access control enforced in the UI |
 | **Privacy** | Single-household scope per deployment; no data shared across households |
-| **Backup** | Owner-initiated full data export/import via Excel at any time (3.15); infrastructure-level backup is a deployment concern, not an in-app one |
+| **Backup** | Owner-initiated full data export/import via Excel at any time (3.16); infrastructure-level backup is a deployment concern, not an in-app one |
 | **Platform support** | Modern web browsers; installable as a Progressive Web App on Android, Chrome desktop (with an in-app "Install app" prompt when the browser supports it), and other Chromium-based browsers |
 | **Responsive layout** | Fully usable on phone-sized screens (~360px wide and up): the navigation collapses to an off-canvas drawer, multi-column layouts stack to one column, the month calendar keeps its 7-day grid at reduced scale, and touch targets meet a comfortable minimum size |
 | **Appearance** | Light and dark themes; follows the device/browser's color-scheme preference automatically, with a manual override switch (auto/light/dark) in the top bar that's remembered per browser |
@@ -291,6 +306,8 @@ A **PM Base** is a template work order that is never itself scheduled or complet
 - **Household** (1) → **Vendors** (many); **Household** (1) → **Parts** (many)
 - Every Location, Asset, Vendor, Part, Benchmark, Work Request, and Work Order record stores the User who created it, used to scope Manager delete permissions (2)
 - **Attachment** (v1.6) — a stored photo file (id, original filename, MIME type, size, uploader, upload timestamp), kept in its own table/directory rather than in the household JSON document. A **Work Request** (0 or many) → **Attachments**, and its **Work Order** (0 or many) → **Attachments** once converted (carried over by reference, not re-uploaded); the household document itself stores only attachment ids.
+- **Alarm** (v1.7) — source, source entity id, resolved asset/location (0 or 1 each, via the entity-mapping table), message, severity, status, resolution type/reference, raw payload, triggered/created/resolved timestamps. Kept in its own table, independent of the household document, since it's written by an inbound webhook. **Alarm** (0 or 1) → **Work Request** or **Work Order** as its resolution reference, once acted on.
+- **Alarm Entity Mapping** (v1.7) — entity id (key), asset id (0 or 1), location id (0 or 1), label. **Asset** (0 or 1) → **Alarm Entity Mappings** (many); **Location Node** (0 or 1) → **Alarm Entity Mappings** (many).
 
 ---
 
@@ -333,9 +350,8 @@ A **PM Base** is a template work order that is never itself scheduled or complet
 ## 8. Future Considerations (Not in Initial Release)
 
 - Per-event push/SMS notifications and configurable reminder lead times (a daily opt-in email digest shipped in v1.2 — see 3.7)
-- Photo/document attachments on assets, BOM nodes, work orders, and work requests
+- Photo/document attachments on assets, BOM nodes, and work orders directly (work request photo attachments, carried over on conversion, shipped in v1.6 — see 3.5)
 - Calendar export (ICS) / sync with external calendars
-- IoT/smart-home sensor integration to trigger condition-based maintenance automatically
 - Automatic mileage sync from a connected vehicle or odometer-tracking app
 - Multi-property support for landlords or vacation homes
 - Barcode/QR code scanning for parts (asset QR label generation shipped in v1.2 — see 3.2)

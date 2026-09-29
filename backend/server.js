@@ -230,6 +230,127 @@ app.delete("/api/attachments/:id", requireAuth, (req, res) => {
 });
 
 /* -------------------------------------------------------------
+   Home Assistant sensor alarms (v1.7). Push, not poll — HA already has
+   a mature automation engine for thresholds/debouncing/duration
+   conditions, so it does that work and fires a rest_command at our
+   webhook when a condition is actually met. That webhook is API-key
+   authenticated (not the cookie session auth used everywhere else —
+   HA has no browser to log in with), everything else here is normal
+   cookie-authed JSON like the rest of the API.
+------------------------------------------------------------- */
+function getSetting(key) {
+  const row = db.prepare("SELECT value FROM app_settings WHERE key = ?").get(key);
+  return row ? row.value : null;
+}
+function setSetting(key, value) {
+  db.prepare(
+    "INSERT INTO app_settings (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+  ).run(key, value);
+}
+function getOrCreateWebhookKey() {
+  let key = getSetting("alarm_webhook_key");
+  if (!key) {
+    key = randomUUID().replace(/-/g, "");
+    setSetting("alarm_webhook_key", key);
+  }
+  return key;
+}
+function requireAdminRole(req, res, next) {
+  if (!req.user || (req.user.role !== "Owner" && req.user.role !== "Manager")) {
+    return res.status(403).json({ error: "Owners and Managers only" });
+  }
+  next();
+}
+function rowToMapping(r) {
+  return { entityId: r.entity_id, assetId: r.asset_id || null, locationId: r.location_id || null, label: r.label || "" };
+}
+function rowToAlarm(r) {
+  let rawPayload = null;
+  try { rawPayload = r.raw_payload ? JSON.parse(r.raw_payload) : null; } catch (e) { /* leave null */ }
+  return {
+    id: r.id, source: r.source, sourceEntityId: r.source_entity_id, friendlyName: r.friendly_name,
+    assetId: r.asset_id || null, locationId: r.location_id || null, message: r.message,
+    severity: r.severity, status: r.status,
+    resolutionType: r.resolution_type || null, resolutionRef: r.resolution_ref || null, resolutionReason: r.resolution_reason || null,
+    rawPayload, triggeredAt: r.triggered_at, createdAt: r.created_at, resolvedAt: r.resolved_at || null,
+  };
+}
+
+// Owner-only: the webhook URL's API key. Generated on first request.
+app.get("/api/alarms/webhook-key", requireAuth, requireOwner, (req, res) => {
+  res.json({ key: getOrCreateWebhookKey() });
+});
+app.post("/api/alarms/webhook-key/regenerate", requireAuth, requireOwner, (req, res) => {
+  const key = randomUUID().replace(/-/g, "");
+  setSetting("alarm_webhook_key", key);
+  res.json({ key });
+});
+
+// Entity-id → asset/location mapping, so repeat alerts from the same
+// sensor auto-resolve their asset/location without re-entering it.
+app.get("/api/alarm-mappings", requireAuth, (req, res) => {
+  res.json(db.prepare("SELECT * FROM alarm_entity_map ORDER BY entity_id").all().map(rowToMapping));
+});
+app.post("/api/alarm-mappings", requireAuth, requireAdminRole, (req, res) => {
+  const { entityId, assetId, locationId, label } = req.body || {};
+  if (!entityId || !entityId.trim()) return res.status(400).json({ error: "An entity id is required" });
+  db.prepare(
+    "INSERT INTO alarm_entity_map (entity_id, asset_id, location_id, label) VALUES (?,?,?,?) " +
+      "ON CONFLICT(entity_id) DO UPDATE SET asset_id = excluded.asset_id, location_id = excluded.location_id, label = excluded.label"
+  ).run(entityId.trim(), assetId || null, locationId || null, (label || "").trim() || null);
+  res.json(rowToMapping(db.prepare("SELECT * FROM alarm_entity_map WHERE entity_id = ?").get(entityId.trim())));
+});
+app.delete("/api/alarm-mappings/:entityId", requireAuth, requireAdminRole, (req, res) => {
+  db.prepare("DELETE FROM alarm_entity_map WHERE entity_id = ?").run(req.params.entityId);
+  res.json({ ok: true });
+});
+
+// The inbound webhook itself. Home Assistant's rest_command POSTs here —
+// see the Alarms dashboard tab for the exact payload shape/example.
+app.post("/api/alarms", (req, res) => {
+  const provided = req.header("X-Api-Key") || (req.header("Authorization") || "").replace(/^Bearer\s+/i, "");
+  if (!provided || provided !== getOrCreateWebhookKey()) {
+    return res.status(401).json({ error: "Invalid or missing API key" });
+  }
+  const { entity_id, friendly_name, state, attributes, message, severity, timestamp } = req.body || {};
+  if (!entity_id && !message) return res.status(400).json({ error: "entity_id or message is required" });
+  const mapping = entity_id ? db.prepare("SELECT * FROM alarm_entity_map WHERE entity_id = ?").get(entity_id) : null;
+  const id = randomUUID();
+  const triggeredAt = timestamp || new Date().toISOString();
+  const resolvedMessage = message || `${friendly_name || entity_id || "Sensor"}${state ? ` — ${state}` : ""}`;
+  db.prepare(
+    "INSERT INTO alarms (id, source, source_entity_id, friendly_name, asset_id, location_id, message, severity, status, raw_payload, triggered_at) " +
+      "VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+  ).run(
+    id, "home_assistant", entity_id || null, friendly_name || (mapping && mapping.label) || entity_id || null,
+    mapping ? mapping.asset_id : null, mapping ? mapping.location_id : null,
+    resolvedMessage, ["info", "warning", "critical"].includes(severity) ? severity : "warning", "open",
+    JSON.stringify({ state: state || null, attributes: attributes || null }), triggeredAt
+  );
+  res.json({ ok: true, id });
+});
+
+// The alarm queue itself, for the dashboard tab.
+app.get("/api/alarms", requireAuth, (req, res) => {
+  const status = req.query.status;
+  const rows = status
+    ? db.prepare("SELECT * FROM alarms WHERE status = ? ORDER BY triggered_at DESC").all(status)
+    : db.prepare("SELECT * FROM alarms ORDER BY triggered_at DESC").all();
+  res.json(rows.map(rowToAlarm));
+});
+app.patch("/api/alarms/:id", requireAuth, requireAdminRole, (req, res) => {
+  const row = db.prepare("SELECT * FROM alarms WHERE id = ?").get(req.params.id);
+  if (!row) return res.status(404).json({ error: "Alarm not found" });
+  const { status, resolutionType, resolutionRef, resolutionReason } = req.body || {};
+  const nextStatus = status || row.status;
+  const resolvedAt = nextStatus !== "open" ? (row.resolved_at || new Date().toISOString()) : null;
+  db.prepare(
+    "UPDATE alarms SET status = ?, resolution_type = ?, resolution_ref = ?, resolution_reason = ?, resolved_at = ? WHERE id = ?"
+  ).run(nextStatus, resolutionType || null, resolutionRef || null, resolutionReason || null, resolvedAt, req.params.id);
+  res.json(rowToAlarm(db.prepare("SELECT * FROM alarms WHERE id = ?").get(req.params.id)));
+});
+
+/* -------------------------------------------------------------
    Serve the built frontend (single-container deployment)
 ------------------------------------------------------------- */
 const staticDir = path.join(__dirname, "public");

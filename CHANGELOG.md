@@ -18,6 +18,33 @@ the Git commit's summary line) and a **Commit extended description**
 
 ---
 
+## v1.7
+
+**Commit short description:** `v1.7: Home Assistant alarm integration`
+
+**Commit extended description:**
+v1.7 is the fifth and final "Bigger bets" release. HomeKeep can now
+receive sensor-triggered alarms pushed from Home Assistant — a leak, a
+smoke/CO alert, a freezer running warm — through a new API-key-authed
+webhook (`POST /api/alarms`). Home Assistant does its own threshold,
+debounce, and duration logic via its automation engine and only POSTs
+when it's decided something is actually wrong; HomeKeep doesn't
+re-implement any of that. Alarms land in a new "Alarms" tab (Owner/
+Manager only) as their own queue, upstream of Work Requests — not
+every sensor trip should become a work item. Each open alarm can be
+acknowledged as a false alarm (with a reason, to help tune noisy
+sensors), turned into a new Work Request with the details pre-filled,
+or linked onto an existing Work Order as evidence. An entity-id-to-
+asset/location mapping table means a repeat alert from the same
+sensor auto-links from then on. The `source` field is modeled
+generically (`home_assistant` today) so another push source could plug
+into the same queue later without a redesign. The tab also surfaces
+the webhook URL, a regenerable API key, and a ready-to-paste Home
+Assistant `rest_command` example. Alarms and their mappings are stored
+in their own SQLite tables, not the household JSON document — they're
+operational/audit data, not household records, and (like v1.6's
+photo files) aren't included in the Excel backup/restore.
+
 ## v1.6
 
 **Commit short description:** `v1.6: Offline work-request sync + photos`

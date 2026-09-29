@@ -395,6 +395,17 @@ The database volume is untouched by any of the above.
   geocoding service — it's shown for you to confirm or correct before
   anything is created, and can be off for addresses it doesn't
   recognize (falls back to "Unknown," letting you pick manually).
+- **Sensor alarms (v1.7)** are pushed in from Home Assistant only — there's
+  no polling of HA's API, no other smart-home platform is wired up
+  (though the `source` field is generic, so another one could be added
+  later without a redesign), and there's no rate-limiting on the
+  webhook beyond the API key itself, so a misconfigured HA automation
+  that fires repeatedly will create repeated alarm rows. Alarms and
+  sensor mappings live in their own database tables and aren't
+  included in the Owner Tools Excel backup/restore — back up the whole
+  `DATA_DIR` volume (Section 9) if you want them covered. The open-alarm
+  count badge is polled every 30 seconds while the app is open, not
+  pushed to the browser in real time.
 
 These are reasonable next additions if you want to keep building on
 this — the backend's REST API (`/api/*` in `server.js`) is a

@@ -64,4 +64,17 @@ export const api = {
   },
   attachmentUrl: (id) => withBase(`/api/attachments/${id}/file`),
   deleteAttachment: (id) => request(`/api/attachments/${id}`, { method: "DELETE" }),
+
+  // Home Assistant sensor alarms (v1.7).
+  listAlarms: (status) => request(`/api/alarms${status ? `?status=${encodeURIComponent(status)}` : ""}`),
+  updateAlarm: (id, patch) => request(`/api/alarms/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  listAlarmMappings: () => request("/api/alarm-mappings"),
+  saveAlarmMapping: (entityId, patch) => request("/api/alarm-mappings", { method: "POST", body: JSON.stringify({ entityId, ...patch }) }),
+  deleteAlarmMapping: (entityId) => request(`/api/alarm-mappings/${encodeURIComponent(entityId)}`, { method: "DELETE" }),
+  getWebhookKey: () => request("/api/alarms/webhook-key"),
+  regenerateWebhookKey: () => request("/api/alarms/webhook-key/regenerate", { method: "POST" }),
+  // Absolute (not just base-relative) — this is copied into a Home
+  // Assistant config running on a different device on the network, so a
+  // path alone ("/api/alarms") wouldn't be reachable from there.
+  webhookUrl: () => (typeof window !== "undefined" ? window.location.origin : "") + withBase("/api/alarms"),
 };
