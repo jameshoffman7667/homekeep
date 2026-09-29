@@ -18,6 +18,31 @@ the Git commit's summary line) and a **Commit extended description**
 
 ---
 
+## v1.5
+
+**Commit short description:** `v1.5: Address/climate-seeded PM wizard`
+
+**Commit extended description:**
+v1.5 is the third of five "Bigger bets" releases. A Property-level
+location now carries an address, year built, and climate zone, and
+gets a new "PM setup wizard" action (the wand icon next to it in
+Location Hierarchy). Step one collects the address and year built and
+guesses a climate zone from it — a simple built-in state/province
+lookup, not a real climate API, always shown for the household to
+confirm or override. Step two presents a curated starter list of ~13
+common recurring maintenance items (HVAC filter, gutters, water
+heater, furnace/AC service, sump pump, winterizing spigots, and more),
+pre-checked based on that climate zone, so a Cold-zone household sees
+furnace service and pipe winterizing checked while a Hot-Humid one
+sees AC service and pest inspection instead. Finishing the wizard
+creates a normal, fully editable PM Base for each checked item —
+nothing about the wizard is special afterward; it's just a faster way
+to seed a sensible starting list instead of building one from scratch.
+The wizard can be re-run any time, and existing PM Bases are untouched
+by it.
+
+---
+
 ## v1.4
 
 **Commit short description:** `v1.4: PM checklist builder`

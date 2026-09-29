@@ -6,7 +6,7 @@ import {
   Layers, Search, Boxes, ChevronLeft, Loader2, LogOut, UserPlus, Shield,
   Calendar, FileDown, FileUp, Info, Archive, Download, ExternalLink, ShoppingCart,
   Building2, DoorOpen, Square, Box, Sun, Moon, MonitorSmartphone, QrCode,
-  Gauge, Snowflake,
+  Gauge, Snowflake, Wand2,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
@@ -218,6 +218,84 @@ const WO_TYPES = ["PM", "PM Base", "Benchmark", "Corrective", "Unplanned"];
 const WO_STATUSES = ["Open", "In Progress", "Completed", "Verified"];
 const PRIORITIES = ["High", "Medium", "Low"];
 const FAILURE_CODES = ["Wear", "Leak", "Electrical", "Mechanical", "User Error", "Install Defect", "Unknown", "Other"];
+const CLIMATE_ZONES = ["Very Cold", "Cold", "Mixed-Humid", "Hot-Humid", "Hot-Dry", "Marine", "Unknown"];
+// A deliberately simple state/province → climate-zone lookup for the PM
+// setup wizard — not a real climate API, just enough to seed a sensible
+// starter maintenance list. Always shown to the household to review and
+// override before anything is created (see the functional spec / README
+// for the full caveat, same spirit as the seasonal-PM simplification).
+const REGION_CLIMATE_ZONE = {
+  "alaska": "Very Cold", "ak": "Very Cold",
+  "montana": "Cold", "mt": "Cold", "north dakota": "Cold", "nd": "Cold", "minnesota": "Cold", "mn": "Cold",
+  "wisconsin": "Cold", "wi": "Cold", "michigan": "Cold", "mi": "Cold", "maine": "Cold", "me": "Cold",
+  "vermont": "Cold", "vt": "Cold", "new hampshire": "Cold", "nh": "Cold", "new york": "Cold", "ny": "Cold",
+  "wyoming": "Cold", "wy": "Cold", "south dakota": "Cold", "sd": "Cold", "idaho": "Cold", "id": "Cold",
+  "iowa": "Cold", "ia": "Cold", "nebraska": "Cold", "ne": "Cold", "pennsylvania": "Cold", "pa": "Cold",
+  "massachusetts": "Cold", "ma": "Cold", "connecticut": "Cold", "ct": "Cold", "rhode island": "Cold", "ri": "Cold",
+  "ohio": "Cold", "oh": "Cold", "illinois": "Cold", "il": "Cold", "indiana": "Cold", "in": "Cold",
+  "colorado": "Cold", "co": "Cold", "utah": "Cold", "ut": "Cold", "washington": "Cold", "wa": "Cold",
+  "oregon": "Cold", "or": "Cold", "new jersey": "Cold", "nj": "Cold",
+  "virginia": "Mixed-Humid", "va": "Mixed-Humid", "maryland": "Mixed-Humid", "md": "Mixed-Humid",
+  "delaware": "Mixed-Humid", "de": "Mixed-Humid", "west virginia": "Mixed-Humid", "wv": "Mixed-Humid",
+  "kentucky": "Mixed-Humid", "ky": "Mixed-Humid", "missouri": "Mixed-Humid", "mo": "Mixed-Humid",
+  "kansas": "Mixed-Humid", "ks": "Mixed-Humid", "north carolina": "Mixed-Humid", "nc": "Mixed-Humid",
+  "tennessee": "Mixed-Humid", "tn": "Mixed-Humid", "arkansas": "Mixed-Humid", "ar": "Mixed-Humid",
+  "oklahoma": "Mixed-Humid", "ok": "Mixed-Humid",
+  "florida": "Hot-Humid", "fl": "Hot-Humid", "georgia": "Hot-Humid", "ga": "Hot-Humid",
+  "south carolina": "Hot-Humid", "sc": "Hot-Humid", "alabama": "Hot-Humid", "al": "Hot-Humid",
+  "mississippi": "Hot-Humid", "ms": "Hot-Humid", "louisiana": "Hot-Humid", "la": "Hot-Humid",
+  "texas": "Hot-Humid", "tx": "Hot-Humid",
+  "arizona": "Hot-Dry", "az": "Hot-Dry", "new mexico": "Hot-Dry", "nm": "Hot-Dry", "nevada": "Hot-Dry", "nv": "Hot-Dry",
+  "california": "Marine", "ca": "Marine",
+  "yukon": "Very Cold", "yt": "Very Cold", "northwest territories": "Very Cold", "nt": "Very Cold",
+  "nunavut": "Very Cold", "nu": "Very Cold",
+  "british columbia": "Marine", "bc": "Marine",
+  "ontario": "Cold", "quebec": "Cold", "qc": "Cold", "manitoba": "Cold", "mb": "Cold",
+  "saskatchewan": "Cold", "sk": "Cold", "alberta": "Cold", "ab": "Cold", "newfoundland": "Cold", "nl": "Cold",
+  "new brunswick": "Cold", "nb": "Cold", "nova scotia": "Cold", "ns": "Cold", "prince edward island": "Cold", "pe": "Cold",
+};
+// Guesses a climate zone from a free-text address. Prefers the tail of the
+// address (typically "City, ST ZIP" or "City, Province") over the street
+// line, so a street-type abbreviation like "Ct" (Court) doesn't get
+// mistaken for a state code (CT, Connecticut). Always just a starting
+// point — the wizard shows it for the household to confirm or change.
+function guessClimateZone(address) {
+  const raw = String(address || "").trim();
+  if (!raw) return "Unknown";
+  const segments = raw.split(",").map((s) => s.trim()).filter(Boolean);
+  const tail = (segments.length > 1 ? segments.slice(1) : segments).join(" ").toLowerCase();
+  const full = raw.toLowerCase();
+  const names = Object.keys(REGION_CLIMATE_ZONE).filter((k) => k.length > 2).sort((a, b) => b.length - a.length);
+  for (const name of names) {
+    if (tail.includes(name)) return REGION_CLIMATE_ZONE[name];
+  }
+  const tailTokens = tail.split(/[^a-z]+/).filter(Boolean);
+  for (const tok of tailTokens) {
+    if (tok.length === 2 && REGION_CLIMATE_ZONE[tok]) return REGION_CLIMATE_ZONE[tok];
+  }
+  for (const name of names) {
+    if (full.includes(name)) return REGION_CLIMATE_ZONE[name];
+  }
+  return "Unknown";
+}
+// Starter PM catalogue offered by the wizard, pre-checked by climate zone
+// relevance ("all" = every zone). Frequencies are reasonable defaults —
+// every generated PM Base is fully editable afterward like any other.
+const PM_WIZARD_CATALOG = [
+  { id: "w-filter", title: "Replace HVAC filter", description: "Keeps the furnace/AC running efficiently.", frequencyValue: 3, frequencyUnit: "months", zones: "all" },
+  { id: "w-smoke", title: "Test smoke & CO detectors", description: "Press-test and replace batteries if needed.", frequencyValue: 6, frequencyUnit: "months", zones: "all" },
+  { id: "w-gutters", title: "Clean gutters & downspouts", description: "Prevents overflow and foundation water damage.", frequencyValue: 6, frequencyUnit: "months", zones: "all" },
+  { id: "w-waterheater", title: "Flush water heater", description: "Clears sediment buildup, extends tank life.", frequencyValue: 12, frequencyUnit: "months", zones: "all" },
+  { id: "w-dryervent", title: "Clean dryer vent", description: "Reduces fire risk and improves drying time.", frequencyValue: 12, frequencyUnit: "months", zones: "all" },
+  { id: "w-roof", title: "Inspect roof & flashing", description: "Catch small leaks before they become big ones.", frequencyValue: 12, frequencyUnit: "months", zones: "all" },
+  { id: "w-furnace", title: "Service furnace / heating system", description: "Annual burner and heat-exchanger check.", frequencyValue: 12, frequencyUnit: "months", zones: ["Very Cold", "Cold", "Mixed-Humid"] },
+  { id: "w-ac", title: "Service air conditioning", description: "Annual coil cleaning and refrigerant check.", frequencyValue: 12, frequencyUnit: "months", zones: ["Hot-Humid", "Hot-Dry", "Mixed-Humid", "Marine"] },
+  { id: "w-sump", title: "Inspect sump pump", description: "Test the float switch and backup power before the wet season.", frequencyValue: 6, frequencyUnit: "months", zones: ["Very Cold", "Cold", "Mixed-Humid", "Marine"] },
+  { id: "w-winterize", title: "Winterize outdoor spigots & irrigation", description: "Prevents burst pipes from freezing.", frequencyValue: 12, frequencyUnit: "months", zones: ["Very Cold", "Cold"] },
+  { id: "w-icedam", title: "Check attic insulation & ventilation", description: "Reduces ice-dam risk and heat loss.", frequencyValue: 12, frequencyUnit: "months", zones: ["Very Cold", "Cold"] },
+  { id: "w-deck", title: "Inspect & reseal deck / exterior wood", description: "UV and moisture protection.", frequencyValue: 12, frequencyUnit: "months", zones: ["Hot-Humid", "Hot-Dry", "Mixed-Humid", "Marine"] },
+  { id: "w-termite", title: "Pest / termite inspection", description: "More common in warm, humid climates.", frequencyValue: 12, frequencyUnit: "months", zones: ["Hot-Humid", "Mixed-Humid"] },
+];
 const FREQUENCY_UNITS = ["days", "weeks", "months", "years"];
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -864,7 +942,7 @@ const PAGE_INFO = {
     purpose: "The physical map of the household — every building, floor, room, and area — that everything else in HomeKeep is organized around.",
     workflow: "Build the tree top-down: a Property contains Structures, which contain Floors, Rooms, Areas, and Sub-areas. A new node defaults to the next level down from wherever you clicked +, though you can change it.",
     permissions: "Owners and Managers can add, rename, and remove locations. Everyone can view and use the tree to filter other pages.",
-    features: ["Expandable/collapsible hierarchy tree with expand-all/collapse-all", "Depth-aware default level when adding a node", "Asset counts per location", "Guards against deleting a location that still has children or assets"],
+    features: ["Expandable/collapsible hierarchy tree with expand-all/collapse-all", "Depth-aware default level when adding a node", "Asset counts per location", "Guards against deleting a location that still has children or assets", "PM setup wizard on a Property node — address/year-built/climate zone plus a starter set of recurring PM Bases scaled to that zone"],
   },
   assets: {
     purpose: "A registry of everything in the home worth maintaining, and — for the ones worth tracking in detail — the components and parts that make them up.",
@@ -1045,7 +1123,7 @@ function Sidebar({ tab, setTab, open, role, counts, onNavigate }) {
         })}
       </div>
       <div style={{ padding: 14, borderTop: "1px solid rgba(255,255,255,0.12)", fontFamily: FONT_BODY, fontSize: 11, color: "#8FA0AF" }}>
-        v1.4 · matches the HomeKeep functional spec
+        v1.5 · matches the HomeKeep functional spec
       </div>
     </div>
   );
@@ -1189,6 +1267,110 @@ function Dashboard({ data, setTab, role, applyFilter, goToOrder, goToRequest }) 
   );
 }
 
+// One-time (but re-runnable) setup wizard offered on a Property-level
+// location: takes an address/year-built, guesses a climate zone, and lets
+// the household pick from a starter set of recurring PM Bases scaled to
+// that zone. Every PM Base it creates is a normal, fully editable PM Base
+// afterward (trigger type, checklist, etc.) — the wizard just seeds them.
+function PmWizardModal({ property, update, onClose }) {
+  const [step, setStep] = useState(1);
+  const [address, setAddress] = useState(property.address || "");
+  const [yearBuilt, setYearBuilt] = useState(property.yearBuilt || "");
+  const [climateZone, setClimateZone] = useState(property.climateZone || guessClimateZone(property.address || ""));
+  const [selected, setSelected] = useState(new Set());
+
+  const onAddressBlur = () => {
+    const guess = guessClimateZone(address);
+    if (guess !== "Unknown") setClimateZone(guess);
+  };
+  const goToStep2 = () => {
+    setSelected(new Set(PM_WIZARD_CATALOG.filter((i) => i.zones === "all" || i.zones.includes(climateZone)).map((i) => i.id)));
+    setStep(2);
+  };
+  const toggle = (id) => setSelected((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  const finish = () => {
+    update((d) => {
+      const prop = d.locations.find((l) => l.id === property.id);
+      prop.address = address.trim();
+      prop.yearBuilt = yearBuilt;
+      prop.climateZone = climateZone;
+      prop.pmWizardRunAt = todayISO();
+      d.counters = d.counters || { wo: 0, wr: 0, part: 0 };
+      PM_WIZARD_CATALOG.filter((item) => selected.has(item.id)).forEach((item) => {
+        d.counters.wo += 1;
+        const base = {
+          id: uid("wo"), number: d.counters.wo, title: item.title, type: "PM Base", status: "Active",
+          assetId: null, bomNodeId: null, locationId: property.id,
+          description: item.description || "", sourceRequestId: null, sourceBenchmarkId: null,
+          sourcePmBaseId: null, sourceFixedDate: null, priority: "Medium", executorId: "",
+          scheduledDate: "", requiredByDate: "", completedDate: null, verifiedDate: null,
+          cost: "", vendorId: null, notes: "", parts: [], comments: [], partsDeducted: false, createdBy: null,
+          pmMode: "Non-fixed", triggerType: "calendar",
+          frequencyValue: item.frequencyValue, frequencyUnit: item.frequencyUnit,
+          checklistTemplate: [],
+        };
+        d.workOrders.push(base);
+        spawnPmInstance(d, base, { afterDateISO: todayISO(), fixedDate: null });
+      });
+      return d;
+    });
+    onClose();
+  };
+
+  return (
+    <Modal title={`PM setup wizard — ${property.name}`} onClose={onClose} wide>
+      {step === 1 && (
+        <>
+          <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkFaint, marginBottom: 12 }}>
+            Tell us a bit about {property.name} and we'll suggest a starter set of recurring maintenance, scaled to your climate. You can add, remove, or edit anything afterward — this just saves starting from a blank list.
+          </div>
+          <Field label="Address"><input style={inputStyle} value={address} onChange={(e) => setAddress(e.target.value)} onBlur={onAddressBlur} placeholder="123 Main St, Anytown, ST" autoFocus /></Field>
+          <Field label="Year built (optional)"><input style={inputStyle} value={yearBuilt} onChange={(e) => setYearBuilt(e.target.value)} placeholder="e.g. 1998" /></Field>
+          <Field label="Climate zone">
+            <select style={inputStyle} value={climateZone} onChange={(e) => setClimateZone(e.target.value)}>
+              {CLIMATE_ZONES.map((z) => <option key={z} value={z}>{z}</option>)}
+            </select>
+          </Field>
+          <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 12 }}>
+            Guessed from the address using a simple state/province lookup — not a real climate service — so double-check it and change it if it's wrong.
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+            <Btn variant="primary" onClick={goToStep2}>Next: pick maintenance <ArrowRight size={13} /></Btn>
+          </div>
+        </>
+      )}
+      {step === 2 && (
+        <>
+          <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkFaint, marginBottom: 10 }}>
+            Pre-checked based on the <strong>{climateZone}</strong> climate zone — uncheck anything that doesn't apply (no pool, no basement, etc.). Each becomes its own PM Base template, fully editable afterward from Work Orders.
+          </div>
+          <div className="hk-scroll" style={{ maxHeight: 340, overflowY: "auto" }}>
+            {PM_WIZARD_CATALOG.map((item) => (
+              <label key={item.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "7px 0", borderTop: `1px solid ${C.lineSoft}`, cursor: "pointer" }}>
+                <input type="checkbox" checked={selected.has(item.id)} onChange={() => toggle(item.id)} style={{ marginTop: 3 }} />
+                <div>
+                  <div style={{ fontFamily: FONT_BODY, fontSize: 13, fontWeight: 600, color: C.ink }}>{item.title}</div>
+                  <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint }}>Every {item.frequencyValue} {item.frequencyUnit} · {item.description}</div>
+                </div>
+              </label>
+            ))}
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 14 }}>
+            <Btn variant="ghost" onClick={() => setStep(1)}>Back</Btn>
+            <Btn variant="primary" onClick={finish}>Create {selected.size} PM template{selected.size === 1 ? "" : "s"}</Btn>
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
 /* ============================================================
    LOCATIONS
 ============================================================ */
@@ -1196,29 +1378,32 @@ function LocationsView({ data, update, role }) {
   const dialog = useDialog();
   const closeGuard = useCloseGuard(dialog);
   const [modal, setModal] = useState(null);
-  const [form, setForm] = useState({ name: "", level: "Property" });
+  const [wizardProperty, setWizardProperty] = useState(null);
+  const [form, setForm] = useState({ name: "", level: "Property", address: "", yearBuilt: "", climateZone: "Unknown" });
   const initial = useRef(null);
   const isDirty = modal && JSON.stringify(form) !== initial.current;
 
   const openAdd = (parentId) => {
-    const f = { name: "", level: defaultLevelForParent(data.locations, parentId) };
+    const f = { name: "", level: defaultLevelForParent(data.locations, parentId), address: "", yearBuilt: "", climateZone: "Unknown" };
     setForm(f); initial.current = JSON.stringify(f);
     setModal({ mode: "add", parentId });
   };
   const openEdit = (node) => {
-    const f = { name: node.name, level: node.level };
+    const f = { name: node.name, level: node.level, address: node.address || "", yearBuilt: node.yearBuilt || "", climateZone: node.climateZone || "Unknown" };
     setForm(f); initial.current = JSON.stringify(f);
     setModal({ mode: "edit", node });
   };
   const save = () => {
     if (!form.name.trim()) return;
     update((d) => {
+      const propFields = form.level === "Property" ? { address: form.address.trim(), yearBuilt: form.yearBuilt, climateZone: form.climateZone } : {};
       if (modal.mode === "add") {
-        d.locations.push({ id: uid("loc"), name: form.name.trim(), level: form.level, parentId: modal.parentId || null, createdBy: null });
+        d.locations.push({ id: uid("loc"), name: form.name.trim(), level: form.level, parentId: modal.parentId || null, createdBy: null, ...propFields });
       } else {
         const n = d.locations.find((l) => l.id === modal.node.id);
         n.name = form.name.trim();
         n.level = form.level;
+        Object.assign(n, propFields);
       }
       return d;
     });
@@ -1268,6 +1453,9 @@ function LocationsView({ data, update, role }) {
               {assetCount > 0 && <span style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint }}>{assetCount} asset{assetCount > 1 ? "s" : ""}</span>}
               {isAdmin(role) && (
                 <div style={{ display: "flex", gap: 6 }}>
+                  {item.level === "Property" && (
+                    <button title="PM setup wizard" onClick={() => setWizardProperty(item)} style={{ background: "none", border: "none", cursor: "pointer", color: C.gold }}><Wand2 size={14} /></button>
+                  )}
                   <button title="Add child" onClick={() => openAdd(item.id)} style={{ background: "none", border: "none", cursor: "pointer", color: C.navy }}><Plus size={15} /></button>
                   <button title="Edit" onClick={() => openEdit(item)} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkSoft }}><Pencil size={14} /></button>
                   <button title="Delete" onClick={() => remove(item)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rust }}><Trash2 size={14} /></button>
@@ -1311,12 +1499,30 @@ function LocationsView({ data, update, role }) {
               Parent: {modal.parentId ? locationPath(data.locations, modal.parentId) : "— (top level)"}
             </div>
           )}
+          {form.level === "Property" && (
+            <>
+              <Field label="Address (optional)"><input style={inputStyle} value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} placeholder="123 Main St, Anytown, ST" /></Field>
+              <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <Field label="Year built (optional)"><input style={inputStyle} value={form.yearBuilt} onChange={(e) => setForm({ ...form, yearBuilt: e.target.value })} /></Field>
+                <Field label="Climate zone">
+                  <select style={inputStyle} value={form.climateZone} onChange={(e) => setForm({ ...form, climateZone: e.target.value })}>
+                    {CLIMATE_ZONES.map((z) => <option key={z} value={z}>{z}</option>)}
+                  </select>
+                </Field>
+              </div>
+              <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 12 }}>
+                Used by the PM setup wizard (the wand icon next to a Property) to suggest a starter set of recurring maintenance.
+              </div>
+            </>
+          )}
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
             <Btn variant="ghost" onClick={() => closeGuard(isDirty, save, () => setModal(null))}>Cancel</Btn>
             <Btn variant="primary" onClick={save}>Save</Btn>
           </div>
         </Modal>
       )}
+
+      {wizardProperty && <PmWizardModal property={wizardProperty} update={update} onClose={() => setWizardProperty(null)} />}
     </div>
   );
 }
@@ -3334,8 +3540,8 @@ function ScheduleView({ data, role, currentUserId, goToOrder }) {
 const SHEET_SPECS = [
   {
     key: "locations", sheetName: "Locations", idPrefix: "loc",
-    toRow: (l) => ({ id: l.id, name: l.name, level: l.level, parentId: l.parentId || "", createdBy: l.createdBy || "" }),
-    fromRow: (r) => ({ id: r.id, name: String(r.name || ""), level: String(r.level || "Room"), parentId: r.parentId ? String(r.parentId) : null, createdBy: r.createdBy || null }),
+    toRow: (l) => ({ id: l.id, name: l.name, level: l.level, parentId: l.parentId || "", address: l.address || "", yearBuilt: l.yearBuilt || "", climateZone: l.climateZone || "", pmWizardRunAt: l.pmWizardRunAt || "", createdBy: l.createdBy || "" }),
+    fromRow: (r) => ({ id: r.id, name: String(r.name || ""), level: String(r.level || "Room"), parentId: r.parentId ? String(r.parentId) : null, address: String(r.address || ""), yearBuilt: String(r.yearBuilt || ""), climateZone: String(r.climateZone || ""), pmWizardRunAt: String(r.pmWizardRunAt || ""), createdBy: r.createdBy || null }),
   },
   {
     key: "assets", sheetName: "Assets", idPrefix: "a",

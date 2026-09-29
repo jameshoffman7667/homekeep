@@ -373,6 +373,11 @@ The database volume is untouched by any of the above.
   rather than a real climate/weather lookup — nudge the day offset if
   you're in the Southern Hemisphere or want it to track local
   conditions more closely.
+- The **PM setup wizard's** (v1.5) climate-zone guess is a small
+  built-in state/province lookup table, not a live climate or
+  geocoding service — it's shown for you to confirm or correct before
+  anything is created, and can be off for addresses it doesn't
+  recognize (falls back to "Unknown," letting you pick manually).
 
 These are reasonable next additions if you want to keep building on
 this — the backend's REST API (`/api/*` in `server.js`) is a
