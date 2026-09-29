@@ -6,6 +6,7 @@ import {
   Layers, Search, Boxes, ChevronLeft, Loader2, LogOut, UserPlus, Shield,
   Calendar, FileDown, FileUp, Info, Archive, Download, ExternalLink, ShoppingCart,
   Building2, DoorOpen, Square, Box, Sun, Moon, MonitorSmartphone, QrCode,
+  Gauge, Snowflake,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
@@ -353,6 +354,27 @@ function nextFixedOccurrence(month, day, fromISO) {
   }
   return candidate.toISOString().slice(0, 10);
 }
+const SEASONS = ["Spring", "Summer", "Fall", "Winter"];
+// Northern Hemisphere meteorological season boundaries — a documented
+// simplification (see the functional spec / README) rather than a true
+// climate-derived date; the offset field lets a household nudge it.
+const SEASON_START_MONTH_DAY = { Spring: [3, 1], Summer: [6, 1], Fall: [9, 1], Winter: [12, 1] };
+function seasonAnchorDate(season, offsetDays, fromISO) {
+  const [month, day] = SEASON_START_MONTH_DAY[season] || SEASON_START_MONTH_DAY.Spring;
+  const from = new Date((fromISO || todayISO()) + "T00:00:00");
+  let year = from.getFullYear();
+  const build = () => {
+    const dd = new Date(year, month - 1, day);
+    dd.setDate(dd.getDate() + (Number(offsetDays) || 0));
+    return dd;
+  };
+  let candidate = build();
+  if (candidate < from) {
+    year += 1;
+    candidate = build();
+  }
+  return candidate.toISOString().slice(0, 10);
+}
 function sameDateNextYear(dateISO) {
   const d = new Date((dateISO || todayISO()) + "T00:00:00");
   d.setFullYear(d.getFullYear() + 1);
@@ -367,9 +389,19 @@ function spawnPmInstance(d, base, opts) {
   if (pmBaseHasActiveChild(d, base.id)) return;
   const afterDateISO = opts.afterDateISO;
   const fixedDate = opts.fixedDate;
-  const requiredByDate = fixedDate
-    ? nextFixedOccurrence(fixedDate.month, fixedDate.day, afterDateISO)
-    : addInterval(afterDateISO, base.frequencyValue, base.frequencyUnit);
+  const triggerType = base.triggerType || "calendar";
+  let requiredByDate;
+  if (triggerType === "meter") {
+    // Meter triggers aren't scheduled ahead — they're due the moment the
+    // reading crosses the interval, so "required by" is just today.
+    requiredByDate = opts.requiredByDate || todayISO();
+  } else if (triggerType === "seasonal") {
+    requiredByDate = seasonAnchorDate(base.seasonalAnchor, base.seasonalOffsetDays, afterDateISO);
+  } else if (fixedDate) {
+    requiredByDate = nextFixedOccurrence(fixedDate.month, fixedDate.day, afterDateISO);
+  } else {
+    requiredByDate = addInterval(afterDateISO, base.frequencyValue, base.frequencyUnit);
+  }
   d.counters = d.counters || { wo: 0, wr: 0, part: 0 };
   d.counters.wo += 1;
   d.workOrders.push({
@@ -380,12 +412,39 @@ function spawnPmInstance(d, base, opts) {
     priority: base.priority || "Medium", executorId: base.executorId || "",
     scheduledDate: "", requiredByDate, completedDate: null, verifiedDate: null,
     cost: "", vendorId: base.vendorId || null, notes: "", parts: [], comments: [], partsDeducted: false, createdBy: base.createdBy || null,
+    meterValueAtGeneration: triggerType === "meter" && opts.meterValueAtGeneration != null ? opts.meterValueAtGeneration : null,
   });
 }
 function regeneratePmAfterCompletion(d, completedWO) {
   const base = d.workOrders.find((w) => w.id === completedWO.sourcePmBaseId && w.type === "PM Base");
   if (!base) return;
   if (pmBaseHasActiveChild(d, base.id)) return;
+  const triggerType = base.triggerType || "calendar";
+  if (triggerType === "meter") {
+    // Roll the baseline forward to the reading this occurrence was actually
+    // triggered at — mirrors non-fixed calendar mode rolling forward from
+    // the completion date, but keyed to the meter instead of the calendar.
+    // The next occurrence isn't spawned here; checkMeterPmTriggers generates
+    // it once the asset's reading crosses the new threshold.
+    base.meterBaselineValue = completedWO.meterValueAtGeneration != null ? completedWO.meterValueAtGeneration : (base.meterBaselineValue || 0);
+    return;
+  }
+  if (triggerType === "seasonal") {
+    const requiredByDate = sameDateNextYear(completedWO.requiredByDate || todayISO());
+    d.counters = d.counters || { wo: 0, wr: 0, part: 0 };
+    d.counters.wo += 1;
+    d.workOrders.push({
+      id: uid("wo"), number: d.counters.wo, title: base.title, type: "PM", status: "Open",
+      assetId: base.assetId, bomNodeId: base.bomNodeId, locationId: base.locationId,
+      description: base.description, sourceRequestId: null, sourceBenchmarkId: null,
+      sourcePmBaseId: base.id, sourceFixedDate: null,
+      priority: base.priority || "Medium", executorId: base.executorId || "",
+      scheduledDate: "", requiredByDate, completedDate: null, verifiedDate: null,
+      cost: "", vendorId: base.vendorId || null, notes: "", parts: [], comments: [], partsDeducted: false, createdBy: base.createdBy || null,
+      meterValueAtGeneration: null,
+    });
+    return;
+  }
   if (base.pmMode === "Fixed" && completedWO.sourceFixedDate) {
     const requiredByDate = sameDateNextYear(completedWO.requiredByDate || todayISO());
     d.counters = d.counters || { wo: 0, wr: 0, part: 0 };
@@ -398,10 +457,45 @@ function regeneratePmAfterCompletion(d, completedWO) {
       priority: base.priority || "Medium", executorId: base.executorId || "",
       scheduledDate: "", requiredByDate, completedDate: null, verifiedDate: null,
       cost: "", vendorId: base.vendorId || null, notes: "", parts: [], comments: [], partsDeducted: false, createdBy: base.createdBy || null,
+      meterValueAtGeneration: null,
     });
   } else {
     spawnPmInstance(d, base, { afterDateISO: completedWO.completedDate || todayISO(), fixedDate: null });
   }
+}
+// Sweeps every meter-triggered PM Base and generates the next occurrence
+// once its linked asset's current reading has crossed the configured
+// interval past the base's baseline. Called after every data mutation (see
+// HomeKeepApp's `update`) so logging a new meter reading — or anything else
+// — immediately picks up any PM that just became due.
+function checkMeterPmTriggers(d) {
+  (d.workOrders || [])
+    .filter((w) => w.type === "PM Base" && (w.triggerType || "calendar") === "meter")
+    .forEach((base) => {
+      if (pmBaseHasActiveChild(d, base.id)) return;
+      const asset = d.assets.find((a) => a.id === base.assetId);
+      if (!asset) return;
+      const current = Number(asset.currentMeterValue) || 0;
+      const baseline = Number(base.meterBaselineValue) || 0;
+      const interval = Number(base.meterIntervalValue) || 0;
+      if (interval > 0 && current >= baseline + interval) {
+        spawnPmInstance(d, base, { afterDateISO: todayISO(), fixedDate: null, meterValueAtGeneration: current });
+      }
+    });
+  return d;
+}
+// Short label for a PM Base's schedule, used on its card and detail view.
+function pmBaseScheduleLabel(base, data) {
+  const triggerType = base.triggerType || "calendar";
+  if (triggerType === "meter") {
+    const asset = data.assets.find((a) => a.id === base.assetId);
+    return `Meter · every ${base.meterIntervalValue || "?"}${asset?.meterUnit ? " " + asset.meterUnit : ""}`;
+  }
+  if (triggerType === "seasonal") {
+    const off = Number(base.seasonalOffsetDays) || 0;
+    return `Seasonal · ${base.seasonalAnchor || "Spring"}${off ? ` (${off > 0 ? "+" : ""}${off}d)` : ""}`;
+  }
+  return base.pmMode || "Non-fixed";
 }
 
 /* ============================================================
@@ -703,6 +797,33 @@ function QrLabelModal({ asset, onClose }) {
   );
 }
 
+function LogMeterModal({ asset, update, onClose }) {
+  const [value, setValue] = useState(asset.currentMeterValue || "");
+  const [date, setDate] = useState(todayISO());
+  const save = () => {
+    update((d) => {
+      const a = d.assets.find((x) => x.id === asset.id);
+      a.currentMeterValue = Number(value) || 0;
+      a.meterUpdatedDate = date;
+      return d;
+    });
+    onClose();
+  };
+  return (
+    <Modal title={`Log meter reading — ${asset.name}`} onClose={onClose}>
+      <Field label={`Current reading (${asset.meterUnit})`}><input type="number" style={inputStyle} value={value} onChange={(e) => setValue(e.target.value)} autoFocus /></Field>
+      <Field label="As of"><input type="date" style={inputStyle} value={date} onChange={(e) => setDate(e.target.value)} /></Field>
+      <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginBottom: 10 }}>
+        Saving this checks every meter-based PM linked to this asset and generates the next work order automatically if the reading has crossed its interval.
+      </div>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+        <Btn variant="primary" onClick={save}>Save reading</Btn>
+      </div>
+    </Modal>
+  );
+}
+
 // Parses "#asset/<id>" out of the current URL once, and clears the hash
 // so re-visiting the Assets tab later doesn't keep jumping back to it.
 function parseAssetDeepLink() {
@@ -913,7 +1034,7 @@ function Sidebar({ tab, setTab, open, role, counts, onNavigate }) {
         })}
       </div>
       <div style={{ padding: 14, borderTop: "1px solid rgba(255,255,255,0.12)", fontFamily: FONT_BODY, fontSize: 11, color: "#8FA0AF" }}>
-        v1.2 · matches the HomeKeep functional spec
+        v1.3 · matches the HomeKeep functional spec
       </div>
     </div>
   );
@@ -1294,7 +1415,8 @@ function AssetsView({ data, update, role, goToOrder, deepLinkAssetId, onConsumeD
   const [selected, setSelected] = useState(deepLinkAssetId || data.assets[0]?.id || null);
   const [modal, setModal] = useState(null);
   const [showQr, setShowQr] = useState(false);
-  const blank = { name: "", category: "", locationId: data.locations[0]?.id || "", manufacturer: "", model: "", serial: "", purchaseDate: "", warrantyEnd: "", manualUrl: "", isMajor: false, notes: "" };
+  const [showMeterLog, setShowMeterLog] = useState(false);
+  const blank = { name: "", category: "", locationId: data.locations[0]?.id || "", manufacturer: "", model: "", serial: "", purchaseDate: "", warrantyEnd: "", manualUrl: "", isMajor: false, notes: "", meterUnit: "", currentMeterValue: "", meterUpdatedDate: "" };
   const [form, setForm] = useState(blank);
   const initial = useRef(null);
   const isDirty = modal && JSON.stringify(form) !== initial.current;
@@ -1369,6 +1491,9 @@ function AssetsView({ data, update, role, goToOrder, deepLinkAssetId, onConsumeD
                   {asset.isMajor && (
                     <Btn small variant="ghost" onClick={() => setShowQr(true)}><QrCode size={12} /> QR label</Btn>
                   )}
+                  {asset.meterUnit && (
+                    <Btn small variant="ghost" onClick={() => setShowMeterLog(true)}><Gauge size={12} /> Log reading</Btn>
+                  )}
                   {isAdmin(role) && (
                     <>
                       <Btn small variant="ghost" onClick={openEdit}><Pencil size={12} /> Edit</Btn>
@@ -1382,6 +1507,7 @@ function AssetsView({ data, update, role, goToOrder, deepLinkAssetId, onConsumeD
                   ["Category", asset.category || "—"], ["Manufacturer", asset.manufacturer || "—"],
                   ["Model", asset.model || "—"], ["Serial", asset.serial || "—"],
                   ["Purchased", fmtDate(asset.purchaseDate)], ["Warranty ends", fmtDate(asset.warrantyEnd)],
+                  ...(asset.meterUnit ? [["Meter reading", `${asset.currentMeterValue || 0} ${asset.meterUnit}${asset.meterUpdatedDate ? " (as of " + fmtDate(asset.meterUpdatedDate) + ")" : ""}`]] : []),
                 ].map(([k, v]) => (
                   <div key={k}>
                     <div style={{ fontFamily: FONT_BODY, fontSize: 10.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: "0.03em" }}>{k}</div>
@@ -1398,6 +1524,7 @@ function AssetsView({ data, update, role, goToOrder, deepLinkAssetId, onConsumeD
               {asset.notes && <div style={{ marginTop: 12, fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkSoft, fontStyle: "italic" }}>{asset.notes}</div>}
             </Panel>
             {showQr && <QrLabelModal asset={asset} onClose={() => setShowQr(false)} />}
+            {showMeterLog && <LogMeterModal asset={asset} update={update} onClose={() => setShowMeterLog(false)} />}
 
             <Panel style={{ padding: 16, marginBottom: 14 }}>
               <BomTree data={data} update={update} assetId={asset.id} role={role} />
@@ -1460,6 +1587,13 @@ function AssetsView({ data, update, role, goToOrder, deepLinkAssetId, onConsumeD
             <input type="checkbox" checked={!!form.isMajor} onChange={(e) => setForm({ ...form, isMajor: e.target.checked })} />
             Major asset — show a printable QR label for it
           </label>
+          <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <Field label="Meter unit (optional)"><input style={inputStyle} value={form.meterUnit} onChange={(e) => setForm({ ...form, meterUnit: e.target.value })} placeholder="e.g. hours, miles, cycles" /></Field>
+            <Field label="Current reading"><input type="number" style={inputStyle} value={form.currentMeterValue} onChange={(e) => setForm({ ...form, currentMeterValue: e.target.value })} /></Field>
+          </div>
+          <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 12 }}>
+            Set a meter unit to enable meter-based PM triggers ("service every 250 hours") for this asset — readings can then be logged from its detail page without reopening this form.
+          </div>
           <Field label="Notes"><textarea style={{ ...inputStyle, minHeight: 60 }} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
             <Btn variant="ghost" onClick={() => closeGuard(isDirty, save, () => setModal(null))}>Cancel</Btn>
@@ -1643,45 +1777,89 @@ function PartsPicker({ data, update, value, onChange, defaultLocationId, current
 /* ============================================================
    WORK REQUESTS
 ============================================================ */
-function PmBaseFields({ form, setForm }) {
+function PmBaseFields({ form, setForm, data }) {
   const addFixedDate = () => setForm((f) => ({ ...f, fixedDates: [...(f.fixedDates || []), { month: 1, day: 1 }] }));
   const removeFixedDate = (i) => setForm((f) => ({ ...f, fixedDates: f.fixedDates.filter((_, idx) => idx !== i) }));
   const updateFixedDate = (i, patch) => setForm((f) => ({ ...f, fixedDates: f.fixedDates.map((fd, idx) => (idx === i ? { ...fd, ...patch } : fd)) }));
+  const triggerType = form.triggerType || "calendar";
+  const linkedAsset = form.assetId ? data.assets.find((a) => a.id === form.assetId) : null;
 
   return (
     <>
-      <Field label="PM mode">
-        <select style={inputStyle} value={form.pmMode} onChange={(e) => setForm({ ...form, pmMode: e.target.value })}>
-          <option value="Non-fixed">Non-fixed (repeats on a frequency)</option>
-          <option value="Fixed">Fixed (same date(s) every year)</option>
+      <Field label="Trigger type">
+        <select style={inputStyle} value={triggerType} onChange={(e) => setForm({ ...form, triggerType: e.target.value })}>
+          <option value="calendar">Calendar (date-based)</option>
+          <option value="meter">Meter (usage-based)</option>
+          <option value="seasonal">Seasonal (tied to a season)</option>
         </select>
       </Field>
-      {form.pmMode === "Non-fixed" ? (
-        <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <Field label="Every"><input type="number" min="1" style={inputStyle} value={form.frequencyValue} onChange={(e) => setForm({ ...form, frequencyValue: e.target.value })} /></Field>
-          <Field label="Unit">
-            <select style={inputStyle} value={form.frequencyUnit} onChange={(e) => setForm({ ...form, frequencyUnit: e.target.value })}>
-              {FREQUENCY_UNITS.map((u) => <option key={u} value={u}>{u}</option>)}
+
+      {triggerType === "calendar" && (
+        <>
+          <Field label="PM mode">
+            <select style={inputStyle} value={form.pmMode} onChange={(e) => setForm({ ...form, pmMode: e.target.value })}>
+              <option value="Non-fixed">Non-fixed (repeats on a frequency)</option>
+              <option value="Fixed">Fixed (same date(s) every year)</option>
             </select>
           </Field>
-        </div>
-      ) : (
-        <div style={{ marginBottom: 12 }}>
-          <label style={fieldLabelStyle(false)}>Fixed date(s) of year</label>
-          {(form.fixedDates || []).map((fd, i) => (
-            <div key={i} style={{ display: "flex", gap: 8, marginBottom: 6, alignItems: "center" }}>
-              <select style={{ ...inputStyle, width: 150 }} value={fd.month} onChange={(e) => updateFixedDate(i, { month: Number(e.target.value) })}>
-                {MONTH_NAMES.map((m, idx) => <option key={m} value={idx + 1}>{m}</option>)}
-              </select>
-              <input type="number" min="1" max="31" style={{ ...inputStyle, width: 80 }} value={fd.day} onChange={(e) => updateFixedDate(i, { day: Number(e.target.value) })} />
-              <button onClick={() => removeFixedDate(i)} style={{ background: "none", border: "none", color: C.rust, cursor: "pointer" }}><X size={16} /></button>
+          {form.pmMode === "Non-fixed" ? (
+            <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <Field label="Every"><input type="number" min="1" style={inputStyle} value={form.frequencyValue} onChange={(e) => setForm({ ...form, frequencyValue: e.target.value })} /></Field>
+              <Field label="Unit">
+                <select style={inputStyle} value={form.frequencyUnit} onChange={(e) => setForm({ ...form, frequencyUnit: e.target.value })}>
+                  {FREQUENCY_UNITS.map((u) => <option key={u} value={u}>{u}</option>)}
+                </select>
+              </Field>
             </div>
-          ))}
-          <Btn small variant="ghost" onClick={addFixedDate}><Plus size={12} /> Add date</Btn>
-        </div>
+          ) : (
+            <div style={{ marginBottom: 12 }}>
+              <label style={fieldLabelStyle(false)}>Fixed date(s) of year</label>
+              {(form.fixedDates || []).map((fd, i) => (
+                <div key={i} style={{ display: "flex", gap: 8, marginBottom: 6, alignItems: "center" }}>
+                  <select style={{ ...inputStyle, width: 150 }} value={fd.month} onChange={(e) => updateFixedDate(i, { month: Number(e.target.value) })}>
+                    {MONTH_NAMES.map((m, idx) => <option key={m} value={idx + 1}>{m}</option>)}
+                  </select>
+                  <input type="number" min="1" max="31" style={{ ...inputStyle, width: 80 }} value={fd.day} onChange={(e) => updateFixedDate(i, { day: Number(e.target.value) })} />
+                  <button onClick={() => removeFixedDate(i)} style={{ background: "none", border: "none", color: C.rust, cursor: "pointer" }}><X size={16} /></button>
+                </div>
+              ))}
+              <Btn small variant="ghost" onClick={addFixedDate}><Plus size={12} /> Add date</Btn>
+            </div>
+          )}
+        </>
       )}
+
+      {triggerType === "meter" && (
+        <>
+          <Field label={`Every${linkedAsset?.meterUnit ? ` (${linkedAsset.meterUnit})` : ""}`}>
+            <input type="number" min="1" style={inputStyle} value={form.meterIntervalValue} onChange={(e) => setForm({ ...form, meterIntervalValue: e.target.value })} placeholder="e.g. 250" />
+          </Field>
+          <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 12 }}>
+            {linkedAsset
+              ? `Tracks ${linkedAsset.name}'s meter — currently at ${linkedAsset.currentMeterValue || 0}${linkedAsset.meterUnit ? " " + linkedAsset.meterUnit : ""}. Log new readings from the asset's detail page; this PM is generated automatically once the reading crosses the interval.`
+              : "Pick the asset this meter belongs to below — meter-based PM needs a linked asset with a meter unit set."}
+          </div>
+        </>
+      )}
+
+      {triggerType === "seasonal" && (
+        <>
+          <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <Field label="Season">
+              <select style={inputStyle} value={form.seasonalAnchor || "Spring"} onChange={(e) => setForm({ ...form, seasonalAnchor: e.target.value })}>
+                {SEASONS.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </Field>
+            <Field label="Offset (days)"><input type="number" style={inputStyle} value={form.seasonalOffsetDays ?? 0} onChange={(e) => setForm({ ...form, seasonalOffsetDays: e.target.value })} /></Field>
+          </div>
+          <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 12 }}>
+            Runs every year around the start of {form.seasonalAnchor || "Spring"} (Northern Hemisphere meteorological seasons: Mar 1 / Jun 1 / Sep 1 / Dec 1), shifted by the offset — negative runs before the season starts, positive after. Nudge the offset if actual conditions (first frost, heating season, etc.) tend to run early or late where you live.
+          </div>
+        </>
+      )}
+
       <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 12 }}>
-        A PM Base is never scheduled or completed itself — it's a template. Creating it generates the first PM work order copied from it. Only one occurrence can be Open or In Progress per PM Base at a time — if multiple fixed dates are configured, only the earliest upcoming one is generated now; the rest follow once the active occurrence is completed.
+        A PM Base is never scheduled or completed itself — it's a template. Creating it generates the first PM work order copied from it (meter-based PM instead waits until the linked asset's reading crosses the interval). Only one occurrence can be Open or In Progress per PM Base at a time — if multiple fixed dates are configured, only the earliest upcoming one is generated now; the rest follow once the active occurrence is completed.
       </div>
     </>
   );
@@ -1744,6 +1922,8 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
       type: wr.suggestedType && wr.suggestedType !== "Unplanned" ? wr.suggestedType : "Corrective",
       scheduledDate: todayISO(), requiredByDate: wr.requiredByDate || "", reason: "", mergeInto: "",
       pmMode: "Non-fixed", frequencyValue: "3", frequencyUnit: "months", fixedDates: [],
+      triggerType: "calendar", meterIntervalValue: "", seasonalAnchor: "Spring", seasonalOffsetDays: "0",
+      assetId: wr.assetId,
     });
     setModal({ action, wr });
   };
@@ -1762,17 +1942,30 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
           sourcePmBaseId: null, sourceFixedDate: null, priority: wr.priority || "Medium", executorId: "",
           scheduledDate: "", requiredByDate: "", completedDate: null, verifiedDate: null,
           cost: "", vendorId: null, notes: "", parts: wr.suggestedParts || [], comments: [], partsDeducted: false, createdBy: currentUser,
-          pmMode: reviewForm.pmMode,
+          pmMode: reviewForm.pmMode, triggerType: reviewForm.triggerType || "calendar",
         };
-        if (reviewForm.pmMode === "Non-fixed") {
+        if (base.triggerType === "meter") {
+          base.meterIntervalValue = Number(reviewForm.meterIntervalValue);
+          const linkedAsset = d.assets.find((a) => a.id === wr.assetId);
+          base.meterBaselineValue = linkedAsset ? (Number(linkedAsset.currentMeterValue) || 0) : 0;
+        } else if (base.triggerType === "seasonal") {
+          base.seasonalAnchor = reviewForm.seasonalAnchor || "Spring";
+          base.seasonalOffsetDays = Number(reviewForm.seasonalOffsetDays) || 0;
+        } else if (reviewForm.pmMode === "Non-fixed") {
           base.frequencyValue = Number(reviewForm.frequencyValue);
           base.frequencyUnit = reviewForm.frequencyUnit;
         } else {
           base.fixedDates = (reviewForm.fixedDates || []).map((f) => ({ month: Number(f.month), day: Number(f.day) }));
         }
         d.workOrders.push(base);
-        if (base.pmMode === "Non-fixed") spawnPmInstance(d, base, { afterDateISO: todayISO(), fixedDate: null });
-        else {
+        if (base.triggerType === "meter") {
+          // No immediate spawn — generated once the asset's meter reading
+          // crosses the interval (see checkMeterPmTriggers, run after every update()).
+        } else if (base.triggerType === "seasonal") {
+          spawnPmInstance(d, base, { afterDateISO: todayISO(), fixedDate: null });
+        } else if (base.pmMode === "Non-fixed") {
+          spawnPmInstance(d, base, { afterDateISO: todayISO(), fixedDate: null });
+        } else {
           const sorted = [...base.fixedDates].sort((a, b) => nextFixedOccurrence(a.month, a.day, todayISO()).localeCompare(nextFixedOccurrence(b.month, b.day, todayISO())));
           sorted.forEach((fd) => spawnPmInstance(d, base, { afterDateISO: todayISO(), fixedDate: fd }));
         }
@@ -1961,7 +2154,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
             A request can never become an Unplanned work order — that type is always created directly.
           </div>
           {reviewForm.type === "PM Base" ? (
-            <PmBaseFields form={reviewForm} setForm={setReviewForm} />
+            <PmBaseFields form={reviewForm} setForm={setReviewForm} data={data} />
           ) : (
             <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
               <Field label="Scheduled date"><input type="date" style={inputStyle} value={reviewForm.scheduledDate} onChange={(e) => setReviewForm({ ...reviewForm, scheduledDate: e.target.value })} /></Field>
@@ -2087,6 +2280,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
     description: "", scheduledDate: todayISO(), requiredByDate: "", vendorId: "", benchmarkId: "", executorId: "",
     priority: "Medium", pmMode: "Non-fixed", frequencyValue: "3", frequencyUnit: "months", fixedDates: [], parts: [],
     failureCode: "", rootCause: "",
+    triggerType: "calendar", meterIntervalValue: "", seasonalAnchor: "Spring", seasonalOffsetDays: "0",
   };
   const [form, setForm] = useState(blank);
   const initial = useRef(null);
@@ -2115,8 +2309,14 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
   const createWO = async () => {
     if (!form.title.trim() || !form.locationId) { await dialog.alertMsg("Title and location are required."); return; }
     if (form.type === "PM Base") {
-      if (form.pmMode === "Non-fixed" && (!form.frequencyValue || Number(form.frequencyValue) <= 0)) { await dialog.alertMsg("Enter a frequency greater than zero."); return; }
-      if (form.pmMode === "Fixed" && form.fixedDates.length === 0) { await dialog.alertMsg("Add at least one fixed date."); return; }
+      const tt = form.triggerType || "calendar";
+      if (tt === "calendar") {
+        if (form.pmMode === "Non-fixed" && (!form.frequencyValue || Number(form.frequencyValue) <= 0)) { await dialog.alertMsg("Enter a frequency greater than zero."); return; }
+        if (form.pmMode === "Fixed" && form.fixedDates.length === 0) { await dialog.alertMsg("Add at least one fixed date."); return; }
+      } else if (tt === "meter") {
+        if (!form.assetId) { await dialog.alertMsg("Meter-based PM needs a linked asset — pick one below."); return; }
+        if (!form.meterIntervalValue || Number(form.meterIntervalValue) <= 0) { await dialog.alertMsg("Enter a meter interval greater than zero."); return; }
+      }
     }
     update((d) => {
       d.counters = d.counters || { wo: 0, wr: 0, part: 0 };
@@ -2145,14 +2345,30 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
         parts: form.type === "PM Base" ? [] : form.parts, comments: [], partsDeducted: false, createdBy: currentUser,
       };
       if (form.type === "PM Base") {
-        wo.pmMode = form.pmMode;
-        if (form.pmMode === "Non-fixed") { wo.frequencyValue = Number(form.frequencyValue); wo.frequencyUnit = form.frequencyUnit; }
-        else wo.fixedDates = form.fixedDates.map((f) => ({ month: Number(f.month), day: Number(f.day) }));
+        wo.triggerType = form.triggerType || "calendar";
+        if (wo.triggerType === "meter") {
+          wo.meterIntervalValue = Number(form.meterIntervalValue);
+          const linkedAsset = d.assets.find((a) => a.id === form.assetId);
+          wo.meterBaselineValue = linkedAsset ? (Number(linkedAsset.currentMeterValue) || 0) : 0;
+        } else if (wo.triggerType === "seasonal") {
+          wo.seasonalAnchor = form.seasonalAnchor || "Spring";
+          wo.seasonalOffsetDays = Number(form.seasonalOffsetDays) || 0;
+        } else {
+          wo.pmMode = form.pmMode;
+          if (form.pmMode === "Non-fixed") { wo.frequencyValue = Number(form.frequencyValue); wo.frequencyUnit = form.frequencyUnit; }
+          else wo.fixedDates = form.fixedDates.map((f) => ({ month: Number(f.month), day: Number(f.day) }));
+        }
       }
       d.workOrders.push(wo);
       if (form.type === "PM Base") {
-        if (wo.pmMode === "Non-fixed") spawnPmInstance(d, wo, { afterDateISO: todayISO(), fixedDate: null });
-        else {
+        if (wo.triggerType === "meter") {
+          // No immediate spawn — generated once the linked asset's meter
+          // reading crosses the interval (see checkMeterPmTriggers).
+        } else if (wo.triggerType === "seasonal") {
+          spawnPmInstance(d, wo, { afterDateISO: todayISO(), fixedDate: null });
+        } else if (wo.pmMode === "Non-fixed") {
+          spawnPmInstance(d, wo, { afterDateISO: todayISO(), fixedDate: null });
+        } else {
           const sorted = [...wo.fixedDates].sort((a, b) => nextFixedOccurrence(a.month, a.day, todayISO()).localeCompare(nextFixedOccurrence(b.month, b.day, todayISO())));
           sorted.forEach((fd) => spawnPmInstance(d, wo, { afterDateISO: todayISO(), fixedDate: fd }));
         }
@@ -2358,7 +2574,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                         <div style={{ fontFamily: FONT_BODY, fontSize: 11, color: C.inkFaint, marginTop: 3 }}>{locationPath(data.locations, b.locationId)}</div>
                         <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
                           <Tag text="PM Base" color={WO_TYPE_COLORS["PM Base"]} soft={C.tealSoft} />
-                          <Tag text={b.pmMode} color={C.inkSoft} soft={C.panelAlt} />
+                          <Tag text={pmBaseScheduleLabel(b, data)} color={C.inkSoft} soft={C.panelAlt} />
                           <Tag text={`${openLinked.length} open`} color={C.navy} soft={C.navySoft} />
                         </div>
                       </div>
@@ -2396,7 +2612,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
             </Field>
           )}
 
-          {form.type === "PM Base" && <PmBaseFields form={form} setForm={setForm} />}
+          {form.type === "PM Base" && <PmBaseFields form={form} setForm={setForm} data={data} />}
 
           {(form.type === "Corrective" || form.type === "Unplanned") && (
             <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -2488,7 +2704,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                       {assignableUsers.map((u) => <option key={u.id} value={u.id}>{u.username} ({u.role})</option>)}
                     </select>
                   </Field>
-                  <PmBaseFields form={detailEdits} setForm={setDetailEdits} />
+                  <PmBaseFields form={detailEdits} setForm={setDetailEdits} data={data} />
                   <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 16 }}>
                     <Btn small onClick={saveDetail}>Save changes</Btn>
                     <Btn small variant="primary" onClick={() => { saveDetail(); setOpenId(null); }}>Save & Close</Btn>
@@ -2496,7 +2712,14 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                 </>
               ) : (
                 <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.ink, marginBottom: 10 }}>
-                  {openWO.pmMode === "Fixed"
+                  {openWO.triggerType === "meter"
+                    ? (() => {
+                        const asset = data.assets.find((a) => a.id === openWO.assetId);
+                        return `Meter-based — generates every ${openWO.meterIntervalValue}${asset?.meterUnit ? " " + asset.meterUnit : ""} of use on ${asset ? asset.name : "the linked asset"} (currently at ${asset?.currentMeterValue || 0}${asset?.meterUnit ? " " + asset.meterUnit : ""}).`;
+                      })()
+                    : openWO.triggerType === "seasonal"
+                    ? `Seasonal — runs every year around the start of ${openWO.seasonalAnchor || "Spring"}${Number(openWO.seasonalOffsetDays) ? ` (${Number(openWO.seasonalOffsetDays) > 0 ? "+" : ""}${openWO.seasonalOffsetDays} days)` : ""}.`
+                    : openWO.pmMode === "Fixed"
                     ? `Fixed schedule — runs every year on: ${(openWO.fixedDates || []).map((f) => `${MONTH_NAMES[f.month - 1]} ${f.day}`).join(", ")}`
                     : `Repeats every ${openWO.frequencyValue} ${openWO.frequencyUnit}, counted forward from each completion date.`}
                   {openWO.description && <div style={{ marginTop: 8, fontStyle: "italic", color: C.inkSoft }}>{openWO.description}</div>}
@@ -2559,6 +2782,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                       ["Priority", openWO.priority || "Medium"],
                       ["Executor", (assignableUsers.find((u) => u.id === openWO.executorId) || {}).username || "Unassigned"],
                       ...(openWO.failureCode ? [["Failure code", openWO.failureCode]] : []),
+                      ...(openWO.meterValueAtGeneration != null ? [["Triggered at", `${openWO.meterValueAtGeneration}${(data.assets.find((a) => a.id === openWO.assetId) || {}).meterUnit ? " " + data.assets.find((a) => a.id === openWO.assetId).meterUnit : ""}`]] : []),
                     ].map(([k, v]) => (
                       <div key={k}>
                         <div style={{ fontFamily: FONT_BODY, fontSize: 10.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: "0.03em" }}>{k}</div>
@@ -2650,7 +2874,10 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
 
               {openWO.sourcePmBaseId && (
                 <div style={{ marginTop: 12, fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint }}>
-                  Generated from PM Base {formatWoNum((data.workOrders.find((w) => w.id === openWO.sourcePmBaseId) || {}).number)}. Completing this will automatically generate the next occurrence.
+                  Generated from PM Base {formatWoNum((data.workOrders.find((w) => w.id === openWO.sourcePmBaseId) || {}).number)}.{" "}
+                  {(data.workOrders.find((w) => w.id === openWO.sourcePmBaseId) || {}).triggerType === "meter"
+                    ? "Completing this rolls the meter baseline forward — the next occurrence is generated once the asset's reading crosses the interval again."
+                    : "Completing this will automatically generate the next occurrence."}
                 </div>
               )}
             </>
@@ -2981,8 +3208,8 @@ const SHEET_SPECS = [
   },
   {
     key: "assets", sheetName: "Assets", idPrefix: "a",
-    toRow: (a) => ({ id: a.id, name: a.name, category: a.category || "", locationId: a.locationId || "", manufacturer: a.manufacturer || "", model: a.model || "", serial: a.serial || "", purchaseDate: a.purchaseDate || "", warrantyEnd: a.warrantyEnd || "", manualUrl: a.manualUrl || "", isMajor: a.isMajor ? "yes" : "", notes: a.notes || "", createdBy: a.createdBy || "" }),
-    fromRow: (r) => ({ id: r.id, name: String(r.name || ""), category: String(r.category || ""), locationId: r.locationId ? String(r.locationId) : "", manufacturer: String(r.manufacturer || ""), model: String(r.model || ""), serial: String(r.serial || ""), purchaseDate: String(r.purchaseDate || ""), warrantyEnd: String(r.warrantyEnd || ""), manualUrl: String(r.manualUrl || ""), isMajor: String(r.isMajor || "").toLowerCase() === "yes", notes: String(r.notes || ""), createdBy: r.createdBy || null }),
+    toRow: (a) => ({ id: a.id, name: a.name, category: a.category || "", locationId: a.locationId || "", manufacturer: a.manufacturer || "", model: a.model || "", serial: a.serial || "", purchaseDate: a.purchaseDate || "", warrantyEnd: a.warrantyEnd || "", manualUrl: a.manualUrl || "", isMajor: a.isMajor ? "yes" : "", meterUnit: a.meterUnit || "", currentMeterValue: a.currentMeterValue || "", meterUpdatedDate: a.meterUpdatedDate || "", notes: a.notes || "", createdBy: a.createdBy || "" }),
+    fromRow: (r) => ({ id: r.id, name: String(r.name || ""), category: String(r.category || ""), locationId: r.locationId ? String(r.locationId) : "", manufacturer: String(r.manufacturer || ""), model: String(r.model || ""), serial: String(r.serial || ""), purchaseDate: String(r.purchaseDate || ""), warrantyEnd: String(r.warrantyEnd || ""), manualUrl: String(r.manualUrl || ""), isMajor: String(r.isMajor || "").toLowerCase() === "yes", meterUnit: String(r.meterUnit || ""), currentMeterValue: r.currentMeterValue !== "" && r.currentMeterValue != null ? Number(r.currentMeterValue) : "", meterUpdatedDate: String(r.meterUpdatedDate || ""), notes: String(r.notes || ""), createdBy: r.createdBy || null }),
   },
   {
     key: "bomNodes", sheetName: "BOM Nodes", idPrefix: "bom",
@@ -3014,6 +3241,9 @@ const SHEET_SPECS = [
       scheduledDate: w.scheduledDate || "", requiredByDate: w.requiredByDate || "", completedDate: w.completedDate || "", verifiedDate: w.verifiedDate || "",
       cost: w.cost || "", vendorId: w.vendorId || "", notes: w.notes || "", createdBy: w.createdBy || "",
       failureCode: w.failureCode || "", rootCause: w.rootCause || "",
+      triggerType: w.triggerType || "", meterIntervalValue: w.meterIntervalValue || "", meterBaselineValue: w.meterBaselineValue || "",
+      seasonalAnchor: w.seasonalAnchor || "", seasonalOffsetDays: w.seasonalOffsetDays || "",
+      meterValueAtGeneration: w.meterValueAtGeneration != null ? w.meterValueAtGeneration : "",
     }),
     fromRow: (r) => {
       const fixedDates = String(r.fixedDates || "").split(",").map((s) => s.trim()).filter(Boolean).map((tok) => {
@@ -3038,6 +3268,12 @@ const SHEET_SPECS = [
         scheduledDate: String(r.scheduledDate || ""), requiredByDate: String(r.requiredByDate || ""), completedDate: r.completedDate ? String(r.completedDate) : null, verifiedDate: r.verifiedDate ? String(r.verifiedDate) : null,
         cost: r.cost !== "" && r.cost != null ? String(r.cost) : "", vendorId: r.vendorId ? String(r.vendorId) : null, notes: String(r.notes || ""), createdBy: r.createdBy || null,
         failureCode: String(r.failureCode || ""), rootCause: String(r.rootCause || ""),
+        triggerType: r.triggerType || undefined,
+        meterIntervalValue: r.meterIntervalValue !== "" && r.meterIntervalValue != null ? Number(r.meterIntervalValue) : undefined,
+        meterBaselineValue: r.meterBaselineValue !== "" && r.meterBaselineValue != null ? Number(r.meterBaselineValue) : undefined,
+        seasonalAnchor: r.seasonalAnchor || undefined,
+        seasonalOffsetDays: r.seasonalOffsetDays !== "" && r.seasonalOffsetDays != null ? Number(r.seasonalOffsetDays) : undefined,
+        meterValueAtGeneration: r.meterValueAtGeneration !== "" && r.meterValueAtGeneration != null ? Number(r.meterValueAtGeneration) : null,
       };
     },
   },
@@ -3497,7 +3733,11 @@ export default function HomeKeepApp() {
     saveTimer.current = setTimeout(() => { api.saveData(next).catch((e) => console.error("Save failed:", e)); }, 250);
   };
   const update = (fn) => {
-    setDataRaw((prev) => { const next = fn(structuredClone(prev)); persist(next); return next; });
+    setDataRaw((prev) => {
+      const next = checkMeterPmTriggers(fn(structuredClone(prev)));
+      persist(next);
+      return next;
+    });
   };
   const logout = async () => { await api.logout().catch(() => {}); setUser(false); setDataRaw(null); };
 

@@ -18,6 +18,34 @@ the Git commit's summary line) and a **Commit extended description**
 
 ---
 
+## v1.3
+
+**Commit short description:** `v1.3: Meter & seasonal PM triggers`
+
+**Commit extended description:**
+v1.3 is the first of five "Bigger bets" releases, split out one version
+at a time. It extends PM Base templates with a **trigger type**
+alongside the existing calendar mode: **Meter** (usage-based) and
+**Seasonal** (tied to a season rather than a fixed date). Assets gain
+an optional meter unit and current reading (e.g. "247 hours"), logged
+from the asset's detail page; a meter-based PM Base tracks an interval
+against that reading (e.g. every 250 hours) and generates its next
+work order automatically the moment the logged reading crosses the
+threshold — no PM sits scheduled ahead of time the way calendar PM
+does. Seasonal PM Bases run every year around the start of a chosen
+season (Northern Hemisphere meteorological boundaries: Mar 1 / Jun 1 /
+Sep 1 / Dec 1), shiftable by a day offset for things like "before
+heating season" or "first hard frost" that don't fall on the same
+calendar date every year.
+
+This was deliberately done as a schema change now, before more PM
+schedules exist under the old calendar-only model — later versions
+build on the same PM Base record rather than needing a migration.
+Existing calendar-mode PM Bases are unaffected; the new trigger type
+defaults to "calendar" everywhere it's read.
+
+---
+
 ## v1.2
 
 **Commit short description:** `v1.2: Warranties, QR labels, failure codes`

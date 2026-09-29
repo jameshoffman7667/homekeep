@@ -368,6 +368,11 @@ The database volume is untouched by any of the above.
 - **Offline support** is limited to the app shell loading while
   offline; work order/request data still requires a live connection.
 - There isn't a calendar-export (ICS) feature yet.
+- **Seasonal PM triggers** (v1.3) use fixed Northern Hemisphere
+  meteorological season boundaries (Mar 1 / Jun 1 / Sep 1 / Dec 1)
+  rather than a real climate/weather lookup — nudge the day offset if
+  you're in the Southern Hemisphere or want it to track local
+  conditions more closely.
 
 These are reasonable next additions if you want to keep building on
 this — the backend's REST API (`/api/*` in `server.js`) is a
