@@ -37,8 +37,9 @@ export const api = {
   me: () => request("/api/auth/me"),
 
   listUsers: () => request("/api/users"),
-  addUser: (username, password, role) =>
-    request("/api/users", { method: "POST", body: JSON.stringify({ username, password, role }) }),
+  addUser: (username, password, role, email) =>
+    request("/api/users", { method: "POST", body: JSON.stringify({ username, password, role, email }) }),
+  updateUser: (id, patch) => request(`/api/users/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   removeUser: (id) => request(`/api/users/${id}`, { method: "DELETE" }),
 
   getData: () => request("/api/data"),

@@ -60,11 +60,15 @@ Notes:
   - Name, category/type, hierarchy location (required — see 3.1)
   - Manufacturer, model number, serial number
   - Purchase date, warranty end date
+  - An optional **manual link** — a URL to the manufacturer's manual or product page, shown as a clickable link on the asset's detail view
+  - An **"is this a major asset?"** flag — marks the asset as significant enough to warrant a physical QR label (see below)
   - Notes/free text field
 - Support hierarchical assets for grouping related standalone units (e.g., "HVAC System" as parent of "Furnace," "Condenser," "Thermostat," each its own full asset record) — independent from, but each linked to, the location hierarchy
 - Each asset can also serve as the root of a detailed Bill of Materials breaking it down into its physical components and parts (see 3.3)
 - Search and filter by category, location (hierarchy filter, expand/collapse-able), or warranty status
 - Assets, Work Requests, and Work Orders all share the same location-hierarchy filter component
+- The dashboard's warranty panel surfaces assets whose warranty ends within the next 90 days
+- **QR labels:** any asset flagged as major gets a "QR label" action on its detail view, generating a printable label containing a QR code. Scanning it (or otherwise opening the link it encodes) jumps straight to that asset's detail view, deep-linking past the normal tab navigation, and surfaces a one-tap "New work order" action pre-filled with that asset. The same "New work order" quick action is also available directly on every asset's detail view, regardless of whether it has a QR label
 
 ### 3.3 Bill of Materials (BOM) / Equipment Hierarchy
 - Any asset can serve as the root of a Bill of Materials: a multi-level breakdown of the equipment into its constituent components, sub-components, and parts
@@ -127,6 +131,8 @@ Every work order must be classified with exactly one type:
 | **Corrective** | Work identified in advance (e.g., during an inspection or from an asset showing wear) that is then planned and scheduled for a future date, without being urgent enough to require immediate action. When created directly, can optionally start from an existing Benchmark's checklist. | Yes |
 | **Unplanned** | Reactive work done on short notice or ad hoc, with no advance planning (e.g., a burst pipe) | No — always created directly |
 
+**Corrective** and **Unplanned** work orders additionally offer an optional **Failure code** (a fixed list: Wear, Leak, Electrical, Mechanical, User Error, Install Defect, Unknown, Other) and a free-text **Root cause** field, so recurring problems can be tracked and analyzed across an asset's history.
+
 #### 3.6.3 Benchmark Work Orders
 - A **Benchmark** is a saved, reusable checklist/template for a specific recurring-but-not-scheduled job (e.g., "Repaint a bedroom," "Reseal the deck")
 - When creating a **Corrective** work order, the user may optionally copy from an existing benchmark to pre-fill the checklist, estimated time/cost, notes, and vendor
@@ -175,7 +181,12 @@ A **PM Base** is a template work order that is never itself scheduled or complet
 
 ### 3.7 Notifications
 - In-app indicators: a badge on the Work Requests nav item shows the count awaiting review; dashboard stat cards surface overdue and soon-due work
-- (Email/SMS/push notifications are a future enhancement — see Section 8)
+- **Email digest (opt-in):** if the deployment has an SMTP server configured (server-level environment variables — off by default, nothing is sent and no error is raised if unset), each household member can set a personal notification email and choose which of three daily digests they want to receive, from a notification-settings control next to their entry on the Owner Tools members list:
+  - Overdue work orders (any non-PM-Base order past its scheduled date and still Open or In Progress)
+  - Warranties expiring soon (within a configurable window, default 30 days)
+  - Work requests that have sat unreviewed too long (Submitted or Under Review past a configurable window, default 3 days)
+- A member with no email set, or with all three toggles off, simply receives nothing — the feature requires no action from anyone who doesn't want it
+- The digest runs once a day per deployment; it is a summary email, not a per-event push/SMS notification (still a future enhancement — see Section 8)
 
 ### 3.8 Vendors and Service Providers
 - Directory of contractors/service providers (plumber, HVAC tech, landscaper, etc.)
@@ -311,10 +322,10 @@ A **PM Base** is a template work order that is never itself scheduled or complet
 
 ## 8. Future Considerations (Not in Initial Release)
 
-- Email/SMS/push notifications and configurable reminder lead times
+- Per-event push/SMS notifications and configurable reminder lead times (a daily opt-in email digest shipped in v1.2 — see 3.7)
 - Photo/document attachments on assets, BOM nodes, work orders, and work requests
 - Calendar export (ICS) / sync with external calendars
 - IoT/smart-home sensor integration to trigger condition-based maintenance automatically
 - Automatic mileage sync from a connected vehicle or odometer-tracking app
 - Multi-property support for landlords or vacation homes
-- Barcode/QR code generation and scanning for assets and parts
+- Barcode/QR code scanning for parts (asset QR label generation shipped in v1.2 — see 3.2)

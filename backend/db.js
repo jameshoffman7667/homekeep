@@ -68,4 +68,19 @@ try {
   // ignore — harmless if there are no such rows
 }
 
+// Migration: v1.2 added an optional notification email and three
+// per-user notification toggles to the users table. ADD COLUMN is
+// safe here (unlike the role CHECK constraint above) since these are
+// plain nullable/defaulted columns, not a constraint that would
+// reject existing rows.
+try {
+  const cols = db.prepare("PRAGMA table_info(users)").all().map((c) => c.name);
+  if (!cols.includes("email")) db.exec("ALTER TABLE users ADD COLUMN email TEXT");
+  if (!cols.includes("notify_pm_overdue")) db.exec("ALTER TABLE users ADD COLUMN notify_pm_overdue INTEGER NOT NULL DEFAULT 1");
+  if (!cols.includes("notify_warranty_expiring")) db.exec("ALTER TABLE users ADD COLUMN notify_warranty_expiring INTEGER NOT NULL DEFAULT 1");
+  if (!cols.includes("notify_work_request_unreviewed")) db.exec("ALTER TABLE users ADD COLUMN notify_work_request_unreviewed INTEGER NOT NULL DEFAULT 1");
+} catch (e) {
+  console.error("[homekeep] notification-columns migration failed:", e.message);
+}
+
 module.exports = db;

@@ -21,6 +21,17 @@ services:
       # proxy you run separately) — browsers drop secure cookies sent
       # over plain HTTP.
       - COOKIE_SECURE=${COOKIE_SECURE:-false}
+      # Optional email digest (overdue work orders, expiring warranties,
+      # unreviewed work requests) — leave SMTP_HOST blank to disable.
+      # See .env.example for details.
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_SECURE=${SMTP_SECURE:-false}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+      - SMTP_FROM=${SMTP_FROM:-}
+      - NOTIFY_WARRANTY_WINDOW_DAYS=${NOTIFY_WARRANTY_WINDOW_DAYS:-30}
+      - NOTIFY_UNREVIEWED_WINDOW_DAYS=${NOTIFY_UNREVIEWED_WINDOW_DAYS:-3}
     volumes:
       - homekeep_data:/data
     ports:

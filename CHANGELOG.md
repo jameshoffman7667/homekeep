@@ -18,6 +18,33 @@ the Git commit's summary line) and a **Commit extended description**
 
 ---
 
+## v1.2
+
+**Commit short description:** `v1.2: Warranties, QR labels, failure codes`
+
+**Commit extended description:**
+v1.2 ships the "quick wins" batch of the pending-changes log. Assets
+gain a manual/manufacturer-page link and an "is this a major asset?"
+flag; major assets get a printable QR label (generated client-side)
+that deep-links straight to that asset's record — scanning it, or
+opening the link directly, jumps to the asset detail view and offers
+a one-tap "New work order" action, which now also exists as a button
+on every asset's page regardless of QR use. Corrective and Unplanned
+work orders gained optional Failure code (a fixed list: Wear, Leak,
+Electrical, Mechanical, User Error, Install Defect, Unknown, Other)
+and free-text Root cause fields, both included in Excel backup/restore
+round-tripping and shown on the work order's detail view.
+
+v1.2 also adds an entirely opt-in daily email digest: with an SMTP
+server configured via environment variables, each household member
+can set a notification email and choose which of three digests they
+want (overdue work orders, warranties expiring soon, unreviewed work
+requests) from a new bell icon next to their entry in Owner Tools.
+With no SMTP host configured, nothing changes — the server logs once
+at startup that notifications are disabled.
+
+---
+
 ## v1.1
 
 **Commit short description:** `v1.1: Add light/dark theme support`

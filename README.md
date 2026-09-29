@@ -229,6 +229,14 @@ Owner, Manager, Executor, or Guest. Each person signs in with their own
 username/password. Owner Tools is also where you export/import the
 full household to Excel and delete a work order or request by number.
 
+**Optional email notifications:** set the `SMTP_*` variables in your
+`.env` file (see `.env.example`) to enable a once-a-day digest email
+covering overdue work orders, warranties expiring soon, and unreviewed
+work requests. With `SMTP_HOST` left blank, nothing is sent — no setup
+required. Once SMTP is configured, each member sets their own
+notification email and picks which digests they want via the bell
+icon next to their name on the members list.
+
 ## 7. Using it as an Android/Chrome app (PWA)
 
 On an Android phone, open the site in **Chrome**, then use the menu →
@@ -353,9 +361,10 @@ The database volume is untouched by any of the above.
 
 ## 12. Known simplifications vs. the full functional spec
 
-- **Notifications** are in-app only (the bell icon) — no email/SMS/push
-  yet. Adding push notifications would mean integrating a service like
-  Firebase Cloud Messaging for the Android PWA.
+- **Notifications** are in-app indicators plus an opt-in daily email
+  digest (v1.2, requires SMTP configuration — see Section 6) — no push
+  or SMS yet. Adding push notifications would mean integrating a
+  service like Firebase Cloud Messaging for the Android PWA.
 - **Offline support** is limited to the app shell loading while
   offline; work order/request data still requires a live connection.
 - There isn't a calendar-export (ICS) feature yet.

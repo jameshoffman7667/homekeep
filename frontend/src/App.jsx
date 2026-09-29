@@ -5,9 +5,10 @@ import {
   Check, AlertTriangle, Bell, Menu, Trash2, Pencil, ArrowRight,
   Layers, Search, Boxes, ChevronLeft, Loader2, LogOut, UserPlus, Shield,
   Calendar, FileDown, FileUp, Info, Archive, Download, ExternalLink, ShoppingCart,
-  Building2, DoorOpen, Square, Box, Sun, Moon, MonitorSmartphone,
+  Building2, DoorOpen, Square, Box, Sun, Moon, MonitorSmartphone, QrCode,
 } from "lucide-react";
 import * as XLSX from "xlsx";
+import QRCode from "qrcode";
 import { api } from "./api.js";
 
 /* ============================================================
@@ -215,6 +216,7 @@ const BOM_LEVELS = ["Component", "Sub-component", "Part"];
 const WO_TYPES = ["PM", "PM Base", "Benchmark", "Corrective", "Unplanned"];
 const WO_STATUSES = ["Open", "In Progress", "Completed", "Verified"];
 const PRIORITIES = ["High", "Medium", "Low"];
+const FAILURE_CODES = ["Wear", "Leak", "Electrical", "Mechanical", "User Error", "Install Defect", "Unknown", "Other"];
 const FREQUENCY_UNITS = ["days", "weeks", "months", "years"];
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -641,6 +643,73 @@ function LinkButton({ url, small }) {
   );
 }
 
+// Builds the deep-link URL a QR code should encode: the app's own base
+// URL plus a #asset/<id> hash, consumed on load by HomeKeepApp to jump
+// straight to that asset's record (see parseAssetDeepLink()).
+function assetDeepLink(assetId) {
+  return window.location.origin + import.meta.env.BASE_URL + "#asset/" + assetId;
+}
+
+function QrLabelModal({ asset, onClose }) {
+  const [dataUrl, setDataUrl] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    QRCode.toDataURL(assetDeepLink(asset.id), { width: 320, margin: 1 })
+      .then((url) => { if (!cancelled) setDataUrl(url); })
+      .catch(() => { if (!cancelled) setDataUrl(""); });
+    return () => { cancelled = true; };
+  }, [asset.id]);
+
+  const print = () => {
+    const w = window.open("", "_blank", "width=420,height=520");
+    if (!w) return;
+    w.document.write(`
+      <!doctype html><html><head><title>${asset.name} — QR label</title>
+      <style>
+        body { font-family: sans-serif; text-align: center; padding: 24px; }
+        img { width: 260px; height: 260px; }
+        h1 { font-size: 16px; margin: 14px 0 2px; }
+        p { font-size: 11px; color: #666; margin: 0; }
+      </style></head>
+      <body>
+        <img src="${dataUrl}" />
+        <h1>${asset.name}</h1>
+        <p>Scan to open this asset's record in HomeKeep</p>
+        <script>window.onload = () => { window.print(); };</script>
+      </body></html>
+    `);
+    w.document.close();
+  };
+
+  return (
+    <Modal title={`QR label — ${asset.name}`} onClose={onClose}>
+      <div style={{ textAlign: "center" }}>
+        {dataUrl === null && <div style={{ padding: 30 }}><Loader2 className="animate-spin" size={20} color={C.inkSoft} /></div>}
+        {dataUrl === "" && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.rust, padding: 20 }}>Couldn't generate the QR code.</div>}
+        {dataUrl && (
+          <>
+            <img src={dataUrl} alt={`QR code linking to ${asset.name}`} style={{ width: 220, height: 220 }} />
+            <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint, marginTop: 8 }}>
+              Scanning this opens {asset.name}'s record directly — history, open work orders, and a quick "New work order" action.
+            </div>
+          </>
+        )}
+      </div>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+        <Btn variant="ghost" onClick={onClose}>Close</Btn>
+        <Btn variant="primary" onClick={print} disabled={!dataUrl}><Download size={13} /> Print label</Btn>
+      </div>
+    </Modal>
+  );
+}
+
+// Parses "#asset/<id>" out of the current URL once, and clears the hash
+// so re-visiting the Assets tab later doesn't keep jumping back to it.
+function parseAssetDeepLink() {
+  const m = /#asset\/([^/?#]+)/.exec(window.location.hash);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
 function Empty({ text }) {
   return (
     <div style={{ padding: "28px 16px", textAlign: "center", color: C.inkFaint, fontFamily: FONT_BODY, fontSize: 13 }}>
@@ -844,7 +913,7 @@ function Sidebar({ tab, setTab, open, role, counts, onNavigate }) {
         })}
       </div>
       <div style={{ padding: 14, borderTop: "1px solid rgba(255,255,255,0.12)", fontFamily: FONT_BODY, fontSize: 11, color: "#8FA0AF" }}>
-        v1.1 · matches the HomeKeep functional spec
+        v1.2 · matches the HomeKeep functional spec
       </div>
     </div>
   );
@@ -1218,16 +1287,19 @@ function BomTree({ data, update, assetId, role }) {
   );
 }
 
-function AssetsView({ data, update, role, goToOrder }) {
+function AssetsView({ data, update, role, goToOrder, deepLinkAssetId, onConsumeDeepLink, onNewOrderForAsset }) {
   const dialog = useDialog();
   const closeGuard = useCloseGuard(dialog);
   const [locFilter, setLocFilter] = useState(null);
-  const [selected, setSelected] = useState(data.assets[0]?.id || null);
+  const [selected, setSelected] = useState(deepLinkAssetId || data.assets[0]?.id || null);
   const [modal, setModal] = useState(null);
-  const blank = { name: "", category: "", locationId: data.locations[0]?.id || "", manufacturer: "", model: "", serial: "", purchaseDate: "", warrantyEnd: "", notes: "" };
+  const [showQr, setShowQr] = useState(false);
+  const blank = { name: "", category: "", locationId: data.locations[0]?.id || "", manufacturer: "", model: "", serial: "", purchaseDate: "", warrantyEnd: "", manualUrl: "", isMajor: false, notes: "" };
   const [form, setForm] = useState(blank);
   const initial = useRef(null);
   const isDirty = modal && JSON.stringify(form) !== initial.current;
+
+  useEffect(() => { if (deepLinkAssetId) onConsumeDeepLink(); }, []); // eslint-disable-line
 
   const allowedLocs = locFilter ? descendantIds(data.locations, locFilter) : null;
   const filteredAssets = data.assets.filter((a) => !allowedLocs || allowedLocs.has(a.locationId));
@@ -1290,12 +1362,20 @@ function AssetsView({ data, update, role, goToOrder }) {
                   <div style={{ fontFamily: FONT_HEAD, fontSize: 20, fontWeight: 700, color: C.ink }}>{asset.name}</div>
                   <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkFaint, marginTop: 2 }}>{locationPath(data.locations, asset.locationId)}</div>
                 </div>
-                {isAdmin(role) && (
-                  <div style={{ display: "flex", gap: 6 }}>
-                    <Btn small variant="ghost" onClick={openEdit}><Pencil size={12} /> Edit</Btn>
-                    <Btn small variant="danger" onClick={removeAsset}><Trash2 size={12} /> Archive</Btn>
-                  </div>
-                )}
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {canWrite(role) && (
+                    <Btn small variant="ghost" onClick={() => onNewOrderForAsset(asset)}><Plus size={12} /> New work order</Btn>
+                  )}
+                  {asset.isMajor && (
+                    <Btn small variant="ghost" onClick={() => setShowQr(true)}><QrCode size={12} /> QR label</Btn>
+                  )}
+                  {isAdmin(role) && (
+                    <>
+                      <Btn small variant="ghost" onClick={openEdit}><Pencil size={12} /> Edit</Btn>
+                      <Btn small variant="danger" onClick={removeAsset}><Trash2 size={12} /> Archive</Btn>
+                    </>
+                  )}
+                </div>
               </div>
               <div className="hk-grid-4" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginTop: 16 }}>
                 {[
@@ -1309,8 +1389,15 @@ function AssetsView({ data, update, role, goToOrder }) {
                   </div>
                 ))}
               </div>
+              {asset.manualUrl && (
+                <div style={{ marginTop: 12 }}>
+                  <div style={{ fontFamily: FONT_BODY, fontSize: 10.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: "0.03em", marginBottom: 4 }}>Manual</div>
+                  <LinkButton url={asset.manualUrl} small />
+                </div>
+              )}
               {asset.notes && <div style={{ marginTop: 12, fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkSoft, fontStyle: "italic" }}>{asset.notes}</div>}
             </Panel>
+            {showQr && <QrLabelModal asset={asset} onClose={() => setShowQr(false)} />}
 
             <Panel style={{ padding: 16, marginBottom: 14 }}>
               <BomTree data={data} update={update} assetId={asset.id} role={role} />
@@ -1368,6 +1455,11 @@ function AssetsView({ data, update, role, goToOrder }) {
             <Field label="Purchase date"><input type="date" style={inputStyle} value={form.purchaseDate} onChange={(e) => setForm({ ...form, purchaseDate: e.target.value })} /></Field>
             <Field label="Warranty ends"><input type="date" style={inputStyle} value={form.warrantyEnd} onChange={(e) => setForm({ ...form, warrantyEnd: e.target.value })} /></Field>
           </div>
+          <Field label="Manual (link to PDF or manufacturer page)"><input style={inputStyle} value={form.manualUrl} onChange={(e) => setForm({ ...form, manualUrl: e.target.value })} placeholder="https://…" /></Field>
+          <label style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 12, fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink, cursor: "pointer" }}>
+            <input type="checkbox" checked={!!form.isMajor} onChange={(e) => setForm({ ...form, isMajor: e.target.checked })} />
+            Major asset — show a printable QR label for it
+          </label>
           <Field label="Notes"><textarea style={{ ...inputStyle, minHeight: 60 }} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
             <Btn variant="ghost" onClick={() => closeGuard(isDirty, save, () => setModal(null))}>Cancel</Btn>
@@ -1978,7 +2070,7 @@ function ArchiveModal({ data, onClose, goToOrder }) {
   );
 }
 
-function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId, setOpenId, pendingFilter, consumeFilter }) {
+function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId, setOpenId, pendingFilter, consumeFilter, prefillOrder, consumePrefill }) {
   const dialog = useDialog();
   const closeGuard = useCloseGuard(dialog);
   const [modal, setModal] = useState(null);
@@ -1994,6 +2086,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
     title: "", type: "Unplanned", assetId: null, bomNodeId: null, locationId: data.locations[0]?.id || "",
     description: "", scheduledDate: todayISO(), requiredByDate: "", vendorId: "", benchmarkId: "", executorId: "",
     priority: "Medium", pmMode: "Non-fixed", frequencyValue: "3", frequencyUnit: "months", fixedDates: [], parts: [],
+    failureCode: "", rootCause: "",
   };
   const [form, setForm] = useState(blank);
   const initial = useRef(null);
@@ -2008,6 +2101,16 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
   const assignableUsers = users.filter((u) => u.role === "Owner" || u.role === "Manager" || u.role === "Executor");
 
   const openNew = () => { setForm(blank); initial.current = JSON.stringify(blank); setModal("new"); };
+
+  // Arrived here via the "+ New work order" quick action on an asset's
+  // detail page (or a scanned QR label) — open the new-order form
+  // pre-filled with that asset and its location.
+  useEffect(() => {
+    if (!prefillOrder) return;
+    const f = { ...blank, assetId: prefillOrder.assetId, locationId: prefillOrder.locationId };
+    setForm(f); initial.current = JSON.stringify(f); setModal("new");
+    consumePrefill();
+  }, []); // eslint-disable-line
 
   const createWO = async () => {
     if (!form.title.trim() || !form.locationId) { await dialog.alertMsg("Title and location are required."); return; }
@@ -2037,6 +2140,8 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
         completedDate: null, verifiedDate: null,
         cost: "", vendorId: form.vendorId || null,
         notes: checklist ? "Checklist: " + checklist : "",
+        failureCode: (form.type === "Corrective" || form.type === "Unplanned") ? (form.failureCode || "") : "",
+        rootCause: (form.type === "Corrective" || form.type === "Unplanned") ? (form.rootCause || "") : "",
         parts: form.type === "PM Base" ? [] : form.parts, comments: [], partsDeducted: false, createdBy: currentUser,
       };
       if (form.type === "PM Base") {
@@ -2293,6 +2398,18 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
 
           {form.type === "PM Base" && <PmBaseFields form={form} setForm={setForm} />}
 
+          {(form.type === "Corrective" || form.type === "Unplanned") && (
+            <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <Field label="Failure code">
+                <select style={inputStyle} value={form.failureCode} onChange={(e) => setForm({ ...form, failureCode: e.target.value })}>
+                  <option value="">— none —</option>
+                  {FAILURE_CODES.map((f) => <option key={f} value={f}>{f}</option>)}
+                </select>
+              </Field>
+              <Field label="Root cause"><input style={inputStyle} value={form.rootCause} onChange={(e) => setForm({ ...form, rootCause: e.target.value })} placeholder="Optional detail beyond the code" /></Field>
+            </div>
+          )}
+
           <AssetBomPicker data={data} assetId={form.assetId} bomNodeId={form.bomNodeId} onChange={({ assetId, bomNodeId }) => setForm({ ...form, assetId, bomNodeId, locationId: assetId ? data.assets.find((a) => a.id === assetId).locationId : form.locationId })} />
           <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <Field label="Location" required>
@@ -2417,6 +2534,17 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                       </select>
                     </Field>
                   </div>
+                  {(openWO.type === "Corrective" || openWO.type === "Unplanned") && (
+                    <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                      <Field label="Failure code">
+                        <select style={inputStyle} value={detailEdits.failureCode || ""} onChange={(e) => setDetailEdits({ ...detailEdits, failureCode: e.target.value })}>
+                          <option value="">— none —</option>
+                          {FAILURE_CODES.map((f) => <option key={f} value={f}>{f}</option>)}
+                        </select>
+                      </Field>
+                      <Field label="Root cause"><input style={inputStyle} value={detailEdits.rootCause || ""} onChange={(e) => setDetailEdits({ ...detailEdits, rootCause: e.target.value })} placeholder="Optional detail beyond the code" /></Field>
+                    </div>
+                  )}
                   <PartsPicker data={data} update={update} value={detailEdits.parts || []} onChange={(v) => setDetailEdits({ ...detailEdits, parts: v })} defaultLocationId={openWO.locationId} currentUser={currentUser} role={role} />
                   <Field label="Notes / checklist"><textarea style={{ ...inputStyle, minHeight: 80 }} value={detailEdits.notes || ""} onChange={(e) => setDetailEdits({ ...detailEdits, notes: e.target.value })} /></Field>
                 </>
@@ -2430,6 +2558,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                       ["Vendor", openWO.vendorId ? (nameOf(data.vendors, openWO.vendorId) || "—") : "—"],
                       ["Priority", openWO.priority || "Medium"],
                       ["Executor", (assignableUsers.find((u) => u.id === openWO.executorId) || {}).username || "Unassigned"],
+                      ...(openWO.failureCode ? [["Failure code", openWO.failureCode]] : []),
                     ].map(([k, v]) => (
                       <div key={k}>
                         <div style={{ fontFamily: FONT_BODY, fontSize: 10.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: "0.03em" }}>{k}</div>
@@ -2450,6 +2579,12 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                     <div style={{ marginBottom: 10 }}>
                       <div style={{ fontFamily: FONT_BODY, fontSize: 10.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: "0.03em", marginBottom: 4 }}>Description</div>
                       <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink }}>{openWO.description}</div>
+                    </div>
+                  )}
+                  {openWO.rootCause && (
+                    <div style={{ marginBottom: 10 }}>
+                      <div style={{ fontFamily: FONT_BODY, fontSize: 10.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: "0.03em", marginBottom: 4 }}>Root cause</div>
+                      <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink }}>{openWO.rootCause}</div>
                     </div>
                   )}
                   {openWO.notes && (
@@ -2846,8 +2981,8 @@ const SHEET_SPECS = [
   },
   {
     key: "assets", sheetName: "Assets", idPrefix: "a",
-    toRow: (a) => ({ id: a.id, name: a.name, category: a.category || "", locationId: a.locationId || "", manufacturer: a.manufacturer || "", model: a.model || "", serial: a.serial || "", purchaseDate: a.purchaseDate || "", warrantyEnd: a.warrantyEnd || "", notes: a.notes || "", createdBy: a.createdBy || "" }),
-    fromRow: (r) => ({ id: r.id, name: String(r.name || ""), category: String(r.category || ""), locationId: r.locationId ? String(r.locationId) : "", manufacturer: String(r.manufacturer || ""), model: String(r.model || ""), serial: String(r.serial || ""), purchaseDate: String(r.purchaseDate || ""), warrantyEnd: String(r.warrantyEnd || ""), notes: String(r.notes || ""), createdBy: r.createdBy || null }),
+    toRow: (a) => ({ id: a.id, name: a.name, category: a.category || "", locationId: a.locationId || "", manufacturer: a.manufacturer || "", model: a.model || "", serial: a.serial || "", purchaseDate: a.purchaseDate || "", warrantyEnd: a.warrantyEnd || "", manualUrl: a.manualUrl || "", isMajor: a.isMajor ? "yes" : "", notes: a.notes || "", createdBy: a.createdBy || "" }),
+    fromRow: (r) => ({ id: r.id, name: String(r.name || ""), category: String(r.category || ""), locationId: r.locationId ? String(r.locationId) : "", manufacturer: String(r.manufacturer || ""), model: String(r.model || ""), serial: String(r.serial || ""), purchaseDate: String(r.purchaseDate || ""), warrantyEnd: String(r.warrantyEnd || ""), manualUrl: String(r.manualUrl || ""), isMajor: String(r.isMajor || "").toLowerCase() === "yes", notes: String(r.notes || ""), createdBy: r.createdBy || null }),
   },
   {
     key: "bomNodes", sheetName: "BOM Nodes", idPrefix: "bom",
@@ -2878,6 +3013,7 @@ const SHEET_SPECS = [
       priority: w.priority || "", executorId: w.executorId || "", parts: serializePartsList(w.parts),
       scheduledDate: w.scheduledDate || "", requiredByDate: w.requiredByDate || "", completedDate: w.completedDate || "", verifiedDate: w.verifiedDate || "",
       cost: w.cost || "", vendorId: w.vendorId || "", notes: w.notes || "", createdBy: w.createdBy || "",
+      failureCode: w.failureCode || "", rootCause: w.rootCause || "",
     }),
     fromRow: (r) => {
       const fixedDates = String(r.fixedDates || "").split(",").map((s) => s.trim()).filter(Boolean).map((tok) => {
@@ -2901,6 +3037,7 @@ const SHEET_SPECS = [
         parts: deserializePartsList(r.parts),
         scheduledDate: String(r.scheduledDate || ""), requiredByDate: String(r.requiredByDate || ""), completedDate: r.completedDate ? String(r.completedDate) : null, verifiedDate: r.verifiedDate ? String(r.verifiedDate) : null,
         cost: r.cost !== "" && r.cost != null ? String(r.cost) : "", vendorId: r.vendorId ? String(r.vendorId) : null, notes: String(r.notes || ""), createdBy: r.createdBy || null,
+        failureCode: String(r.failureCode || ""), rootCause: String(r.rootCause || ""),
       };
     },
   },
@@ -2999,11 +3136,49 @@ function BackupTools({ data, update }) {
 /* ============================================================
    OWNER TOOLS
 ============================================================ */
+function MemberNotifyModal({ user, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    email: user.email || "",
+    notifyPmOverdue: user.notifyPmOverdue,
+    notifyWarrantyExpiring: user.notifyWarrantyExpiring,
+    notifyWorkRequestUnreviewed: user.notifyWorkRequestUnreviewed,
+  });
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    setBusy(true);
+    try { await api.updateUser(user.id, form); onSaved(); onClose(); }
+    finally { setBusy(false); }
+  };
+  return (
+    <Modal title={`Notifications — ${user.username}`} onClose={onClose}>
+      <Field label="Notification email"><input type="email" style={inputStyle} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="name@example.com" /></Field>
+      <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginBottom: 10 }}>
+        Requires SMTP to be configured on the server (see .env.example) — with no email set here, or none of the toggles below on, this member gets no digest.
+      </div>
+      {[
+        ["notifyPmOverdue", "Overdue work orders"],
+        ["notifyWarrantyExpiring", "Warranties expiring soon"],
+        ["notifyWorkRequestUnreviewed", "Work requests sitting unreviewed"],
+      ].map(([key, label]) => (
+        <label key={key} style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 8, fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink, cursor: "pointer" }}>
+          <input type="checkbox" checked={!!form[key]} onChange={(e) => setForm({ ...form, [key]: e.target.checked })} />
+          {label}
+        </label>
+      ))}
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
+        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+        <Btn variant="primary" onClick={save} disabled={busy}>Save</Btn>
+      </div>
+    </Modal>
+  );
+}
+
 function MemberManagementInline({ currentUser }) {
   const dialog = useDialog();
   const [users, setUsers] = useState(null);
-  const [form, setForm] = useState({ username: "", password: "", role: "Executor" });
+  const [form, setForm] = useState({ username: "", password: "", role: "Executor", email: "" });
   const [error, setError] = useState("");
+  const [notifyUser, setNotifyUser] = useState(null);
 
   const load = () => api.listUsers().then(setUsers).catch(() => setUsers([]));
   useEffect(() => { load(); }, []); // eslint-disable-line
@@ -3012,8 +3187,8 @@ function MemberManagementInline({ currentUser }) {
     setError("");
     if (!form.username.trim() || !form.password) { setError("Username and password are required."); return; }
     try {
-      await api.addUser(form.username.trim(), form.password, form.role);
-      setForm({ username: "", password: "", role: "Executor" });
+      await api.addUser(form.username.trim(), form.password, form.role, form.email.trim());
+      setForm({ username: "", password: "", role: "Executor", email: "" });
       load();
     } catch (err) { setError(err.message); }
   };
@@ -3034,9 +3209,11 @@ function MemberManagementInline({ currentUser }) {
           <div>
             <span style={{ fontFamily: FONT_BODY, fontSize: 13.5, fontWeight: 600, color: C.ink }}>{u.username}</span>
             {u.id === currentUser.id && <span style={{ fontFamily: FONT_BODY, fontSize: 11, color: C.inkFaint }}> (you)</span>}
+            {u.email && <div style={{ fontFamily: FONT_BODY, fontSize: 11, color: C.inkFaint }}>{u.email}</div>}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <Tag text={u.role} color={u.role === "Owner" ? C.navy : u.role === "Manager" ? C.teal : u.role === "Guest" ? C.inkFaint : C.olive} soft={u.role === "Owner" ? C.navySoft : u.role === "Manager" ? C.tealSoft : u.role === "Guest" ? C.panelAlt : C.oliveSoft} />
+            <button onClick={() => setNotifyUser(u)} title="Notification settings" style={{ background: "none", border: "none", cursor: "pointer", color: C.inkSoft }}><Bell size={14} /></button>
             {u.id !== currentUser.id && <button onClick={() => remove(u)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rust }}><Trash2 size={14} /></button>}
           </div>
         </div>
@@ -3051,13 +3228,16 @@ function MemberManagementInline({ currentUser }) {
           </select>
         </Field>
       </div>
+      <Field label="Notification email (optional)"><input type="email" style={inputStyle} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="name@example.com" /></Field>
       <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 10 }}>
         Owner: full access. Manager: same rights as Owner, but can only delete records they created, and can't reach this page. Executor: does the work — submits requests, updates work orders. Guest: read-only.
+        Notification preferences (which digests they receive) can be set after adding them, via the bell icon.
       </div>
       {error && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.rust, marginBottom: 10 }}>{error}</div>}
       <div style={{ display: "flex", justifyContent: "flex-end" }}>
         <Btn variant="primary" onClick={add}><UserPlus size={14} /> Add member</Btn>
       </div>
+      {notifyUser && <MemberNotifyModal user={notifyUser} onClose={() => setNotifyUser(null)} onSaved={load} />}
     </Panel>
   );
 }
@@ -3266,10 +3446,14 @@ function AuthScreen({ onAuthed }) {
 export default function HomeKeepApp() {
   const [user, setUser] = useState(null);
   const [data, setDataRaw] = useState(null);
-  const [tab, setTabRaw] = useState("dashboard");
+  // A scanned QR label (or any shared link) can land here as "#asset/<id>"
+  // — captured once on first mount, consumed by AssetsView, then cleared.
+  const deepLinkAssetId = useRef(parseAssetDeepLink());
+  const [tab, setTabRaw] = useState(() => (deepLinkAssetId.current ? "assets" : "dashboard"));
   const [sidebarOpen, setSidebarOpen] = useState(() => (typeof window === "undefined" ? true : window.innerWidth > 860));
   const [openOrderId, setOpenOrderId] = useState(null);
   const [pendingFilter, setPendingFilter] = useState(null);
+  const [prefillOrder, setPrefillOrder] = useState(null);
   const [installPrompt, setInstallPrompt] = useState(null);
   const [theme, setTheme] = useState(() => {
     try { return localStorage.getItem("hk-theme") || "auto"; } catch { return "auto"; }
@@ -3321,6 +3505,11 @@ export default function HomeKeepApp() {
   const applyFilter = (t, filter) => { setTabRaw(t); setOpenOrderId(null); setPendingFilter(filter); };
   const goToOrder = (id) => { setTabRaw("orders"); setOpenOrderId(id); setPendingFilter(null); };
   const goToRequest = (id) => { setTabRaw("requests"); setPendingFilter(null); };
+  const goToNewOrderForAsset = (asset) => {
+    setTabRaw("orders"); setOpenOrderId(null); setPendingFilter(null);
+    setPrefillOrder({ assetId: asset.id, locationId: asset.locationId });
+  };
+  const consumeDeepLinkAsset = () => { deepLinkAssetId.current = null; };
 
   if (user === null) return <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: C.bg }}><GlobalStyle /><Loader2 className="animate-spin" size={20} color={C.inkSoft} /></div>;
   if (!user) return <AuthScreen onAuthed={setUser} />;
@@ -3341,9 +3530,9 @@ export default function HomeKeepApp() {
   const views = {
     dashboard: <Dashboard data={data} setTab={setTab} role={role} applyFilter={applyFilter} goToOrder={goToOrder} goToRequest={goToRequest} />,
     locations: <LocationsView data={data} update={update} role={role} />,
-    assets: <AssetsView data={data} update={update} role={role} goToOrder={goToOrder} />,
+    assets: <AssetsView data={data} update={update} role={role} goToOrder={goToOrder} deepLinkAssetId={tab === "assets" ? deepLinkAssetId.current : null} onConsumeDeepLink={consumeDeepLinkAsset} onNewOrderForAsset={goToNewOrderForAsset} />,
     requests: <WorkRequestsView data={data} update={update} role={role} currentUser={user.username} goToOrder={goToOrder} pendingFilter={tab === "requests" ? pendingFilter : null} consumeFilter={() => setPendingFilter(null)} />,
-    orders: <WorkOrdersView data={data} update={update} role={role} currentUser={user.username} currentUserId={user.id} openId={openOrderId} setOpenId={setOpenOrderId} pendingFilter={tab === "orders" ? pendingFilter : null} consumeFilter={() => setPendingFilter(null)} />,
+    orders: <WorkOrdersView data={data} update={update} role={role} currentUser={user.username} currentUserId={user.id} openId={openOrderId} setOpenId={setOpenOrderId} pendingFilter={tab === "orders" ? pendingFilter : null} consumeFilter={() => setPendingFilter(null)} prefillOrder={tab === "orders" ? prefillOrder : null} consumePrefill={() => setPrefillOrder(null)} />,
     schedule: <ScheduleView data={data} role={role} currentUserId={user.id} goToOrder={goToOrder} />,
     vendors: <VendorsView data={data} update={update} role={role} currentUser={user.username} />,
     parts: <PartsView data={data} update={update} role={role} currentUser={user.username} />,
