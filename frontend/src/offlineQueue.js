@@ -9,7 +9,7 @@
 //   { id, type: "workRequest", form: {...}, photos: [File, ...],
 //     requestedBy, queuedAt, status: "pending"|"syncing"|"failed", error }
 
-const DB_NAME = "homekeep-offline";
+const DB_NAME = "maintenhance-offline";
 const DB_VERSION = 1;
 const STORE = "queue";
 

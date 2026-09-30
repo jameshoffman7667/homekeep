@@ -1,6 +1,14 @@
 # HomeKeep — self-hosted deployment
 
-A standalone, single-container build of the HomeKeep household CMMS: a
+> **v1.8 branding note:** the in-app UI is now branded **MaintEnhance**
+> (short form "ME") — this was previously called HomeKeep. The repo name,
+> Docker Hub image, npm package names, and PWA manifest name below are
+> *not* renamed yet (that's planned for a later infrastructure pass), so
+> you'll still see "homekeep" in clone URLs, image tags, and container/volume
+> names throughout this file. That's expected for now — only the product
+> name shown to users has changed.
+
+A standalone, single-container build of the MaintEnhance household CMMS: a
 Node/Express + SQLite backend with real multi-user accounts, serving a
 React frontend that's installable as a PWA on Android (or desktop).
 
@@ -23,9 +31,9 @@ homekeep/
 │   ├── server.js
 │   ├── db.js
 │   ├── auth.js               # JWT sessions, bcrypt password hashing
-│   └── seed.js               # sample household loaded on first setup
+│   └── seed.js               # empty starting shape loaded on first setup
 └── frontend/                 # React app (Vite), builds to static files
-    ├── src/App.jsx            # the full HomeKeep UI
+    ├── src/App.jsx            # the full MaintEnhance UI
     ├── src/api.js              # talks to the backend over /api/*
     └── public/manifest.json    # PWA manifest (installable on Android)
 ```
@@ -242,7 +250,7 @@ icon next to their name on the members list.
 On an Android phone, open the site in **Chrome**, then use the menu →
 **"Add to Home screen" / "Install app"**. On a Chromium desktop
 browser (Chrome, Edge), look for the install icon in the address bar,
-or the **Install app** button that appears in HomeKeep's own top bar
+or the **Install app** button that appears in MaintEnhance's own top bar
 when the browser offers it. Either way, it launches full-screen with
 its own icon, no browser chrome — no Play Store listing needed.
 
@@ -258,7 +266,7 @@ Two levels of access:
 
 ## 8. Enabling HTTPS for remote access
 
-If you want to use HomeKeep from outside your home (e.g. household
+If you want to use MaintEnhance from outside your home (e.g. household
 members checking work requests while out), you need HTTPS and a way
 for traffic to reach your server. This repo doesn't bundle a reverse
 proxy — pick whichever you're already comfortable with, or use one of
@@ -323,7 +331,7 @@ folder name — run `docker volume ls` to check.)
 To restore, reverse the tar command into a fresh volume before starting
 the container.
 
-HomeKeep also has its own in-app backup, independent of the above: as
+MaintEnhance also has its own in-app backup, independent of the above: as
 an Owner, use **Owner Tools → Backup & bulk edit** to export the whole
 household to an Excel file, or re-import one. Note that this only
 carries attachment *ids*, not the photo files themselves (see v1.6
@@ -406,6 +414,30 @@ The database volume is untouched by any of the above.
   `DATA_DIR` volume (Section 9) if you want them covered. The open-alarm
   count badge is polled every 30 seconds while the app is open, not
   pushed to the browser in real time.
+- **v1.8 rebrand (HomeKeep → MaintEnhance)** is UI/product-name only —
+  see the note at the top of this file for what's deliberately left
+  unchanged (repo name, Docker Hub image, npm package names, PWA
+  manifest). Two upgrade side effects: the session cookie was renamed,
+  so **everyone needs to log back in once** after upgrading to v1.8;
+  and the offline work-request queue's local IndexedDB store was also
+  renamed, so if a device has requests still queued (not yet synced)
+  from before the upgrade, sync them (or go online and let them sync)
+  **before** upgrading that device's app — a queue under the old name
+  won't be picked up after the rename.
+- **Alarm Dashboard (v1.8)** — the PM-checklist-triggered and manual
+  alarm paths are additive on top of v1.7's Home Assistant webhook;
+  everything noted above about alarms not being included in the Excel
+  backup/restore, and about the open-alarm badge being polled rather
+  than pushed, applies to all three sources equally.
+- **PM Wizard starter catalogue editor (v1.8)** only supports Calendar/
+  Non-fixed entries (matching what the wizard has always generated) —
+  building a Meter- or Seasonal-triggered starter entry isn't
+  supported from the editor; create those by hand from Work Orders
+  after running the wizard, same as before.
+- **No componentization / feature flags in this release.** v1.8 ships
+  every feature above as a normal, always-on part of the app — there's
+  no per-deployment toggle system yet. That's intentionally scoped for
+  a later v2 release (see Section 8 of the functional spec).
 
 These are reasonable next additions if you want to keep building on
 this — the backend's REST API (`/api/*` in `server.js`) is a

@@ -15,7 +15,7 @@ const PORT = process.env.PORT || 8040;
 // Photo/document attachments (v1.6) — stored on disk under the same
 // mounted-volume DATA_DIR the SQLite file lives in, so they survive
 // container restarts/rebuilds the same way the database does. Only the
-// attachment's id (not the file itself) is ever stored in the household
+// attachment's id (not the file itself) is ever stored in the app_data
 // JSON blob — see PUT /api/data's 2mb body limit above, which a photo
 // would blow past in no time if it were embedded inline.
 const ATTACH_DIR = path.join(db.DATA_DIR, "attachments");
@@ -67,9 +67,9 @@ app.post("/api/auth/setup", (req, res) => {
     hashPassword(password),
     "Owner"
   );
-  db.prepare("INSERT OR REPLACE INTO household (id, data) VALUES (1, ?)").run(JSON.stringify(SEED));
+  db.prepare("INSERT OR REPLACE INTO app_data (id, data) VALUES (1, ?)").run(JSON.stringify(SEED));
   const user = { id, username: username.trim(), role: "Owner" };
-  res.cookie("homekeep_token", signToken(user), COOKIE_OPTS);
+  res.cookie("maintenhance_token", signToken(user), COOKIE_OPTS);
   res.json(user);
 });
 
@@ -80,12 +80,12 @@ app.post("/api/auth/login", (req, res) => {
     return res.status(401).json({ error: "Invalid username or password" });
   }
   const user = { id: row.id, username: row.username, role: row.role };
-  res.cookie("homekeep_token", signToken(user), COOKIE_OPTS);
+  res.cookie("maintenhance_token", signToken(user), COOKIE_OPTS);
   res.json(user);
 });
 
 app.post("/api/auth/logout", (req, res) => {
-  res.clearCookie("homekeep_token");
+  res.clearCookie("maintenhance_token");
   res.json({ ok: true });
 });
 
@@ -138,7 +138,7 @@ app.post("/api/users", requireAuth, requireOwner, (req, res) => {
       (email || "").trim() || null
     );
   } catch (e) {
-    console.error("[homekeep] Failed to create user:", e.message);
+    console.error("[maintenhance] Failed to create user:", e.message);
     return res.status(400).json({ error: "Couldn't create that account. Check the server logs for details." });
   }
   res.json(rowToUser(db.prepare("SELECT id, username, role, email, notify_pm_overdue, notify_warranty_expiring, notify_work_request_unreviewed FROM users WHERE id = ?").get(id)));
@@ -174,9 +174,9 @@ app.delete("/api/users/:id", requireAuth, requireOwner, (req, res) => {
    in-memory shape the frontend already works with.
 ------------------------------------------------------------- */
 app.get("/api/data", requireAuth, (req, res) => {
-  const row = db.prepare("SELECT data FROM household WHERE id = 1").get();
+  const row = db.prepare("SELECT data FROM app_data WHERE id = 1").get();
   if (!row) {
-    db.prepare("INSERT INTO household (id, data) VALUES (1, ?)").run(JSON.stringify(SEED));
+    db.prepare("INSERT INTO app_data (id, data) VALUES (1, ?)").run(JSON.stringify(SEED));
     return res.json(SEED);
   }
   res.json(JSON.parse(row.data));
@@ -186,7 +186,7 @@ app.put("/api/data", requireAuth, (req, res) => {
   const payload = req.body;
   if (!payload || typeof payload !== "object") return res.status(400).json({ error: "Invalid payload" });
   db.prepare(
-    "INSERT INTO household (id, data) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data"
+    "INSERT INTO app_data (id, data) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data"
   ).run(JSON.stringify(payload));
   res.json({ ok: true });
 });
@@ -194,7 +194,7 @@ app.put("/api/data", requireAuth, (req, res) => {
 /* -------------------------------------------------------------
    Photo attachments (v1.6). A work request (or, once synced, a work
    order carried over from one) references attachments only by id —
-   the JSON household blob never holds raw image data. Upload is
+   the JSON app_data blob never holds raw image data. Upload is
    multipart/form-data with a single "file" field; everything else
    here is plain JSON like the rest of the API.
 ------------------------------------------------------------- */
@@ -330,6 +330,57 @@ app.post("/api/alarms", (req, res) => {
   res.json({ ok: true, id });
 });
 
+// Manual/internal alarm creation (v1.8) — used by the "Create alarm" button
+// on the Alarm Dashboard, and by the PM checklist out-of-range check in
+// WorkOrdersView. Cookie-authed (unlike the HA webhook above). Any signed-in
+// user can raise one (an Executor filling out a checklist needs to be able
+// to trigger this, same as they can fill in the checklist itself) — viewing
+// and managing alarms stays Owner/Manager-only via the existing GET/PATCH
+// routes and the Alarm Dashboard's own nav gating. Dedupes: when a
+// sourceEntityId is given, an OPEN alarm already carrying that same
+// source + sourceEntityId is updated in place (message, severity,
+// timestamp) instead of opening a duplicate.
+app.post("/api/alarms/manual", requireAuth, (req, res) => {
+  const { source, sourceEntityId, friendlyName, assetId, locationId, message, severity } = req.body || {};
+  if (!message || !message.trim()) return res.status(400).json({ error: "A message is required" });
+  const alarmSource = ["manual", "pm_checklist"].includes(source) ? source : "manual";
+  const triggeredAt = new Date().toISOString();
+
+  if (sourceEntityId) {
+    const existing = db
+      .prepare("SELECT * FROM alarms WHERE source = ? AND source_entity_id = ? AND status = 'open'")
+      .get(alarmSource, sourceEntityId);
+    if (existing) {
+      db.prepare("UPDATE alarms SET message = ?, severity = ?, triggered_at = ? WHERE id = ?").run(
+        message.trim(),
+        ["info", "warning", "critical"].includes(severity) ? severity : existing.severity,
+        triggeredAt,
+        existing.id
+      );
+      return res.json(rowToAlarm(db.prepare("SELECT * FROM alarms WHERE id = ?").get(existing.id)));
+    }
+  }
+
+  const id = randomUUID();
+  db.prepare(
+    "INSERT INTO alarms (id, source, source_entity_id, friendly_name, asset_id, location_id, message, severity, status, raw_payload, triggered_at) " +
+      "VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+  ).run(
+    id,
+    alarmSource,
+    sourceEntityId || null,
+    friendlyName || null,
+    assetId || null,
+    locationId || null,
+    message.trim(),
+    ["info", "warning", "critical"].includes(severity) ? severity : "warning",
+    "open",
+    null,
+    triggeredAt
+  );
+  res.json(rowToAlarm(db.prepare("SELECT * FROM alarms WHERE id = ?").get(id)));
+});
+
 // The alarm queue itself, for the dashboard tab.
 app.get("/api/alarms", requireAuth, (req, res) => {
   const status = req.query.status;
@@ -361,6 +412,6 @@ app.get("*", (req, res, next) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`HomeKeep server listening on port ${PORT}`);
+  console.log(`MaintEnhance server listening on port ${PORT}`);
   startNotificationScheduler(db);
 });

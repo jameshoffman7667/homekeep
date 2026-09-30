@@ -1,5 +1,5 @@
 // Vite injects BASE_URL from the `base` config value at build time (always
-// ends with a trailing slash — "/" for a normal root deploy, "/homekeep/"
+// ends with a trailing slash — "/" for a normal root deploy, "/maintenhance/"
 // for a subpath deploy). Every API path below is written as "/api/..." for
 // readability and rewritten to sit under that base here, in one place.
 const BASE_URL = import.meta.env.BASE_URL;
@@ -65,9 +65,10 @@ export const api = {
   attachmentUrl: (id) => withBase(`/api/attachments/${id}/file`),
   deleteAttachment: (id) => request(`/api/attachments/${id}`, { method: "DELETE" }),
 
-  // Home Assistant sensor alarms (v1.7).
+  // Home Assistant sensor alarms (v1.7), plus manual/internal creation (v1.8).
   listAlarms: (status) => request(`/api/alarms${status ? `?status=${encodeURIComponent(status)}` : ""}`),
   updateAlarm: (id, patch) => request(`/api/alarms/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  createManualAlarm: (payload) => request("/api/alarms/manual", { method: "POST", body: JSON.stringify(payload) }),
   listAlarmMappings: () => request("/api/alarm-mappings"),
   saveAlarmMapping: (entityId, patch) => request("/api/alarm-mappings", { method: "POST", body: JSON.stringify({ entityId, ...patch }) }),
   deleteAlarmMapping: (entityId) => request(`/api/alarm-mappings/${encodeURIComponent(entityId)}`, { method: "DELETE" }),

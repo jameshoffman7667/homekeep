@@ -18,6 +18,31 @@ the Git commit's summary line) and a **Commit extended description**
 
 ---
 
+## v1.8
+
+**Commit short description:** `v1.8: MaintEnhance rebrand + Alarm Dashboard`
+
+**Commit extended description:**
+v1.8 rebrands the app from HomeKeep to **MaintEnhance** (short form
+"ME") — across the UI, login screen, notification emails, and Excel
+backup — and clears the old furnace/HVAC demo seed data entirely, so a
+fresh deployment starts empty. Internally, the `household` SQLite
+table becomes `app_data` (a guarded migration preserves data) and the
+session cookie is renamed too, so everyone re-logs-in once after
+upgrading. The former Alarms tab becomes the **Alarm Dashboard**:
+alongside Home Assistant's webhook alerts (v1.7), it now also catches
+a numeric PM checklist reading outside its configured expected range
+(auto-raised, deduped per work order/step) and supports raising an
+alarm by hand via "Create alarm." The PM Wizard's starter-maintenance
+catalogue — previously hardcoded — is now editable from Owner Tools
+(add/edit/remove, plus its own Excel backup/restore tab), so a
+household or client fork can tune the suggested list without a code
+change. This release intentionally excludes the feature-flag/
+componentization layer discussed for the West Lincoln client fork —
+everything above is a normal, always-on part of the base app;
+componentizing it into optional, toggleable pieces is scoped for a
+future v2 release.
+
 ## v1.7
 
 **Commit short description:** `v1.7: Home Assistant alarm integration`

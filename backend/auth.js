@@ -4,7 +4,7 @@ const bcrypt = require("bcryptjs");
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) {
   console.warn(
-    "[homekeep] WARNING: JWT_SECRET is not set. Using an insecure default — " +
+    "[maintenhance] WARNING: JWT_SECRET is not set. Using an insecure default — " +
       "set JWT_SECRET to a long random string in your environment before exposing this beyond localhost."
   );
 }
@@ -20,7 +20,7 @@ function signToken(user) {
   return jwt.sign({ id: user.id, username: user.username, role: user.role }, SECRET, { expiresIn: "30d" });
 }
 function requireAuth(req, res, next) {
-  const token = req.cookies && req.cookies.homekeep_token;
+  const token = req.cookies && req.cookies.maintenhance_token;
   if (!token) return res.status(401).json({ error: "Not authenticated" });
   try {
     req.user = jwt.verify(token, SECRET);

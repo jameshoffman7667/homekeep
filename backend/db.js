@@ -7,8 +7,30 @@ const Database = require("better-sqlite3");
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
+// Kept as "homekeep.db" even after the v1.8 MaintEnhance rebrand —
+// renaming the actual file would mean an upgraded deployment opens a
+// fresh, empty database next to its real one (the old file, under the
+// old name, would simply go unread). Nothing outside this file ever
+// sees this filename, so there's no user-facing cost to leaving it.
 const db = new Database(path.join(DATA_DIR, "homekeep.db"));
 db.pragma("journal_mode = WAL");
+
+// Migration (v1.8): the single-row JSON-blob table was named `household`
+// from HomeKeep's original single-household scope. Renamed to the
+// brand-neutral `app_data` as part of the MaintEnhance rebrand — this
+// runs once per deployment and preserves the existing row exactly (a
+// plain ALTER TABLE RENAME, not a copy), so an upgrade never touches
+// the data itself, only what the table is called.
+try {
+  const hasAppData = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'app_data'").get();
+  const hasHousehold = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'household'").get();
+  if (!hasAppData && hasHousehold) {
+    db.exec("ALTER TABLE household RENAME TO app_data;");
+    console.log("[maintenhance] Renamed the `household` table to `app_data` (v1.8 rebrand).");
+  }
+} catch (e) {
+  console.error("[maintenhance] app_data table rename check failed:", e.message);
+}
 
 // Migration: earlier releases created the `users` table with
 // CHECK(role IN ('Owner','Household Member')). `CREATE TABLE IF NOT
@@ -39,10 +61,10 @@ try {
         FROM users_legacy;
       DROP TABLE users_legacy;
     `);
-    console.log("[homekeep] Migrated users table off the legacy Household Member role constraint.");
+    console.log("[maintenhance] Migrated users table off the legacy Household Member role constraint.");
   }
 } catch (e) {
-  console.error("[homekeep] users table migration check failed:", e.message);
+  console.error("[maintenhance] users table migration check failed:", e.message);
 }
 
 db.exec(`
@@ -54,7 +76,7 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
-  CREATE TABLE IF NOT EXISTS household (
+  CREATE TABLE IF NOT EXISTS app_data (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     data TEXT NOT NULL
   );
@@ -69,9 +91,9 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
-  -- v1.7: small key/value store for things that aren't per-household
-  -- application data (the JSON blob) or a user account — currently just
-  -- the Home Assistant webhook's API key.
+  -- v1.7: small key/value store for things that aren't part of the
+  -- app_data JSON blob or a user account — currently just the Home
+  -- Assistant webhook's API key.
   CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
     value TEXT
@@ -79,7 +101,7 @@ db.exec(`
 
   -- v1.7: which HA entity id maps to which asset/location, so a repeat
   -- alert from the same sensor auto-links without re-entering it. Kept
-  -- relational (not in the household JSON blob) since it's looked up on
+  -- relational (not in the app_data JSON blob) since it's looked up on
   -- every inbound webhook hit, independent of the app's own save cycle.
   CREATE TABLE IF NOT EXISTS alarm_entity_map (
     entity_id TEXT PRIMARY KEY,
@@ -92,7 +114,7 @@ db.exec(`
   -- v1.7: the alarm queue itself, upstream of the Work Request queue —
   -- not every sensor trip should become a work item. Relational for the
   -- same reason as attachments/alarm_entity_map: written by an inbound
-  -- webhook that has no business going through the app's household-blob
+  -- webhook that has no business going through the app's app_data-blob
   -- save cycle.
   CREATE TABLE IF NOT EXISTS alarms (
     id TEXT PRIMARY KEY,
@@ -134,7 +156,7 @@ try {
   if (!cols.includes("notify_warranty_expiring")) db.exec("ALTER TABLE users ADD COLUMN notify_warranty_expiring INTEGER NOT NULL DEFAULT 1");
   if (!cols.includes("notify_work_request_unreviewed")) db.exec("ALTER TABLE users ADD COLUMN notify_work_request_unreviewed INTEGER NOT NULL DEFAULT 1");
 } catch (e) {
-  console.error("[homekeep] notification-columns migration failed:", e.message);
+  console.error("[maintenhance] notification-columns migration failed:", e.message);
 }
 
 // Exposed so server.js can put uploaded attachment files under the same

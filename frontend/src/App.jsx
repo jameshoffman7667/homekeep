@@ -298,6 +298,14 @@ const PM_WIZARD_CATALOG = [
   { id: "w-deck", title: "Inspect & reseal deck / exterior wood", description: "UV and moisture protection.", frequencyValue: 12, frequencyUnit: "months", zones: ["Hot-Humid", "Hot-Dry", "Mixed-Humid", "Marine"] },
   { id: "w-termite", title: "Pest / termite inspection", description: "More common in warm, humid climates.", frequencyValue: 12, frequencyUnit: "months", zones: ["Hot-Humid", "Mixed-Humid"] },
 ];
+// v1.8: the starter catalogue above is now just the *default* — an Owner
+// can edit/add/remove entries from Owner Tools, which are saved into
+// data.pmWizardCatalog. Absent (undefined) falls back to this hardcoded
+// default; an intentionally emptied list ([]) stays empty rather than
+// resurrecting the default, so clearing the catalogue actually sticks.
+function effectiveWizardCatalog(data) {
+  return data && data.pmWizardCatalog != null ? data.pmWizardCatalog : PM_WIZARD_CATALOG;
+}
 const FREQUENCY_UNITS = ["days", "weeks", "months", "years"];
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -557,7 +565,7 @@ function regeneratePmAfterCompletion(d, completedWO) {
 // Sweeps every meter-triggered PM Base and generates the next occurrence
 // once its linked asset's current reading has crossed the configured
 // interval past the base's baseline. Called after every data mutation (see
-// HomeKeepApp's `update`) so logging a new meter reading — or anything else
+// MaintEnhanceApp's `update`) so logging a new meter reading — or anything else
 // — immediately picks up any PM that just became due.
 function checkMeterPmTriggers(d) {
   (d.workOrders || [])
@@ -829,7 +837,7 @@ function LinkButton({ url, small }) {
 }
 
 // Builds the deep-link URL a QR code should encode: the app's own base
-// URL plus a #asset/<id> hash, consumed on load by HomeKeepApp to jump
+// URL plus a #asset/<id> hash, consumed on load by MaintEnhanceApp to jump
 // straight to that asset's record (see parseAssetDeepLink()).
 function assetDeepLink(assetId) {
   return window.location.origin + import.meta.env.BASE_URL + "#asset/" + assetId;
@@ -859,7 +867,7 @@ function QrLabelModal({ asset, onClose }) {
       <body>
         <img src="${dataUrl}" />
         <h1>${asset.name}</h1>
-        <p>Scan to open this asset's record in HomeKeep</p>
+        <p>Scan to open this asset's record in MaintEnhance</p>
         <script>window.onload = () => { window.print(); };</script>
       </body></html>
     `);
@@ -941,7 +949,7 @@ const PAGE_INFO = {
     features: ["Stat cards for open work, pending requests, overdue work, and work due in 30 days", "Upcoming Work Orders list", "Work requests awaiting review", "7-day look-ahead strip", "Warranty-expiration warnings"],
   },
   locations: {
-    purpose: "The physical map of the household — every building, floor, room, and area — that everything else in HomeKeep is organized around.",
+    purpose: "The physical map of the household — every building, floor, room, and area — that everything else in MaintEnhance is organized around.",
     workflow: "Build the tree top-down: a Property contains Structures, which contain Floors, Rooms, Areas, and Sub-areas. A new node defaults to the next level down from wherever you clicked +, though you can change it.",
     permissions: "Owners and Managers can add, rename, and remove locations. Everyone can view and use the tree to filter other pages.",
     features: ["Expandable/collapsible hierarchy tree with expand-all/collapse-all", "Depth-aware default level when adding a node", "Asset counts per location", "Guards against deleting a location that still has children or assets", "PM setup wizard on a Property node — address/year-built/climate zone plus a starter set of recurring PM Bases scaled to that zone"],
@@ -1001,10 +1009,10 @@ const PAGE_INFO = {
     features: ["Grouped by work order", "Shows quantity needed, on hand, and the shortfall to buy", "Click through to the work order"],
   },
   alarms: {
-    purpose: "A queue for sensor-triggered alerts pushed in from Home Assistant — a leak, a smoke/CO alarm, a freezer running warm — upstream of Work Requests, since not every sensor trip should become a work item.",
-    workflow: "Home Assistant does its own threshold/debounce/duration logic and POSTs to HomeKeep's webhook only when it decides something's actually wrong. Each alarm can be acknowledged as a false alarm (with a reason, to help tune noisy sensors), turned into a new Work Request, or linked onto an existing Work Order as evidence.",
-    permissions: "Owners and Managers only. The webhook API key and sensor-to-asset mappings are configured here too.",
-    features: ["Open queue sorted by severity and age, plus a resolved/false-alarm history", "Acknowledge as false alarm, create Work Request, or link to an existing Work Order", "Entity-to-asset/location mapping so a repeat alert from the same sensor auto-links", "Webhook URL and API key, with a Home Assistant rest_command example", "Source-agnostic design — 'home_assistant' today, room for other push sources later"],
+    purpose: "One dashboard for everything that needs attention right now, from any source: sensor-triggered alerts pushed in from Home Assistant (a leak, a smoke/CO alarm, a freezer running warm), a numeric PM checklist reading that came back outside its expected range, or an alarm raised by hand — upstream of Work Requests, since not every alert should become a work item.",
+    workflow: "Home Assistant does its own threshold/debounce/duration logic and POSTs to MaintEnhance's webhook only when it decides something's actually wrong; a numeric checklist step raises one automatically the moment a reading falls outside its configured min/max; anyone can also raise one by hand with \"Create alarm.\" Each open alarm can be acknowledged as a false alarm (with a reason, to help tune noisy sensors), turned into a new Work Request, or linked onto an existing Work Order as evidence.",
+    permissions: "Owners and Managers only. The webhook API key and sensor-to-asset mappings are configured here too. (Raising an alarm itself — automatically from a checklist, or manually — isn't role-gated, since anyone filling in a checklist needs to be able to trigger one.)",
+    features: ["Open queue sorted by severity and age, plus a resolved/false-alarm history", "\"Create alarm\" for a manual entry, independent of any sensor or checklist", "A numeric PM checklist step outside its expected range raises one automatically (deduped per work order/step)", "Acknowledge as false alarm, create Work Request, or link to an existing Work Order", "Entity-to-asset/location mapping so a repeat alert from the same sensor auto-links", "Webhook URL and API key, with a Home Assistant rest_command example", "Source-agnostic design — 'home_assistant', 'pm_checklist', and 'manual' today, room for more push sources later"],
   },
 };
 
@@ -1090,7 +1098,7 @@ const NAV = [
   { id: "parts", label: "Parts Catalogue", icon: Package },
   { id: "budget", label: "Budget", icon: DollarSign },
   { id: "purchasing", label: "Purchasing", icon: ShoppingCart, adminOnly: true },
-  { id: "alarms", label: "Alarms", icon: Siren, adminOnly: true },
+  { id: "alarms", label: "Alarm Dashboard", icon: Siren, adminOnly: true },
   { id: "owner", label: "Owner Tools", icon: Shield, ownerOnly: true },
 ];
 
@@ -1106,9 +1114,9 @@ function Sidebar({ tab, setTab, open, role, counts, onNavigate }) {
           <div style={{ width: 26, height: 26, background: C.orange, borderRadius: 3, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
             <Wrench size={15} color="#fff" />
           </div>
-          <span style={{ fontFamily: FONT_HEAD, fontWeight: 700, fontSize: 17, letterSpacing: "0.01em" }}>HomeKeep</span>
+          <span style={{ fontFamily: FONT_HEAD, fontWeight: 700, fontSize: 17, letterSpacing: "0.01em" }}>MaintEnhance</span>
         </div>
-        <div style={{ fontFamily: FONT_BODY, fontSize: 11, color: "#B7C3CF", marginTop: 4 }}>Household CMMS</div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 11, color: "#B7C3CF", marginTop: 4 }}>Maintenance Management</div>
       </div>
       <div style={{ flex: 1, padding: "6px 10px", overflowY: "auto" }}>
         {items.map((n) => {
@@ -1132,7 +1140,7 @@ function Sidebar({ tab, setTab, open, role, counts, onNavigate }) {
         })}
       </div>
       <div style={{ padding: 14, borderTop: "1px solid rgba(255,255,255,0.12)", fontFamily: FONT_BODY, fontSize: 11, color: "#8FA0AF" }}>
-        v1.7 · matches the HomeKeep functional spec
+        v1.8 · matches the MaintEnhance functional spec
       </div>
     </div>
   );
@@ -1281,19 +1289,20 @@ function Dashboard({ data, setTab, role, applyFilter, goToOrder, goToRequest }) 
 // the household pick from a starter set of recurring PM Bases scaled to
 // that zone. Every PM Base it creates is a normal, fully editable PM Base
 // afterward (trigger type, checklist, etc.) — the wizard just seeds them.
-function PmWizardModal({ property, update, onClose }) {
+function PmWizardModal({ property, data, update, onClose }) {
   const [step, setStep] = useState(1);
   const [address, setAddress] = useState(property.address || "");
   const [yearBuilt, setYearBuilt] = useState(property.yearBuilt || "");
   const [climateZone, setClimateZone] = useState(property.climateZone || guessClimateZone(property.address || ""));
   const [selected, setSelected] = useState(new Set());
+  const catalog = effectiveWizardCatalog(data);
 
   const onAddressBlur = () => {
     const guess = guessClimateZone(address);
     if (guess !== "Unknown") setClimateZone(guess);
   };
   const goToStep2 = () => {
-    setSelected(new Set(PM_WIZARD_CATALOG.filter((i) => i.zones === "all" || i.zones.includes(climateZone)).map((i) => i.id)));
+    setSelected(new Set(catalog.filter((i) => i.zones === "all" || i.zones.includes(climateZone)).map((i) => i.id)));
     setStep(2);
   };
   const toggle = (id) => setSelected((prev) => {
@@ -1310,7 +1319,7 @@ function PmWizardModal({ property, update, onClose }) {
       prop.climateZone = climateZone;
       prop.pmWizardRunAt = todayISO();
       d.counters = d.counters || { wo: 0, wr: 0, part: 0 };
-      PM_WIZARD_CATALOG.filter((item) => selected.has(item.id)).forEach((item) => {
+      catalog.filter((item) => selected.has(item.id)).forEach((item) => {
         d.counters.wo += 1;
         const base = {
           id: uid("wo"), number: d.counters.wo, title: item.title, type: "PM Base", status: "Active",
@@ -1360,7 +1369,8 @@ function PmWizardModal({ property, update, onClose }) {
             Pre-checked based on the <strong>{climateZone}</strong> climate zone — uncheck anything that doesn't apply (no pool, no basement, etc.). Each becomes its own PM Base template, fully editable afterward from Work Orders.
           </div>
           <div className="hk-scroll" style={{ maxHeight: 340, overflowY: "auto" }}>
-            {PM_WIZARD_CATALOG.map((item) => (
+            {catalog.length === 0 && <Empty text="The starter catalogue is empty — add entries from Owner Tools, or skip this and build PM Bases from scratch." />}
+            {catalog.map((item) => (
               <label key={item.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "7px 0", borderTop: `1px solid ${C.lineSoft}`, cursor: "pointer" }}>
                 <input type="checkbox" checked={selected.has(item.id)} onChange={() => toggle(item.id)} style={{ marginTop: 3 }} />
                 <div>
@@ -1531,7 +1541,7 @@ function LocationsView({ data, update, role }) {
         </Modal>
       )}
 
-      {wizardProperty && <PmWizardModal property={wizardProperty} update={update} onClose={() => setWizardProperty(null)} />}
+      {wizardProperty && <PmWizardModal property={wizardProperty} data={data} update={update} onClose={() => setWizardProperty(null)} />}
     </div>
   );
 }
@@ -2282,7 +2292,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
     // Offline (or a flaky connection that drops the upload mid-flight):
     // queue it locally instead of failing the submission outright. The
     // photos stay as File objects in IndexedDB until sync uploads them —
-    // see offlineQueue.js and HomeKeepApp's syncNow.
+    // see offlineQueue.js and MaintEnhanceApp's syncNow.
     if (!isOnline) {
       await queueWorkRequest({ fields, photoFiles, requestedBy: currentUser });
       setModal(null);
@@ -2850,6 +2860,33 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
       w.checklist = (w.checklist || []).map((s) => (s.id === stepId ? { ...s, ...patch } : s));
       return d;
     });
+    // v1.8: a numeric checklist reading outside its configured expected
+    // range raises an alarm automatically (dedup'd per work order + step,
+    // so re-entering the same out-of-spec reading doesn't spam the
+    // dashboard with duplicates — see Alarm Dashboard). Computed from
+    // openWO (this component's own prop) + the patch being applied,
+    // rather than from inside update()'s producer callback — React may
+    // not have applied that state update by the time this line runs, so
+    // reading the result back out of it isn't reliable.
+    const currentStep = (openWO.checklist || []).find((s) => s.id === stepId);
+    const merged = currentStep ? { ...currentStep, ...patch } : null;
+    if (merged && merged.stepType === "numeric") {
+      const hasRange = merged.expectedMin !== "" && merged.expectedMin != null && merged.expectedMax !== "" && merged.expectedMax != null;
+      const hasValue = merged.value !== "" && merged.value != null;
+      if (hasRange && hasValue && !(Number(merged.value) >= Number(merged.expectedMin) && Number(merged.value) <= Number(merged.expectedMax))) {
+        api
+          .createManualAlarm({
+            source: "pm_checklist",
+            sourceEntityId: `pm_checklist:${openWO.id}:${stepId}`,
+            friendlyName: merged.title || openWO.title,
+            assetId: openWO.assetId || null,
+            locationId: openWO.locationId || null,
+            message: `${formatWoNum(openWO.number)} "${merged.title || "Checklist reading"}" is out of spec — read ${merged.value}${merged.unit ? " " + merged.unit : ""} (expected ${merged.expectedMin}–${merged.expectedMax}${merged.unit ? " " + merged.unit : ""})`,
+            severity: "warning",
+          })
+          .catch(() => {}); // best-effort — a failed alarm post shouldn't block saving the checklist
+      }
+    }
   };
   const updateBenchmarkFromWO = async () => {
     if (!openWO.sourceBenchmarkId) return;
@@ -3745,6 +3782,28 @@ const SHEET_SPECS = [
     toRow: (i) => ({ id: i.id, partNumber: i.partNumber || "", name: i.name, description: i.description || "", manufacturer: i.manufacturer || "", manufacturerPartNumber: i.manufacturerPartNumber || "", cost: i.cost || "", link: i.link || "", assetId: i.assetId || "", bomNodeId: i.bomNodeId || "", qty: i.qty, reorderAt: i.reorderAt, createdBy: i.createdBy || "" }),
     fromRow: (r) => ({ id: r.id, partNumber: r.partNumber ? Number(r.partNumber) : undefined, name: String(r.name || ""), description: String(r.description || ""), manufacturer: String(r.manufacturer || ""), manufacturerPartNumber: String(r.manufacturerPartNumber || ""), cost: String(r.cost || ""), link: String(r.link || ""), assetId: r.assetId ? String(r.assetId) : null, bomNodeId: r.bomNodeId ? String(r.bomNodeId) : null, qty: Number(r.qty) || 0, reorderAt: Number(r.reorderAt) || 0, createdBy: r.createdBy || null }),
   },
+  {
+    // v1.8: the PM Wizard's starter-catalogue templates, now editable in
+    // Owner Tools (see PmWizardCatalogEditor). "zones" is either the literal
+    // "all" or a comma-separated list of CLIMATE_ZONES values — an item
+    // only shows in the wizard when it applies to the property's climate
+    // zone. This sheet round-trips even when data.pmWizardCatalog is
+    // absent (an export of a pre-v1.8 or never-customized deployment) —
+    // importing that file back in just leaves the field unset, which
+    // falls back to the built-in default catalogue (see
+    // effectiveWizardCatalog above).
+    key: "pmWizardCatalog", sheetName: "PM Wizard Catalog", idPrefix: "wc",
+    toRow: (w) => ({ id: w.id, title: w.title, description: w.description || "", frequencyValue: w.frequencyValue || "", frequencyUnit: w.frequencyUnit || "months", zones: w.zones === "all" ? "all" : (w.zones || []).join(", ") }),
+    fromRow: (r) => {
+      const zonesRaw = String(r.zones || "").trim();
+      const zones = (!zonesRaw || zonesRaw.toLowerCase() === "all") ? "all" : zonesRaw.split(",").map((s) => s.trim()).filter(Boolean);
+      return {
+        id: r.id, title: String(r.title || ""), description: String(r.description || ""),
+        frequencyValue: r.frequencyValue !== "" && r.frequencyValue != null ? Number(r.frequencyValue) : 3,
+        frequencyUnit: String(r.frequencyUnit || "months"), zones,
+      };
+    },
+  },
 ];
 
 function BackupTools({ data, update }) {
@@ -3755,9 +3814,9 @@ function BackupTools({ data, update }) {
   const doExport = () => {
     const wb = XLSX.utils.book_new();
     const readme = XLSX.utils.aoa_to_sheet([
-      ["HomeKeep backup"], ["Exported " + new Date().toLocaleString()], [""],
+      ["MaintEnhance backup"], ["Exported " + new Date().toLocaleString()], [""],
       ["Each tab is one data type. Edit rows in Excel and re-import this file to apply changes."],
-      ["To ADD a new row: leave its 'id' column blank — HomeKeep assigns one on import."],
+      ["To ADD a new row: leave its 'id' column blank — MaintEnhance assigns one on import."],
       ["To edit an existing row: keep its 'id' (and 'number'/'partNumber', where present) unchanged."],
       ["Don't rename the sheet tabs or column headers — import matches on those."],
     ]);
@@ -3767,7 +3826,7 @@ function BackupTools({ data, update }) {
       const ws = XLSX.utils.json_to_sheet(rows);
       XLSX.utils.book_append_sheet(wb, ws, spec.sheetName);
     });
-    XLSX.writeFile(wb, `homekeep-backup-${todayISO()}.xlsx`);
+    XLSX.writeFile(wb, `maintenhance-backup-${todayISO()}.xlsx`);
   };
 
   const doImport = async (file) => {
@@ -3794,7 +3853,7 @@ function BackupTools({ data, update }) {
       next.inventory.forEach((p) => { if (!p.partNumber) p.partNumber = ++maxPart; });
       next.counters = { wo: maxWo, wr: maxWr, part: maxPart };
 
-      const ok = await dialog.confirm("This will replace ALL current HomeKeep data with the contents of this file. Continue?");
+      const ok = await dialog.confirm("This will replace ALL current MaintEnhance data with the contents of this file. Continue?");
       if (!ok) return;
       update(() => next);
       await dialog.alertMsg("Import complete.");
@@ -3891,7 +3950,7 @@ function MemberManagementInline({ currentUser }) {
 
   return (
     <Panel style={{ padding: 18 }}>
-      <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 10 }}>Household members</div>
+      <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 10 }}>Members</div>
       {users === null && <Empty text="Loading…" />}
       {users && users.map((u) => (
         <div key={u.id} className="hk-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 4px", borderTop: `1px solid ${C.lineSoft}` }}>
@@ -4066,6 +4125,7 @@ function PurchasingView({ data, goToOrder }) {
 }
 
 const ALARM_SEVERITY_LABELS = { critical: "Critical", warning: "Warning", info: "Info" };
+const ALARM_SOURCE_LABELS = { home_assistant: "Home Assistant", manual: "Manual", pm_checklist: "PM checklist" };
 
 function AlarmsView({ data, update, role, currentUser, onAlarmsChanged }) {
   const dialog = useDialog();
@@ -4079,6 +4139,7 @@ function AlarmsView({ data, update, role, currentUser, onAlarmsChanged }) {
   const [modal, setModal] = useState(null);
   const [actionForm, setActionForm] = useState({});
   const [mapForm, setMapForm] = useState(null);
+  const [manualForm, setManualForm] = useState(null);
 
   const load = () => {
     setLoading(true);
@@ -4170,13 +4231,36 @@ function AlarmsView({ data, update, role, currentUser, onAlarmsChanged }) {
   };
   const copyText = async (text) => { try { await navigator.clipboard.writeText(text); } catch (e) { /* no clipboard access — nothing to fall back to */ } };
 
+  const openManualForm = () => setManualForm({
+    title: "", message: "", severity: "warning",
+    locationId: data.locations[0]?.id || "", assetId: "",
+  });
+  const saveManual = async () => {
+    if (!manualForm.title.trim()) { await dialog.alertMsg("A title is required."); return; }
+    await api.createManualAlarm({
+      source: "manual",
+      friendlyName: manualForm.title.trim(),
+      message: manualForm.message.trim() || manualForm.title.trim(),
+      severity: manualForm.severity,
+      assetId: manualForm.assetId || null,
+      locationId: manualForm.locationId || null,
+    });
+    setManualForm(null);
+    afterChange();
+  };
+
   return (
     <div>
       <SectionHeader
-        title="Alarms"
-        subtitle="Sensor-triggered alerts pushed in from Home Assistant, upstream of Work Requests."
+        title="Alarm Dashboard"
+        subtitle="Everything that needs attention right now: sensor alerts from Home Assistant, out-of-spec PM checklist readings, and manually raised alarms."
         info={PAGE_INFO.alarms}
-        action={isAdmin(role) && <Btn small variant="ghost" onClick={() => setShowSetup((s) => !s)}><Key size={13} /> Webhook & sensor setup</Btn>}
+        action={
+          <div style={{ display: "flex", gap: 8 }}>
+            {isAdmin(role) && <Btn small variant="primary" onClick={openManualForm}><Plus size={13} /> Create alarm</Btn>}
+            {isAdmin(role) && <Btn small variant="ghost" onClick={() => setShowSetup((s) => !s)}><Key size={13} /> Webhook & sensor setup</Btn>}
+          </div>
+        }
       />
 
       {showSetup && isAdmin(role) && (
@@ -4209,7 +4293,7 @@ function AlarmsView({ data, update, role, currentUser, onAlarmsChanged }) {
               </div>
               <pre style={{ fontFamily: "monospace", fontSize: 11, color: C.ink, background: C.panelAlt, padding: 10, borderRadius: 4, overflowX: "auto", marginBottom: 16 }}>
 {`rest_command:
-  homekeep_alarm:
+  maintenhance_alarm:
     url: "${api.webhookUrl()}"
     method: POST
     headers:
@@ -4257,7 +4341,8 @@ function AlarmsView({ data, update, role, currentUser, onAlarmsChanged }) {
               <div>
                 <div style={{ fontFamily: FONT_BODY, fontSize: 14, fontWeight: 700, color: C.ink }}>{a.message || a.friendlyName || "Sensor alert"}</div>
                 <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint, marginTop: 2 }}>
-                  {a.sourceEntityId ? `${a.sourceEntityId} · ` : ""}
+                  {ALARM_SOURCE_LABELS[a.source] || a.source} ·{" "}
+                  {a.source === "home_assistant" && a.sourceEntityId ? `${a.sourceEntityId} · ` : ""}
                   {a.assetId ? `${nameOf(data.assets, a.assetId)} · ` : ""}
                   {a.locationId ? `${locationPath(data.locations, a.locationId)} · ` : ""}
                   {fmtDate((a.triggeredAt || "").slice(0, 10))}
@@ -4363,7 +4448,169 @@ function AlarmsView({ data, update, role, currentUser, onAlarmsChanged }) {
           </div>
         </Modal>
       )}
+      {manualForm && (
+        <Modal title="Create alarm" onClose={() => setManualForm(null)} wide>
+          <Field label="Title" required><input style={inputStyle} value={manualForm.title} onChange={(e) => setManualForm({ ...manualForm, title: e.target.value })} autoFocus /></Field>
+          <Field label="Details"><textarea style={{ ...inputStyle, minHeight: 60 }} value={manualForm.message} onChange={(e) => setManualForm({ ...manualForm, message: e.target.value })} /></Field>
+          <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <Field label="Severity">
+              <select style={inputStyle} value={manualForm.severity} onChange={(e) => setManualForm({ ...manualForm, severity: e.target.value })}>
+                <option value="info">Info</option>
+                <option value="warning">Warning</option>
+                <option value="critical">Critical</option>
+              </select>
+            </Field>
+            <Field label="Asset (optional)">
+              <select style={inputStyle} value={manualForm.assetId || ""} onChange={(e) => setManualForm({ ...manualForm, assetId: e.target.value || "" })}>
+                <option value="">— none —</option>
+                {data.assets.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+              </select>
+            </Field>
+          </div>
+          <Field label="Location (optional)">
+            <select style={inputStyle} value={manualForm.locationId || ""} onChange={(e) => setManualForm({ ...manualForm, locationId: e.target.value || "" })}>
+              <option value="">— none —</option>
+              {flattenTree(data.locations, "parentId", null).map(({ item, depth }) => (
+                <option key={item.id} value={item.id}>{"—".repeat(depth) + " " + item.name}</option>
+              ))}
+            </select>
+          </Field>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <Btn variant="ghost" onClick={() => setManualForm(null)}>Cancel</Btn>
+            <Btn variant="primary" onClick={saveManual}>Create alarm</Btn>
+          </div>
+        </Modal>
+      )}
     </div>
+  );
+}
+
+// v1.8: editor for the PM Wizard's starter-maintenance catalogue (see
+// effectiveWizardCatalog / PmWizardModal). Add/edit/remove entries here;
+// changes apply the next time anyone runs the wizard from a Property.
+// Export/import rides along with the rest of the app's data via
+// BackupTools (see the "pmWizardCatalog" entry in SHEET_SPECS).
+function PmWizardCatalogEditor({ data, update }) {
+  const dialog = useDialog();
+  const [modal, setModal] = useState(null);
+  const [form, setForm] = useState(null);
+  const catalog = effectiveWizardCatalog(data);
+  const ZONE_OPTIONS = CLIMATE_ZONES.filter((z) => z !== "Unknown");
+
+  const openAdd = () => {
+    setForm({ title: "", description: "", frequencyValue: 12, frequencyUnit: "months", allZones: true, zones: [] });
+    setModal("add");
+  };
+  const openEdit = (item) => {
+    setForm({
+      id: item.id, title: item.title, description: item.description || "",
+      frequencyValue: item.frequencyValue || 12, frequencyUnit: item.frequencyUnit || "months",
+      allZones: item.zones === "all", zones: item.zones === "all" ? [] : (item.zones || []),
+    });
+    setModal("edit");
+  };
+  const toggleZone = (z) => setForm((f) => ({
+    ...f, zones: f.zones.includes(z) ? f.zones.filter((x) => x !== z) : [...f.zones, z],
+  }));
+
+  const save = async () => {
+    if (!form.title.trim()) { await dialog.alertMsg("A title is required."); return; }
+    const entry = {
+      id: form.id || uid("wc"),
+      title: form.title.trim(),
+      description: form.description.trim(),
+      frequencyValue: Number(form.frequencyValue) || 1,
+      frequencyUnit: form.frequencyUnit,
+      zones: form.allZones ? "all" : form.zones,
+    };
+    update((d) => {
+      const current = effectiveWizardCatalog(d);
+      d.pmWizardCatalog = modal === "edit"
+        ? current.map((i) => (i.id === entry.id ? entry : i))
+        : [...current, entry];
+      return d;
+    });
+    setModal(null);
+    setForm(null);
+  };
+  const remove = async (item) => {
+    const ok = await dialog.confirm(`Remove "${item.title}" from the starter catalogue? This doesn't touch any PM Base already created from it.`);
+    if (!ok) return;
+    update((d) => {
+      d.pmWizardCatalog = effectiveWizardCatalog(d).filter((i) => i.id !== item.id);
+      return d;
+    });
+  };
+  const resetToDefault = async () => {
+    const ok = await dialog.confirm("Replace the current starter catalogue with the built-in default list? Any custom entries you've added will be lost.");
+    if (!ok) return;
+    update((d) => { d.pmWizardCatalog = PM_WIZARD_CATALOG.map((i) => ({ ...i })); return d; });
+  };
+
+  return (
+    <Panel style={{ padding: 18 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10, marginBottom: 4 }}>
+        <div>
+          <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink }}>PM Wizard starter catalogue</div>
+          <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint, marginTop: 2 }}>
+            The suggested maintenance list the PM setup wizard offers when it's run on a Property. Editing this doesn't change any PM Base already created.
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <Btn small variant="ghost" onClick={resetToDefault}>Reset to default</Btn>
+          <Btn small onClick={openAdd}><Plus size={13} /> Add entry</Btn>
+        </div>
+      </div>
+      {catalog.length === 0 && <Empty text="No starter-catalogue entries — the wizard will offer nothing to pick from until you add some." />}
+      {catalog.map((item) => (
+        <div key={item.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "10px 0", borderTop: `1px solid ${C.lineSoft}`, gap: 10 }}>
+          <div>
+            <div style={{ fontFamily: FONT_BODY, fontSize: 13, fontWeight: 600, color: C.ink }}>{item.title}</div>
+            <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: 2 }}>
+              Every {item.frequencyValue} {item.frequencyUnit} · {item.zones === "all" ? "All climate zones" : (item.zones || []).join(", ") || "No zones selected"}
+            </div>
+            {item.description && <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: 2 }}>{item.description}</div>}
+          </div>
+          <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+            <Btn small variant="ghost" onClick={() => openEdit(item)}><Pencil size={12} /></Btn>
+            <Btn small variant="danger" onClick={() => remove(item)}><Trash2 size={12} /></Btn>
+          </div>
+        </div>
+      ))}
+      {modal && form && (
+        <Modal title={modal === "edit" ? "Edit starter-catalogue entry" : "Add starter-catalogue entry"} onClose={() => { setModal(null); setForm(null); }} wide>
+          <Field label="Title" required><input style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} autoFocus /></Field>
+          <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 60 }} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
+          <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <Field label="Every"><input type="number" min="1" style={inputStyle} value={form.frequencyValue} onChange={(e) => setForm({ ...form, frequencyValue: e.target.value })} /></Field>
+            <Field label="Unit">
+              <select style={inputStyle} value={form.frequencyUnit} onChange={(e) => setForm({ ...form, frequencyUnit: e.target.value })}>
+                {FREQUENCY_UNITS.map((u) => <option key={u} value={u}>{u}</option>)}
+              </select>
+            </Field>
+          </div>
+          <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -2, marginBottom: 6 }}>
+            Every entry created here becomes a Calendar / Non-fixed PM Base — matching what the wizard has always generated. Meter- and seasonal-triggered PM still need to be set up by hand afterward, from Work Orders.
+          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: 7, fontFamily: FONT_BODY, fontSize: 13, color: C.ink, cursor: "pointer", marginBottom: 8 }}>
+            <input type="checkbox" checked={form.allZones} onChange={(e) => setForm({ ...form, allZones: e.target.checked })} /> Applies to all climate zones
+          </label>
+          {!form.allZones && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
+              {ZONE_OPTIONS.map((z) => (
+                <label key={z} style={{ display: "flex", alignItems: "center", gap: 5, fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink, cursor: "pointer" }}>
+                  <input type="checkbox" checked={form.zones.includes(z)} onChange={() => toggleZone(z)} /> {z}
+                </label>
+              ))}
+            </div>
+          )}
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <Btn variant="ghost" onClick={() => { setModal(null); setForm(null); }}>Cancel</Btn>
+            <Btn variant="primary" onClick={save}>Save</Btn>
+          </div>
+        </Modal>
+      )}
+    </Panel>
   );
 }
 
@@ -4374,6 +4621,7 @@ function OwnerToolsView({ data, update, currentUser }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <MemberManagementInline currentUser={currentUser} />
         <BackupTools data={data} update={update} />
+        <PmWizardCatalogEditor data={data} update={update} />
         <DeleteWorkOrderTool data={data} update={update} />
         <DeleteWorkRequestTool data={data} update={update} />
       </div>
@@ -4414,7 +4662,7 @@ function AuthScreen({ onAuthed }) {
       <Panel style={{ padding: 30, width: 380, maxWidth: "100%" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
           <div style={{ width: 28, height: 28, background: C.orange, borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center" }}><Wrench size={16} color="#fff" /></div>
-          <span style={{ fontFamily: FONT_HEAD, fontWeight: 700, fontSize: 19, color: C.ink }}>HomeKeep</span>
+          <span style={{ fontFamily: FONT_HEAD, fontWeight: 700, fontSize: 19, color: C.ink }}>MaintEnhance</span>
         </div>
         <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkFaint, marginBottom: 20 }}>
           {mode === "setup" ? "Create the first Owner account to set up your household." : "Sign in to your household."}
@@ -4422,7 +4670,7 @@ function AuthScreen({ onAuthed }) {
         <form onSubmit={submit}>
           <Field label="Username" required><input style={inputStyle} value={username} onChange={(e) => setUsername(e.target.value)} autoFocus required /></Field>
           <Field label="Password" required><input type="password" style={inputStyle} value={password} onChange={(e) => setPassword(e.target.value)} required minLength={mode === "setup" ? 6 : undefined} /></Field>
-          {mode === "setup" && <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 12 }}>At least 6 characters. You can add household member accounts later from Owner Tools.</div>}
+          {mode === "setup" && <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 12 }}>At least 6 characters. You can add member accounts later from Owner Tools.</div>}
           {error && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.rust, marginBottom: 12 }}>{error}</div>}
           <Btn type="submit" variant="primary" disabled={busy}>{busy ? "…" : mode === "setup" ? "Create account & continue" : "Sign in"}</Btn>
         </form>
@@ -4434,7 +4682,7 @@ function AuthScreen({ onAuthed }) {
 /* ============================================================
    APP SHELL
 ============================================================ */
-export default function HomeKeepApp() {
+export default function MaintEnhanceApp() {
   const [user, setUser] = useState(null);
   const [data, setDataRaw] = useState(null);
   // A scanned QR label (or any shared link) can land here as "#asset/<id>"
@@ -4633,7 +4881,7 @@ export default function HomeKeepApp() {
   if (!data) {
     return (
       <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: C.bg, fontFamily: FONT_BODY, color: C.inkSoft }}>
-        <GlobalStyle /><Loader2 className="animate-spin" size={18} style={{ marginRight: 8 }} /> Loading HomeKeep…
+        <GlobalStyle /><Loader2 className="animate-spin" size={18} style={{ marginRight: 8 }} /> Loading MaintEnhance…
       </div>
     );
   }

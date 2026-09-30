@@ -17,8 +17,8 @@ function daysBetween(aISO, bISO) {
   return Math.round((new Date(bISO + "T00:00:00") - new Date(aISO + "T00:00:00")) / 86400000);
 }
 
-function getHousehold() {
-  const row = db.prepare("SELECT data FROM household WHERE id = 1").get();
+function getAppData() {
+  const row = db.prepare("SELECT data FROM app_data WHERE id = 1").get();
   return row ? JSON.parse(row.data) : null;
 }
 
@@ -98,12 +98,12 @@ function getTransporter() {
 async function runNotificationSweep() {
   if (!SMTP_HOST) return; // not configured — silently skip
   try {
-    const data = getHousehold();
+    const data = getAppData();
     if (!data) return;
     const today = todayISO();
     const users = getNotifiableUsers();
     const t = getTransporter();
-    const from = process.env.SMTP_FROM || `HomeKeep <homekeep@${SMTP_HOST}>`;
+    const from = process.env.SMTP_FROM || `MaintEnhance <maintenhance@${SMTP_HOST}>`;
 
     for (const user of users) {
       const body = buildDigest(data, user, today);
@@ -112,25 +112,25 @@ async function runNotificationSweep() {
         await t.sendMail({
           from,
           to: user.email,
-          subject: "HomeKeep — items that need attention",
-          text: `Hi ${user.username},\n\n${body}\n\n— HomeKeep`,
+          subject: "MaintEnhance — items that need attention",
+          text: `Hi ${user.username},\n\n${body}\n\n— MaintEnhance`,
         });
-        console.log(`[homekeep] Sent notification digest to ${user.email}`);
+        console.log(`[maintenhance] Sent notification digest to ${user.email}`);
       } catch (e) {
-        console.error(`[homekeep] Failed to send digest to ${user.email}:`, e.message);
+        console.error(`[maintenhance] Failed to send digest to ${user.email}:`, e.message);
       }
     }
   } catch (e) {
-    console.error("[homekeep] Notification sweep failed:", e.message);
+    console.error("[maintenhance] Notification sweep failed:", e.message);
   }
 }
 
 function startNotificationScheduler() {
   if (!SMTP_HOST) {
-    console.log("[homekeep] SMTP_HOST not set — email notifications are disabled. See .env.example to enable them.");
+    console.log("[maintenhance] SMTP_HOST not set — email notifications are disabled. See .env.example to enable them.");
     return;
   }
-  console.log(`[homekeep] Email notifications enabled via ${SMTP_HOST}; running a daily digest sweep.`);
+  console.log(`[maintenhance] Email notifications enabled via ${SMTP_HOST}; running a daily digest sweep.`);
   setTimeout(runNotificationSweep, FIRST_RUN_DELAY_MS);
   setInterval(runNotificationSweep, SWEEP_INTERVAL_MS);
 }
