@@ -452,8 +452,35 @@ const DIGEST_OPTIONS = [
   { key: "notifyLowStock", label: "Low stock parts — at or below the reorder quantity, or below what open work orders need (lists those work orders)", des: "planner" },
   { key: "notifyMySchedule", label: "My schedule — my assigned work days and work orders for the next 7 days", des: "me" },
   { key: "notifyTeamSchedule", label: "Team schedule — everyone's work days and work orders for the next 7 days", des: "scheduler" },
+  { key: "notifyAppUpdates", label: "App updates — what changed in new versions of the app since your last email", des: "all" },
 ];
-const digestAllowed = (u, o) => (o.des === "me" ? isExecPerson(u) : canDes(u, o.des));
+const digestAllowed = (u, o) => (o.des === "all" ? true : o.des === "me" ? isExecPerson(u) : canDes(u, o.des));
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+// v2.6.1: how often and when a person's digest email is sent (one email covering everything ticked).
+function DigestSchedule({ value, onChange }) {
+  const freq = value.notifyFreq || "daily";
+  return (
+    <div data-digest-schedule style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end", margin: "10px 0 4px" }}>
+      <Field label="How often">
+        <select aria-label="Digest frequency" style={{ ...inputStyle, width: 150 }} value={freq} onChange={(e) => onChange({ notifyFreq: e.target.value })}>
+          <option value="daily">Every day</option>
+          <option value="weekdays">Weekdays (Mon–Fri)</option>
+          <option value="weekly">Once a week</option>
+        </select>
+      </Field>
+      {freq === "weekly" && (
+        <Field label="On">
+          <select aria-label="Digest weekday" style={{ ...inputStyle, width: 130 }} value={value.notifyWeekday == null ? 1 : value.notifyWeekday} onChange={(e) => onChange({ notifyWeekday: Number(e.target.value) })}>
+            {WEEKDAYS.map((d, i) => <option key={d} value={i}>{d}</option>)}
+          </select>
+        </Field>
+      )}
+      <Field label="Time of day">
+        <input type="time" aria-label="Digest time of day" style={{ ...inputStyle, width: 120 }} value={value.notifyTime || "07:00"} onChange={(e) => e.target.value && onChange({ notifyTime: e.target.value })} />
+      </Field>
+    </div>
+  );
+}
 function genTempPassword() {
   const alphabet = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   const bytes = new Uint8Array(12);
@@ -1439,7 +1466,33 @@ const NAV = [
   { id: "help", label: "Help", icon: Info },
 ];
 
+// v2.6.1: the full change log, newest version first.
+function ChangelogModal({ onClose }) {
+  const [log, setLog] = useState(null);
+  const [err, setErr] = useState("");
+  useEffect(() => { api.getChangelog().then(setLog).catch((e) => setErr(e.message || "Couldn't load the change log")); }, []);
+  return (
+    <Modal title="Change log" info="changelog" onClose={onClose} wide>
+      {err && <div style={{ color: C.rust, fontFamily: FONT_BODY, fontSize: 13 }}>{err}</div>}
+      {!log && !err && <Empty text="Loading…" />}
+      {log && (
+        <div data-changelog style={{ maxHeight: "65vh", overflowY: "auto" }}>
+          {log.entries.map((e, i) => (
+            <div key={e.version} style={{ padding: "10px 0", borderTop: i ? `1px solid ${C.line}` : "none" }}>
+              <div style={{ fontFamily: FONT_HEAD, fontSize: 14, fontWeight: 700, color: C.ink }}>
+                v{e.version}{e.version === log.version ? <span style={{ marginLeft: 8, fontSize: 10.5, fontWeight: 700, color: "#fff", background: C.orange, borderRadius: 8, padding: "1px 7px" }}>Installed</span> : null}
+              </div>
+              {e.title && <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint, margin: "1px 0 4px" }}>{e.title}</div>}
+              <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkSoft, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{e.text}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Modal>
+  );
+}
 function Sidebar({ tab, setTab, open, role, counts, onNavigate }) {
+  const [showLog, setShowLog] = useState(false);
   const items = NAV.filter((n) => (!n.ownerOnly || role === "Owner") && (!n.adminOnly || isAdmin(role) || (n.id === "alarms" && canAck())) && (!n.notGuest || role !== "Guest") && (!n.featureKey || SETTINGS.features[n.featureKey])).map((n) => (n.id === "schedule" && execOn() ? { ...n, label: "Labour assignment" } : n));
   return (
     <div
@@ -1451,7 +1504,12 @@ function Sidebar({ tab, setTab, open, role, counts, onNavigate }) {
           <BrandMark size={26} />
           <span style={{ fontFamily: FONT_HEAD, fontWeight: 700, fontSize: SETTINGS.brand.name.length > 14 ? 14.5 : 17, letterSpacing: "0.01em", lineHeight: 1.15, minWidth: 0 }}>{SETTINGS.brand.name}</span>
         </div>
-              </div>
+        <button data-version onClick={() => setShowLog(true)} title="See what changed in each version"
+          style={{ background: "none", border: "none", padding: 0, margin: "4px 0 0 34px", cursor: "pointer", fontFamily: FONT_BODY, fontSize: 11, color: "#8FA0AF", textDecoration: "underline", textUnderlineOffset: 2 }}>
+          v{SETTINGS.version || "2.6.1"}
+        </button>
+        {showLog && <ChangelogModal onClose={() => setShowLog(false)} />}
+      </div>
       <div style={{ flex: 1, padding: "6px 10px", overflowY: "auto" }}>
         {items.map((n) => {
           const Icon = n.icon;
@@ -1472,9 +1530,6 @@ function Sidebar({ tab, setTab, open, role, counts, onNavigate }) {
             </div>
           );
         })}
-      </div>
-      <div style={{ padding: 14, borderTop: "1px solid rgba(255,255,255,0.12)", fontFamily: FONT_BODY, fontSize: 11, color: "#8FA0AF" }}>
-        v2.6 · matches the MaintEnhance functional spec
       </div>
     </div>
   );
@@ -5406,6 +5461,7 @@ function MemberNotifyModal({ user, onClose, onSaved }) {
     email: user.email || "",
     designations: [...(user.designations || [])],
     ...Object.fromEntries(DIGEST_OPTIONS.map((o) => [o.key, !!user[o.key]])),
+    notifyFreq: user.notifyFreq || "daily", notifyTime: user.notifyTime || "07:00", notifyWeekday: user.notifyWeekday == null ? 1 : user.notifyWeekday,
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -5451,6 +5507,7 @@ function MemberNotifyModal({ user, onClose, onSaved }) {
           <span>{o.label}</span>
         </label>
       ))}
+      <DigestSchedule value={form} onChange={(p) => setForm({ ...form, ...p })} />
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
         <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
         <Btn variant="primary" onClick={save} disabled={busy}>Save</Btn>
@@ -6612,9 +6669,10 @@ function FeaturesCard() {
    live in PAGE_INFO above.
 ============================================================ */
 const FEATURE_INFO = {
+  changelog: ["Everything that changed in each version of the app, newest first.", "Scroll to read. The installed version is marked.", "Everyone."],
   bomCopy: ["Copies the bill of materials from another asset onto this one, so similar equipment does not need to be typed twice.", "Choose the source asset and select Copy. Rows are added to the existing list.", "Managers and owners."],
   designations: ["Designations give an executor extra duties: Planner (assign and plan work), Scheduler (use the Workforce schedule) and Specialist (flagged for specialist jobs).", "Tick them on the member row. Owners and managers can also be flagged as an Executor so that work can be assigned to them (off by default).", "Owners only."],
-  digests: ["The emails you receive: the daily digests that apply to your role and designations, such as alarms, low stock, my schedule and team schedule.", "Tick the ones you want and save. Emails only go out when your Owner has set up email and your account has an address.", "Everyone with an email address."],
+  digests: ["The emails you receive: the daily digests that apply to your role and designations, such as alarms, low stock, my schedule and team schedule.", "Tick the ones you want, then choose how often (every day, weekdays or weekly) and the time of day. App updates lists what changed in new versions since your last email. Emails only go out when your Owner has set up email and your account has an address.", "Everyone with an email address."],
   editShift: ["Change or delete one scheduled shift.", "Tap a shift on the Workforce schedule, adjust start, duration or end (fill any two) or pick a daily template, then Save, or choose Delete shift.", "Owners, managers and schedulers."],
   metrics: ["Owner measures of how maintenance is running over the chosen period.", "Pick a period at the top right. Lead time and verification time are only measured for work from v2.6 onward.", "Owners only."],
   mWr: ["How many work requests each person entered.", "Nothing to maintain; it counts requests in the period.", "Owners only."],
@@ -8084,7 +8142,7 @@ function DigestSettings({ user, onSave, mailOk }) {
     <div id="tools-digests">
       <div style={{ fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink, margin: "4px 0 6px" }}>Email digests<InfoTip k="digests" /></div>
       <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginBottom: 8 }}>
-        Choose which items are emailed to you each day. You need an email address saved above{mailOk ? "" : ", and the server's email (SMTP) must be set up — it isn't yet"}. Only items that apply to your role and designations are listed.
+        Choose which items are emailed to you, and how often and when. You need an email address saved above{mailOk ? "" : ", and the server's email (SMTP) must be set up — it isn't yet"}. Only items that apply to your role and designations are listed.
       </div>
       {opts.length === 0 && <Empty text="No digests apply to your role." />}
       {opts.map((o) => (
@@ -8093,6 +8151,10 @@ function DigestSettings({ user, onSave, mailOk }) {
           <span>{o.label}</span>
         </label>
       ))}
+      {opts.some((o) => user[o.key]) && (
+        <DigestSchedule value={user} onChange={async (p) => { setBusy("sched"); try { await onSave(p); } finally { setBusy(""); } }} />
+      )}
+      <div style={{ fontFamily: FONT_BODY, fontSize: 11, color: C.inkFaint }}>One email covers everything ticked, sent at the time you choose (server time zone). Nothing is sent when there is nothing to report.</div>
     </div>
   );
 }

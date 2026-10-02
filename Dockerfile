@@ -25,6 +25,7 @@ COPY backend/package.json ./
 RUN npm install --omit=dev
 
 COPY backend/ ./
+COPY CHANGELOG.md ./CHANGELOG.md
 COPY --from=frontend-build /app/frontend/dist ./public
 
 # SQLite database lives here — mount a volume at this path so data

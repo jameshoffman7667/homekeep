@@ -363,6 +363,12 @@ Three Owner toggles under Tools → Features, all default off. With all three of
 ### 3.27 Email digests (v2.6)
 - Users subscribe in Tools and settings, by role/designation: existing digests plus alarms, low stock, my schedule and team schedule.
 
+### 3.28 Digest timing, app updates and change log (v2.6.1)
+- Each person chooses a digest frequency (every day, weekdays, or weekly on a chosen weekday) and a time of day, in Tools and settings; Owners can set the same for members. One email covers every ticked item. The server checks every 5 minutes and sends at most one digest per person per local day (server time zone, TZ).
+- New digest option **App updates**, available to every role: the change log entries newer than the version in the person's last email (the latest entry the first time). The installed version is recorded after each send.
+- All digest options default to off for new accounts.
+- The left bar shows the installed version under the app name. Selecting it opens the change log (read from CHANGELOG.md in the image), newest version first.
+
 ## 4. Non-Functional Requirements
 
 | Category | Requirement |

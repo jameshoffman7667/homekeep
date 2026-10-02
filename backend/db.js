@@ -184,6 +184,19 @@ try {
 } catch (e) {
   console.error("[maintenhance] v2.6 columns migration failed:", e.message);
 }
+// Migration (v2.6.1): per-user digest timing, "app updates" digest, and last-sent tracking.
+try {
+  const cols = db.prepare("PRAGMA table_info(users)").all().map((c) => c.name);
+  const add = (name, ddl) => { if (!cols.includes(name)) db.exec("ALTER TABLE users ADD COLUMN " + ddl); };
+  add("notify_app_updates", "notify_app_updates INTEGER NOT NULL DEFAULT 0");
+  add("notify_freq", "notify_freq TEXT NOT NULL DEFAULT 'daily'");
+  add("notify_time", "notify_time TEXT NOT NULL DEFAULT '07:00'");
+  add("notify_weekday", "notify_weekday INTEGER NOT NULL DEFAULT 1");
+  add("notify_last_sent", "notify_last_sent TEXT");
+  add("notify_last_version", "notify_last_version TEXT");
+} catch (e) {
+  console.error("[maintenhance] v2.6.1 columns migration failed:", e.message);
+}
 // The email now doubles as the password-reset address, so it must be
 // unique (case-insensitive). An existing database with duplicate emails
 // can't take the index; in that case skip it (the API still checks).

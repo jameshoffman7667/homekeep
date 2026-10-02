@@ -75,6 +75,7 @@ export const api = {
 
   // Public config: Owner-managed brand, colours, terminology, features.
   getConfig: () => request("/api/config"),
+  getChangelog: () => request("/api/changelog"),
   // Owner-only settings edits (Owner Tools → Branding & Terminology / Features).
   saveSettings: (settings) => request("/api/settings", { method: "PUT", body: JSON.stringify(settings) }),
   prefillFromLink: (url, kind) => request("/api/prefill", { method: "POST", body: JSON.stringify({ url, kind }) }),

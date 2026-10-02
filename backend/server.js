@@ -65,7 +65,11 @@ const COOKIE_OPTS = {
 const passwordResetAvailable = () => mailEnabled() && !!(process.env.APP_URL || "").trim();
 // Extra public flags: password reset availability and whether a Gemini key is
 // configured (only yes/no, never the key itself).
-const configExtra = () => ({ passwordResetEmail: passwordResetAvailable(), geminiKeyDetected: prefill.geminiAvailable(), mailConfigured: mailEnabled() });
+const configExtra = () => ({ passwordResetEmail: passwordResetAvailable(), geminiKeyDetected: prefill.geminiAvailable(), mailConfigured: mailEnabled(), version: require("./changelog").version });
+app.get("/api/changelog", requireAuth, (req, res) => {
+  const cl = require("./changelog");
+  res.json({ version: cl.version, entries: cl.entries() });
+});
 app.get("/api/config", (req, res) => {
   res.json(settings.publicConfig(configExtra()));
 });
@@ -105,7 +109,7 @@ app.post("/api/auth/setup", (req, res) => {
     return res.status(400).json({ error: !username || !username.trim() ? "A username is required" : pwProblem });
   }
   const id = randomUUID();
-  db.prepare("INSERT INTO users (id, username, password_hash, role) VALUES (?,?,?,?)").run(
+  db.prepare("INSERT INTO users (id, username, password_hash, role, notify_pm_overdue, notify_warranty_expiring, notify_work_request_unreviewed) VALUES (?,?,?,?,0,0,0)").run(
     id,
     username.trim(),
     hashPassword(password),
@@ -186,6 +190,7 @@ app.patch("/api/auth/profile", requireAuth, (req, res) => {
     sets.push("avatar = ?"); vals.push(a || null);
   }
   for (const [k, col] of NOTIFY_FIELDS) if (body[k] !== undefined) { sets.push(col + " = ?"); vals.push(body[k] ? 1 : 0); }
+  { const e = applyNotifySchedule(body, sets, vals); if (e) return res.status(400).json({ error: e }); }
   if (sets.length) db.prepare("UPDATE users SET " + sets.join(", ") + " WHERE id = ?").run(...vals, req.user.id);
   res.json({ ok: true, user: rowToUser(db.prepare("SELECT " + USER_COLS + " FROM users WHERE id = ?").get(req.user.id)) });
 });
@@ -309,9 +314,16 @@ function parseDesignations(v) {
 const NOTIFY_FIELDS = [
   ["notifyPmOverdue", "notify_pm_overdue"], ["notifyWarrantyExpiring", "notify_warranty_expiring"],
   ["notifyWorkRequestUnreviewed", "notify_work_request_unreviewed"], ["notifyAlarms", "notify_alarms"],
-  ["notifyLowStock", "notify_low_stock"], ["notifyMySchedule", "notify_my_schedule"], ["notifyTeamSchedule", "notify_team_schedule"],
+  ["notifyLowStock", "notify_low_stock"], ["notifyMySchedule", "notify_my_schedule"], ["notifyTeamSchedule", "notify_team_schedule"], ["notifyAppUpdates", "notify_app_updates"],
 ];
-const USER_COLS = "id, username, role, email, must_change_password, notify_pm_overdue, notify_warranty_expiring, notify_work_request_unreviewed, designations, avatar, notify_alarms, notify_low_stock, notify_my_schedule, notify_team_schedule";
+// v2.6.1: delivery schedule fields (validated).
+function applyNotifySchedule(body, sets, vals) {
+  if (body.notifyFreq !== undefined) { if (!["daily", "weekdays", "weekly"].includes(body.notifyFreq)) return "Frequency must be daily, weekdays or weekly"; sets.push("notify_freq = ?"); vals.push(body.notifyFreq); }
+  if (body.notifyTime !== undefined) { if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(body.notifyTime)) return "Time must look like 07:30"; sets.push("notify_time = ?"); vals.push(body.notifyTime); }
+  if (body.notifyWeekday !== undefined) { const n = Number(body.notifyWeekday); if (!Number.isInteger(n) || n < 0 || n > 6) return "Weekday must be 0–6"; sets.push("notify_weekday = ?"); vals.push(n); }
+  return null;
+}
+const USER_COLS = "id, username, role, email, must_change_password, notify_pm_overdue, notify_warranty_expiring, notify_work_request_unreviewed, designations, avatar, notify_alarms, notify_low_stock, notify_my_schedule, notify_team_schedule, notify_app_updates, notify_freq, notify_time, notify_weekday";
 function rowToUser(row) {
   return {
     id: row.id,
@@ -326,6 +338,10 @@ function rowToUser(row) {
     notifyLowStock: !!row.notify_low_stock,
     notifyMySchedule: !!row.notify_my_schedule,
     notifyTeamSchedule: !!row.notify_team_schedule,
+    notifyAppUpdates: !!row.notify_app_updates,
+    notifyFreq: row.notify_freq || "daily",
+    notifyTime: row.notify_time || "07:00",
+    notifyWeekday: row.notify_weekday == null ? 1 : row.notify_weekday,
     designations: parseDesignations(row.designations),
     avatar: row.avatar || "",
   };
@@ -333,7 +349,7 @@ function rowToUser(row) {
 
 app.get("/api/users", requireAuth, (req, res) => {
   const rows = db.prepare(
-    "SELECT id, username, role, email, must_change_password, notify_pm_overdue, notify_warranty_expiring, notify_work_request_unreviewed, designations, avatar, notify_alarms, notify_low_stock, notify_my_schedule, notify_team_schedule FROM users ORDER BY created_at"
+    "SELECT id, username, role, email, must_change_password, notify_pm_overdue, notify_warranty_expiring, notify_work_request_unreviewed, designations, avatar, notify_alarms, notify_low_stock, notify_my_schedule, notify_team_schedule, notify_app_updates, notify_freq, notify_time, notify_weekday FROM users ORDER BY created_at"
   ).all();
   res.json(rows.map(rowToUser));
 });
@@ -352,7 +368,7 @@ app.post("/api/users", requireAuth, requireOwner, (req, res) => {
   if (existing) return res.status(400).json({ error: "That username is already taken" });
   const id = randomUUID();
   try {
-    db.prepare("INSERT INTO users (id, username, password_hash, role, email, must_change_password) VALUES (?,?,?,?,?,1)").run(
+    db.prepare("INSERT INTO users (id, username, password_hash, role, email, must_change_password, notify_pm_overdue, notify_warranty_expiring, notify_work_request_unreviewed) VALUES (?,?,?,?,?,1,0,0,0)").run(
       id,
       username.trim(),
       hashPassword(password),
@@ -363,7 +379,7 @@ app.post("/api/users", requireAuth, requireOwner, (req, res) => {
     console.error("[maintenhance] Failed to create user:", e.message);
     return res.status(400).json({ error: "Couldn't create that account. Check the server logs for details." });
   }
-  res.json(rowToUser(db.prepare("SELECT id, username, role, email, must_change_password, notify_pm_overdue, notify_warranty_expiring, notify_work_request_unreviewed, designations, avatar, notify_alarms, notify_low_stock, notify_my_schedule, notify_team_schedule FROM users WHERE id = ?").get(id)));
+  res.json(rowToUser(db.prepare("SELECT id, username, role, email, must_change_password, notify_pm_overdue, notify_warranty_expiring, notify_work_request_unreviewed, designations, avatar, notify_alarms, notify_low_stock, notify_my_schedule, notify_team_schedule, notify_app_updates, notify_freq, notify_time, notify_weekday FROM users WHERE id = ?").get(id)));
 });
 
 // Update a user's notification email/preferences. Owner-only, same as
@@ -377,6 +393,7 @@ app.patch("/api/users/:id", requireAuth, requireOwner, (req, res) => {
   if (emailErr) return res.status(400).json({ error: emailErr });
   const sets = ["email = ?"]; const vals = [(email || "").trim() || null];
   for (const [k, col] of NOTIFY_FIELDS) if (body[k] !== undefined) { sets.push(col + " = ?"); vals.push(body[k] ? 1 : 0); }
+  { const e = applyNotifySchedule(body, sets, vals); if (e) return res.status(400).json({ error: e }); }
   if (body.designations !== undefined) {
     sets.push("designations = ?");
     vals.push(JSON.stringify(parseDesignations(JSON.stringify(Array.isArray(body.designations) ? body.designations : []))));

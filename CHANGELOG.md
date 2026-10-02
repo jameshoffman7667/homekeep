@@ -19,6 +19,13 @@ the Git commit's summary line) and a **Commit extended description**
 
 ---
 
+## v2.6.1
+
+**Commit short description:** `v2.6.1: Digest timing, app updates, change log`
+
+**Commit extended description:**
+v2.6.1 gives each person control over when their email digest arrives. In Tools and settings (and in the Owner's member settings) you now choose how often the digest is sent (every day, weekdays, or once a week on a chosen day) and the time of day; the server checks every five minutes and sends one email per person per day at most, using the server's time zone (set TZ on the container). A new digest option, App updates, is open to every role and emails the change log entries added since that person's last email. All digest options now start switched off for new accounts (existing accounts keep their choices). The left bar shows the installed version under the app name; selecting it opens the full change log, newest first. The Docker image now includes CHANGELOG.md for this. Tested in a browser harness only, not in a live deployment.
+
 ## v2.6
 
 **Commit short description:** `v2.6: Accounts, designations, metrics, UX`

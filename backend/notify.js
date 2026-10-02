@@ -4,16 +4,30 @@
 // See .env.example for the SMTP_* variables and README.md for setup.
 const db = require("./db");
 const settings = require("./settings");
+const changelog = require("./changelog");
 const brandName = () => settings.current().brand.name;
 
 const SMTP_HOST = process.env.SMTP_HOST || "";
-const SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000; // once a day
+const SWEEP_INTERVAL_MS = 5 * 60 * 1000; // v2.6.1: check every 5 minutes who is due (each person picks a frequency and time)
 const FIRST_RUN_DELAY_MS = 30 * 1000; // let the server finish starting up first
 const WARRANTY_WINDOW_DAYS = Number(process.env.NOTIFY_WARRANTY_WINDOW_DAYS) || 30;
 const UNREVIEWED_WINDOW_DAYS = Number(process.env.NOTIFY_UNREVIEWED_WINDOW_DAYS) || 3;
 
-function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+// Local (server time zone — set TZ in the container) date, time and weekday.
+const pad = (n) => String(n).padStart(2, "0");
+function localNow() {
+  const d = new Date();
+  return { date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`, time: `${pad(d.getHours())}:${pad(d.getMinutes())}`, weekday: d.getDay() };
+}
+function todayISO() { return localNow().date; }
+// Is this person's digest due right now? Sent at most once per local day.
+function isDue(user, now) {
+  if (user.notify_last_sent === now.date) return false;
+  if (now.time < (user.notify_time || "07:00")) return false;
+  const f = user.notify_freq || "daily";
+  if (f === "weekdays") return now.weekday >= 1 && now.weekday <= 5;
+  if (f === "weekly") return now.weekday === (user.notify_weekday == null ? 1 : user.notify_weekday);
+  return true;
 }
 function daysBetween(aISO, bISO) {
   return Math.round((new Date(bISO + "T00:00:00") - new Date(aISO + "T00:00:00")) / 86400000);
@@ -27,7 +41,7 @@ function getAppData() {
 function getNotifiableUsers() {
   return db
     .prepare(
-      "SELECT id, username, role, designations, email, notify_pm_overdue, notify_warranty_expiring, notify_work_request_unreviewed, notify_alarms, notify_low_stock, notify_my_schedule, notify_team_schedule FROM users WHERE email IS NOT NULL AND email != ''"
+      "SELECT id, username, role, designations, email, notify_pm_overdue, notify_warranty_expiring, notify_work_request_unreviewed, notify_alarms, notify_low_stock, notify_my_schedule, notify_team_schedule, notify_app_updates, notify_freq, notify_time, notify_weekday, notify_last_sent, notify_last_version FROM users WHERE email IS NOT NULL AND email != ''"
     )
     .all();
 }
@@ -159,6 +173,18 @@ function buildDigest(data, user, today) {
     if (rows.length) { lines.push("Team schedule for the next 7 days:"); lines.push(...rows); }
   }
 
+  // v2.6.1: app updates — changelog entries since the last email (open to every role).
+  let pendingVersion = null;
+  if (user.notify_app_updates) {
+    const fresh = user.notify_last_version ? changelog.entriesSince(user.notify_last_version) : changelog.entries().slice(0, 1);
+    if (fresh.length) {
+      lines.push(`App updates (now on v${changelog.version}):`);
+      fresh.forEach((e) => { lines.push(`  v${e.version}${e.title ? " — " + e.title : ""}`); lines.push(...e.text.split("\n").map((l) => "    " + l)); });
+      pendingVersion = changelog.version;
+    }
+  }
+
+  buildDigest.lastVersion = pendingVersion;
   return lines.length ? lines.join("\n") : null;
 }
 
@@ -180,13 +206,15 @@ async function runNotificationSweep() {
   try {
     const data = getAppData();
     if (!data) return;
-    const today = todayISO();
-    const users = getNotifiableUsers();
+    const now = localNow();
+    const today = now.date;
+    const users = getNotifiableUsers().filter((u) => isDue(u, now));
     const t = getTransporter();
     const from = process.env.SMTP_FROM || `${brandName()} <maintenhance@${SMTP_HOST}>`;
 
     for (const user of users) {
       const body = buildDigest(data, user, today);
+      const sentVersion = buildDigest.lastVersion;
       if (!body) continue;
       try {
         await t.sendMail({
@@ -195,6 +223,7 @@ async function runNotificationSweep() {
           subject: `${brandName()} — items that need attention`,
           text: `Hi ${user.username},\n\n${body}\n\n— ${brandName()}`,
         });
+        db.prepare("UPDATE users SET notify_last_sent = ?, notify_last_version = COALESCE(?, notify_last_version) WHERE id = ?").run(today, sentVersion, user.id);
         console.log(`[maintenhance] Sent notification digest to ${user.email}`);
       } catch (e) {
         console.error(`[maintenhance] Failed to send digest to ${user.email}:`, e.message);
@@ -210,7 +239,7 @@ function startNotificationScheduler() {
     console.log("[maintenhance] SMTP_HOST not set — email notifications are disabled. See .env.example to enable them.");
     return;
   }
-  console.log(`[maintenhance] Email notifications enabled via ${SMTP_HOST}; running a daily digest sweep.`);
+  console.log(`[maintenhance] Email notifications enabled via ${SMTP_HOST}; checking every 5 minutes for digests that are due.`);
   setTimeout(runNotificationSweep, FIRST_RUN_DELAY_MS);
   setInterval(runNotificationSweep, SWEEP_INTERVAL_MS);
 }
