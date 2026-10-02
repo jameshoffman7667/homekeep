@@ -1,6 +1,6 @@
 {
-  "name": "HomeKeep",
-  "short_name": "HomeKeep",
+  "name": "MaintEnhance",
+  "short_name": "MaintEnhance",
   "description": "Household CMMS for tracking assets, maintenance, and work orders.",
   "start_url": ".",
   "scope": ".",

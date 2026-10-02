@@ -1,5 +1,5 @@
 services:
-  homekeep:
+  maintenhance:
     # Pulled from Docker Hub — built and published automatically by
     # .github/workflows/docker-publish.yml. Replace "mybadreligon"
     # below with your own Docker Hub username if you're publishing
@@ -10,8 +10,8 @@ services:
     # alone) never needs the Dockerfile or source tree, just Docker
     # Hub access. To build the image yourself instead of waiting on
     # CI, see "Prebuilding the image" in README.md.
-    image: mybadreligon/homekeep:latest
-    container_name: homekeep
+    image: mybadreligon/maintenhance:latest
+    container_name: maintenhance
     restart: unless-stopped
     environment:
       - PORT=${PORT:-8040}
@@ -49,6 +49,9 @@ services:
       # Name, logo, colours, location labels and feature toggles are set
       # in the app by the Owner (Owner Tools), not here.
     volumes:
+      # The volume key is deliberately still "homekeep_data" so existing
+      # installs keep their data when upgrading. Renaming it would make
+      # Docker create a new, empty volume.
       - homekeep_data:/data
     ports:
       # Set PORT in your .env (or Portainer's stack environment variables)

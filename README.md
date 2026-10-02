@@ -2,11 +2,11 @@
 
 > **v1.8 branding note:** the in-app UI is now branded **MaintEnhance**
 > (short form "ME") — this was previously called HomeKeep. The repo name,
-> Docker Hub image, npm package names, and PWA manifest name below are
-> *not* renamed yet (that's planned for a later infrastructure pass), so
-> you'll still see "homekeep" in clone URLs, image tags, and container/volume
-> names throughout this file. That's expected for now — only the product
-> name shown to users has changed.
+> npm package names below are
+> *not* renamed yet, so you'll still see "homekeep" in clone URLs and in the
+> `homekeep_data` volume name (kept so existing data carries over).
+> **v2.4:** the Docker image, compose service and container are now named
+> `maintenhance` (see "Upgrading from the homekeep image name" below).
 
 > **v2.4 note:** Owner Tools is now **Tools** (cards depend on your role). Three optional Owner toggles under Tools → Features add execution-based scheduling and time keeping (Labour assignment with Month/Week/Day views, estimates, crews, hours worked), workforce scheduling (shift templates, schedule and PDF export) and hourly labour assignments. The in-app Help tab serves the training guides from `frontend/public/help/`, with Word copies alongside.
 >
@@ -111,9 +111,9 @@ up yourself:
    - `DOCKERHUB_USERNAME` — your Docker Hub username
    - `DOCKERHUB_TOKEN` — the access token from step 2
 4. Push to `main` (or run the workflow manually from the **Actions**
-   tab). It'll publish to `docker.io/<DOCKERHUB_USERNAME>/homekeep:latest`.
+   tab). It'll publish to `docker.io/<DOCKERHUB_USERNAME>/maintenhance:latest`.
 
-`docker-compose.yml` is already set to pull `mybadreligon/homekeep:latest`.
+`docker-compose.yml` is already set to pull `mybadreligon/maintenhance:latest`.
 If your Docker Hub username is different, update the `image:` line in
 `docker-compose.yml` to match before deploying.
 
@@ -133,7 +133,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-This pulls `mybadreligon/homekeep:latest` (or whatever `image:` you
+This pulls `mybadreligon/maintenhance:latest` (or whatever `image:` you
 set) from Docker Hub and starts it — nothing gets built locally. The
 first pull downloads the image; after that, starting/stopping is
 instant.
@@ -155,17 +155,17 @@ the image yourself and either use it locally or push it up.
 **Build it:**
 ```bash
 cd homekeep
-docker build -t homekeep:latest .
+docker build -t maintenhance:latest .
 ```
 (On Windows, run this from PowerShell or Command Prompt with Docker
 Desktop running — the command is identical.)
 
 **Use it locally without touching `docker-compose.yml`:** if the image
-tag matches what's in the compose file (`mybadreligon/homekeep:latest`
+tag matches what's in the compose file (`mybadreligon/maintenhance:latest`
 by default), `docker compose up -d` will use your local build instead
 of pulling — Docker always prefers an image it already has:
 ```bash
-docker build -t mybadreligon/homekeep:latest .
+docker build -t mybadreligon/maintenhance:latest .
 docker compose up -d
 ```
 
@@ -173,8 +173,8 @@ docker compose up -d
 GitHub Actions at all):
 ```bash
 docker login
-docker build -t <your-dockerhub-username>/homekeep:latest .
-docker push <your-dockerhub-username>/homekeep:latest
+docker build -t <your-dockerhub-username>/maintenhance:latest .
+docker push <your-dockerhub-username>/maintenhance:latest
 ```
 Then point `docker-compose.yml`'s `image:` line at that tag.
 
@@ -182,7 +182,7 @@ Then point `docker-compose.yml`'s `image:` line at that tag.
 `example.com/homekeep/` — see §7): pass `VITE_BASE_PATH` as a build
 argument, since it has to be baked into the frontend at build time:
 ```bash
-docker build --build-arg VITE_BASE_PATH=/homekeep/ -t homekeep:latest .
+docker build --build-arg VITE_BASE_PATH=/homekeep/ -t maintenhance:latest .
 ```
 Leave it off for a normal root deployment (the default).
 
@@ -191,7 +191,7 @@ on an Intel/AMD laptop but deploying to a Raspberry Pi or other ARM
 device) — use `buildx` instead of plain `docker build`:
 ```bash
 docker buildx build --platform linux/amd64,linux/arm64 \
-  -t <your-dockerhub-username>/homekeep:latest --push .
+  -t <your-dockerhub-username>/maintenhance:latest --push .
 ```
 `--push` is required for multi-platform builds, since Docker can't load
 more than one platform into the local image cache at once.
@@ -201,9 +201,9 @@ remote server Portainer manages, when you built on your own laptop):
 either push it to a registry as above and pull it there, or transfer it
 directly:
 ```bash
-docker save homekeep:latest -o homekeep.tar
-# copy homekeep.tar to the other machine, then there:
-docker load -i homekeep.tar
+docker save maintenhance:latest -o maintenhance.tar
+# copy maintenhance.tar to the other machine, then there:
+docker load -i maintenhance.tar
 ```
 
 ## 5. Deploying with Portainer
@@ -308,14 +308,14 @@ the no-server-config options below.
 
 ### Reverse proxy options (pick one)
 
-Any of these can sit in front of the `homekeep` container and handle
+Any of these can sit in front of the `maintenhance` container and handle
 HTTPS. All of them need ports 80/443 forwarded to your Docker host and
 a domain (or subdomain) pointed at your home's public IP:
 
 - **[Caddy](https://caddyserver.com/)** — simplest to hand-configure;
   automatic HTTPS via Let's Encrypt with a couple of lines of config.
   Run it as its own container (`caddy:2-alpine`), pointed at
-  `homekeep:8040` (or whatever `PORT` you set).
+  `maintenhance:8040` (or whatever `PORT` you set).
 - **[Nginx Proxy Manager](https://nginxproxymanager.com/)** — a
   web-UI-driven reverse proxy, popular in home-server/Portainer setups;
   handles Let's Encrypt certificates through its UI, no config files.
@@ -356,7 +356,7 @@ are covered automatically:
 
 ```bash
 docker run --rm -v homekeep_homekeep_data:/data -v "$PWD":/backup \
-  alpine tar czf /backup/homekeep-backup-$(date +%F).tar.gz -C /data .
+  alpine tar czf /backup/maintenhance-backup-$(date +%F).tar.gz -C /data .
 ```
 
 (Volume name may be prefixed differently depending on your project
@@ -482,3 +482,16 @@ The database volume is untouched by any of the above.
   supported from the editor; create those by hand from Work Orders
   after running the wizard, same as before.
 - **Optional features (v2.2).** The Home Assistant alarm integration is switched on or off by the Owner in Owner Tools → Features (no restart needed). Only the webhook/API-key/mapping piece is gated; manual and checklist-raised alarms stay on.
+
+
+## Upgrading from the homekeep image name
+
+v2.4 publishes the image as `<DOCKERHUB_USERNAME>/maintenhance` and renames the
+compose service and container to `maintenhance`. Your data is not affected: the
+volume is still `homekeep_data` (and the database file is still `homekeep.db`).
+
+1. Push v2.4 to GitHub with the updated workflow so the `maintenhance` image is published.
+2. Update the stack (Portainer: Pull and redeploy; Compose: `docker compose pull && docker compose up -d --remove-orphans`).
+   Keep the same stack / project name, otherwise Docker creates a new, empty volume.
+3. Point any reverse proxy at the new container name `maintenhance:8040`.
+4. Once it works, you may delete the old `homekeep` repository on Docker Hub.
