@@ -7,8 +7,9 @@ import {
   Calendar, FileDown, FileUp, Info, Archive, Download, ExternalLink, ShoppingCart,
   Building2, DoorOpen, Square, Box, Sun, Moon, MonitorSmartphone, QrCode,
   Gauge, Snowflake, Wand2, Camera, WifiOff, RefreshCw,
-  Siren, Key, Copy, Eye, EyeOff, Link2,
+  Siren, Key, Copy, Eye, EyeOff, Link2, Clock, User, Printer,
 } from "lucide-react";
+import { createPortal } from "react-dom";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
 import { api } from "./api.js";
@@ -234,7 +235,7 @@ const DEFAULT_SETTINGS = {
     colors: { primary: "#28415F", primaryDark: "#7FA3CC", accent: "#C85410", accentDark: "#E38C4E" },
   },
   terms: { orgNoun: "household", locationLevels: ["Property", "Structure", "Floor", "Room", "Area", "Sub-area"], siteLevelIndex: 0 },
-  features: { homeAssistantAlarms: true, linkPrefill: true, linkPrefillAi: false },
+  features: { homeAssistantAlarms: true, linkPrefill: true, linkPrefillAi: false, executionScheduling: false, workforceScheduling: false, hourlyAssignment: false },
 };
 let SETTINGS = DEFAULT_SETTINGS;
 function applySettings(cfg) {
@@ -663,7 +664,7 @@ function spawnPmInstance(d, base, opts) {
     assetId: base.assetId, bomNodeId: base.bomNodeId, locationId: base.locationId,
     description: base.description, sourceRequestId: null, sourceBenchmarkId: null,
     sourcePmBaseId: base.id, sourceFixedDate: fixedDate || null,
-    priority: base.priority || "Medium", executorId: base.executorId || "",
+    priority: base.priority || "Medium", executorId: base.executorId || "", ...planFieldsFrom(base),
     scheduledDate: "", requiredByDate, completedDate: null, verifiedDate: null,
     cost: "", vendorId: base.vendorId || null, notes: "", parts: [], comments: [], partsDeducted: false, createdBy: base.createdBy || null,
     meterValueAtGeneration: triggerType === "meter" && opts.meterValueAtGeneration != null ? opts.meterValueAtGeneration : null,
@@ -694,7 +695,7 @@ function regeneratePmAfterCompletion(d, completedWO) {
       assetId: base.assetId, bomNodeId: base.bomNodeId, locationId: base.locationId,
       description: base.description, sourceRequestId: null, sourceBenchmarkId: null,
       sourcePmBaseId: base.id, sourceFixedDate: null,
-      priority: base.priority || "Medium", executorId: base.executorId || "",
+      priority: base.priority || "Medium", executorId: base.executorId || "", ...planFieldsFrom(base),
       scheduledDate: "", requiredByDate, completedDate: null, verifiedDate: null,
       cost: "", vendorId: base.vendorId || null, notes: "", parts: [], comments: [], partsDeducted: false, createdBy: base.createdBy || null,
       meterValueAtGeneration: null, checklist: freshChecklist(base),
@@ -710,7 +711,7 @@ function regeneratePmAfterCompletion(d, completedWO) {
       assetId: base.assetId, bomNodeId: base.bomNodeId, locationId: base.locationId,
       description: base.description, sourceRequestId: null, sourceBenchmarkId: null,
       sourcePmBaseId: base.id, sourceFixedDate: completedWO.sourceFixedDate,
-      priority: base.priority || "Medium", executorId: base.executorId || "",
+      priority: base.priority || "Medium", executorId: base.executorId || "", ...planFieldsFrom(base),
       scheduledDate: "", requiredByDate, completedDate: null, verifiedDate: null,
       cost: "", vendorId: base.vendorId || null, notes: "", parts: [], comments: [], partsDeducted: false, createdBy: base.createdBy || null,
       meterValueAtGeneration: null, checklist: freshChecklist(base),
@@ -803,7 +804,7 @@ function Btn({ children, onClick, variant, small, type, disabled, title }) {
   );
 }
 
-function Modal({ title, onClose, children, wide }) {
+function Modal({ title, onClose, children, wide, info }) {
   return (
     <div
       className="hk-modal-overlay"
@@ -816,7 +817,7 @@ function Modal({ title, onClose, children, wide }) {
         onClick={(e) => e.stopPropagation()}
       >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 18px", borderBottom: `1px solid ${C.line}`, position: "sticky", top: 0, background: C.panel }}>
-          <h3 style={{ fontFamily: FONT_HEAD, fontSize: 16, fontWeight: 600, color: C.ink, margin: 0 }}>{title}</h3>
+          <h3 style={{ fontFamily: FONT_HEAD, fontSize: 16, fontWeight: 600, color: C.ink, margin: 0 }}>{title}{info && <InfoTip k={info} />}</h3>
           <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkSoft }}>
             <X size={18} />
           </button>
@@ -1119,7 +1120,7 @@ function QrLabelModal({ asset, onClose }) {
   };
 
   return (
-    <Modal title={`QR label — ${asset.name}`} onClose={onClose}>
+    <Modal title={`QR label — ${asset.name}`} info="qr" onClose={onClose}>
       <div style={{ textAlign: "center" }}>
         {dataUrl === null && <div style={{ padding: 30 }}><Loader2 className="animate-spin" size={20} color={C.inkSoft} /></div>}
         {dataUrl === "" && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.rust, padding: 20 }}>Couldn't generate the QR code.</div>}
@@ -1153,7 +1154,7 @@ function LogMeterModal({ asset, update, onClose }) {
     onClose();
   };
   return (
-    <Modal title={`Log meter reading — ${asset.name}`} onClose={onClose}>
+    <Modal title={`Log meter reading — ${asset.name}`} info="meter" onClose={onClose}>
       <Field label={`Current reading (${asset.meterUnit})`}><input type="number" style={inputStyle} value={value} onChange={(e) => setValue(e.target.value)} autoFocus /></Field>
       <Field label="As of"><input type="date" style={inputStyle} value={date} onChange={(e) => setDate(e.target.value)} /></Field>
       <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginBottom: 10 }}>
@@ -1240,11 +1241,29 @@ const PAGE_INFO = {
     permissions: "Everyone can view the budget.",
     features: ["Total logged spend", "Spend by asset category", "Always current, no manual entry"],
   },
+  labour: {
+    purpose: "Plan who does which work and when: assign executors to scheduled work orders, see each person's hours, and spot work that doesn't have enough people.",
+    workflow: "Switch between Month, Week and Day. Managers drag work orders from the side list onto a person's column (week or day view) or onto a calendar day. Click a day header to open that day, or a week number to open that week. With hourly assignments on, drag cards to a 30-minute start time inside the person's shift.",
+    permissions: "Everyone can view. Owners and Managers assign work. Executors enter hours worked when they complete a work order.",
+    features: ["Month, week and day views with back/forward, up-a-level and view selector", "Multi-select executor filter and location filter", "Crew size and estimated hours on every card; total hours per person per day", "Dashed red outline and “Short” flag when fewer executors are assigned than required", "People only appear on days they are on shift when Workforce scheduling is on"],
+  },
+  workforce: {
+    purpose: "Who is working when. Everyone can see the team's shifts; managers set them.",
+    workflow: "Managers drag a person's name card onto a day or onto a week's number box, then pick a saved template or set a one-time schedule. Shifts that end before they start run overnight and are shown on the day they start.",
+    permissions: "Everyone can view and export to PDF. Owners and Managers set shifts and templates.",
+    features: ["Month, week and day views", "Daily and weekly shift templates (Tools tab) or one-time schedules", "Each day shows its first start and last end; red with a tooltip when part of that span has nobody working", "Export the visible period to PDF"],
+  },
+  help: {
+    purpose: "The training guide, inside the app, so the answer to “how do I…?” is one click away.",
+    workflow: "Pick the guide for your role (you can read the other one too). The contents list at the top links to every subject; select one to jump straight to it. The Download button gives you the Word version to print or share. Small (i) buttons throughout the app open a short note about the feature next to them.",
+    permissions: "Everyone, including guests.",
+    features: ["Linked table of contents", "Screen-by-screen pages with numbered pictures", "Download the Word document", "Executor guide and Manager & Owner guide"],
+  },
   owner: {
-    purpose: "Administrative controls for the household that shouldn't be scattered through the rest of the app — accounts, branding, backups, and record clean-up.",
+    purpose: "Your account and hours, plus the setup tools for your role: managers get executor colours, shift templates and the team hours report; the Owner also gets accounts, branding, features, backups and record clean-up.",
     workflow: "Manage who has access and what role they hold (including temporary passwords), customise the name, logo, colours and location labels, back up or restore the full household record, and remove a work order or request that was created in error.",
-    permissions: "Owners only. Managers have elevated rights elsewhere in the app, but not on this page.",
-    features: ["Add/remove household member accounts, set roles, set temporary passwords and notification emails", "Branding & terminology: name, logo, colours, location labels, top-bar title", "Features: Home Assistant alarms on/off", "Export to Excel or a Full backup (.zip with photos); import selected tabs with a pre-check", "Automatic nightly database snapshots; shrink existing photos", "Delete a work order or work request by number"],
+    permissions: "Executors see their own tools; Managers add the manager tools; Owners see everything.",
+    features: ["Add/remove household member accounts, set roles, set temporary passwords and notification emails", "Branding & terminology: name, logo, colours, location labels, top-bar title", "Features: Home Assistant alarms, link fill-in, execution-based scheduling, workforce scheduling and hourly assignments on/off", "Export to Excel or a Full backup (.zip with photos); import selected tabs with a pre-check", "Automatic nightly database snapshots; shrink existing photos", "Delete a work order or work request by number"],
   },
   purchasing: {
     purpose: "A running shopping list built automatically from what open work actually needs, so nothing gets started without the parts on hand.",
@@ -1339,16 +1358,18 @@ const NAV = [
   { id: "requests", label: "Work Requests", icon: ClipboardList },
   { id: "orders", label: "Work Orders", icon: Wrench },
   { id: "schedule", label: "Schedule", icon: Calendar },
+  { id: "workforce", label: "Workforce schedule", icon: Clock, featureKey: "workforceScheduling" },
   { id: "vendors", label: "Vendors", icon: Users },
   { id: "parts", label: "Parts Catalogue", icon: Package },
   { id: "budget", label: "Budget", icon: DollarSign },
   { id: "purchasing", label: "Purchasing", icon: ShoppingCart, adminOnly: true },
   { id: "alarms", label: "Alarms", icon: Siren, adminOnly: true },
-  { id: "owner", label: "Owner Tools", icon: Shield, ownerOnly: true },
+  { id: "owner", label: "Tools", icon: Shield, notGuest: true },
+  { id: "help", label: "Help", icon: Info },
 ];
 
 function Sidebar({ tab, setTab, open, role, counts, onNavigate }) {
-  const items = NAV.filter((n) => (!n.ownerOnly || role === "Owner") && (!n.adminOnly || isAdmin(role)));
+  const items = NAV.filter((n) => (!n.ownerOnly || role === "Owner") && (!n.adminOnly || isAdmin(role)) && (!n.notGuest || role !== "Guest") && (!n.featureKey || SETTINGS.features[n.featureKey])).map((n) => (n.id === "schedule" && execOn() ? { ...n, label: "Labour assignment" } : n));
   return (
     <div
       style={{ width: 216, flexShrink: 0, background: SAFE_COLOR.test(SETTINGS.brand.colors.primary || "") ? SETTINGS.brand.colors.primary : DEFAULT_SETTINGS.brand.colors.primary, color: "#fff", display: open ? "flex" : "none", flexDirection: "column", position: "fixed", top: 0, bottom: 0, left: 0, zIndex: 40 }}
@@ -1383,7 +1404,7 @@ function Sidebar({ tab, setTab, open, role, counts, onNavigate }) {
         })}
       </div>
       <div style={{ padding: 14, borderTop: "1px solid rgba(255,255,255,0.12)", fontFamily: FONT_BODY, fontSize: 11, color: "#8FA0AF" }}>
-        v2.3 · matches the MaintEnhance functional spec
+        v2.4 · matches the MaintEnhance functional spec
       </div>
     </div>
   );
@@ -1405,7 +1426,7 @@ function WeekLookahead({ data, goToOrder }) {
   });
   return (
     <Panel style={{ padding: 16, marginTop: 16 }}>
-      <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 10 }}>Next 7 days</div>
+      <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 10 }}>Next 7 days<InfoTip k="nextDays" /></div>
       <div className="hk-grid-7" style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6 }}>
         {days.map((d) => {
           const dt = new Date(d + "T00:00:00");
@@ -1471,7 +1492,7 @@ function Dashboard({ data, setTab, role, applyFilter, goToOrder, goToRequest }) 
       <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <Panel style={{ padding: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-            <h3 style={{ fontFamily: FONT_HEAD, fontSize: 15, margin: 0, color: C.ink }}>Work requests awaiting review</h3>
+            <h3 style={{ fontFamily: FONT_HEAD, fontSize: 15, margin: 0, color: C.ink }}>Work requests awaiting review<InfoTip k="wrAwaiting" /></h3>
             <span onClick={() => setTab("requests")} style={{ cursor: "pointer", color: C.navy, fontSize: 12.5, fontFamily: FONT_BODY, fontWeight: 600 }}>View all →</span>
           </div>
           {pendingWR.length === 0 && <Empty text="Nothing waiting on review." />}
@@ -1488,7 +1509,7 @@ function Dashboard({ data, setTab, role, applyFilter, goToOrder, goToRequest }) 
 
         <Panel style={{ padding: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-            <h3 style={{ fontFamily: FONT_HEAD, fontSize: 15, margin: 0, color: C.ink }}>Upcoming Work Orders</h3>
+            <h3 style={{ fontFamily: FONT_HEAD, fontSize: 15, margin: 0, color: C.ink }}>Upcoming Work Orders<InfoTip k="upcomingWo" /></h3>
             <span onClick={() => setTab("orders")} style={{ cursor: "pointer", color: C.navy, fontSize: 12.5, fontFamily: FONT_BODY, fontWeight: 600 }}>View all →</span>
           </div>
           {dueSoonWO.length === 0 && <Empty text="Nothing scheduled or due in the next 30 days." />}
@@ -1514,7 +1535,7 @@ function Dashboard({ data, setTab, role, applyFilter, goToOrder, goToRequest }) 
 
       {warrantySoon.length > 0 && (
         <Panel style={{ padding: 16, marginTop: 16 }}>
-          <h3 style={{ fontFamily: FONT_HEAD, fontSize: 15, margin: "0 0 10px", color: C.ink }}>Warranty expiring soon</h3>
+          <h3 style={{ fontFamily: FONT_HEAD, fontSize: 15, margin: "0 0 10px", color: C.ink }}>Warranty expiring soon<InfoTip k="warranty" /></h3>
           {warrantySoon.map((a) => (
             <div key={a.id} style={{ padding: "7px 0", borderTop: `1px solid ${C.lineSoft}`, display: "flex", justifyContent: "space-between" }}>
               <span style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.ink }}>{a.name}</span>
@@ -1599,7 +1620,7 @@ function PmWizardModal({ property, data, update, onClose }) {
   };
 
   return (
-    <Modal title={`PM setup wizard — ${property.name}`} onClose={onClose} wide>
+    <Modal title={`PM setup wizard — ${property.name}`} info="pmWizard" onClose={onClose} wide>
       {step === 1 && (
         <>
           <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkFaint, marginBottom: 12 }}>
@@ -1779,7 +1800,7 @@ function LocationsView({ data, update, role }) {
       </Panel>
 
       {modal && (
-        <Modal title={modal.mode === "add" ? "Add location" : "Edit location"} onClose={() => closeGuard(isDirty, save, () => setModal(null))}>
+        <Modal title={modal.mode === "add" ? "Add location" : "Edit location"} info="location" onClose={() => closeGuard(isDirty, save, () => setModal(null))}>
           <Field label="Name" required>
             <input style={inputStyle} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Primary Bathroom" autoFocus />
           </Field>
@@ -1865,7 +1886,7 @@ function BomTree({ data, update, assetId, role }) {
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-        <div style={{ fontFamily: FONT_HEAD, fontSize: 14, fontWeight: 600, color: C.ink }}>Bill of Materials</div>
+        <div style={{ fontFamily: FONT_HEAD, fontSize: 14, fontWeight: 600, color: C.ink }}>Bill of Materials<InfoTip k="bom" /></div>
         {canWrite(role) && <Btn small variant="ghost" onClick={() => openAdd(null)}><Plus size={13} /> Add component</Btn>}
       </div>
       {rows.length === 0 && <Empty text="No components recorded yet — break this asset down into components, sub-components, and parts." />}
@@ -1888,7 +1909,7 @@ function BomTree({ data, update, assetId, role }) {
       ))}
 
       {modal && (
-        <Modal title={modal.mode === "add" ? "Add BOM node" : "Edit BOM node"} onClose={() => setModal(null)}>
+        <Modal title={modal.mode === "add" ? "Add BOM node" : "Edit BOM node"} info="bomNode" onClose={() => setModal(null)}>
           <Field label="Name" required>
             <input style={inputStyle} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Ignitor" autoFocus />
           </Field>
@@ -2044,7 +2065,7 @@ function AssetsView({ data, update, role, goToOrder, deepLinkAssetId, onConsumeD
 
             <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
               <Panel style={{ padding: 16 }}>
-                <div style={{ fontFamily: FONT_HEAD, fontSize: 14, fontWeight: 600, color: C.ink, marginBottom: 8 }}>PM tasks</div>
+                <div style={{ fontFamily: FONT_HEAD, fontSize: 14, fontWeight: 600, color: C.ink, marginBottom: 8 }}>PM tasks<InfoTip k="pmTasks" /></div>
                 {relatedPM.length === 0 && <Empty text="No recurring tasks defined." />}
                 {relatedPM.map((p) => (
                   <div key={p.id} style={{ padding: "7px 0", borderTop: `1px solid ${C.lineSoft}` }}>
@@ -2057,7 +2078,7 @@ function AssetsView({ data, update, role, goToOrder, deepLinkAssetId, onConsumeD
                 ))}
               </Panel>
               <Panel style={{ padding: 16 }}>
-                <div style={{ fontFamily: FONT_HEAD, fontSize: 14, fontWeight: 600, color: C.ink, marginBottom: 8 }}>Work order history</div>
+                <div style={{ fontFamily: FONT_HEAD, fontSize: 14, fontWeight: 600, color: C.ink, marginBottom: 8 }}>Work order history<InfoTip k="woHistory" /></div>
                 {relatedWO.length === 0 && <Empty text="No work orders logged yet." />}
                 {relatedWO.map((w) => (
                   <div key={w.id} onClick={() => goToOrder(w.id)} className="hk-row" style={{ padding: "7px 4px", borderTop: `1px solid ${C.lineSoft}`, cursor: "pointer", display: "flex", justifyContent: "space-between" }}>
@@ -2077,7 +2098,7 @@ function AssetsView({ data, update, role, goToOrder, deepLinkAssetId, onConsumeD
       </div>
 
       {modal && (
-        <Modal title={modal === "add" ? "Add asset" : "Edit asset"} onClose={() => closeGuard(isDirty, save, () => setModal(null))} wide>
+        <Modal title={modal === "add" ? "Add asset" : "Edit asset"} info="asset" onClose={() => closeGuard(isDirty, save, () => setModal(null))} wide>
           {canWrite(role) && <PrefillBar p={pre} form={form} />}
           <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <Field label="Name" required><PrefillInput p={pre} field="name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
@@ -2176,7 +2197,7 @@ function PartEditModal({ data, update, part, currentUser, role, onClose, onSaved
   };
 
   return (
-    <Modal title={part ? `Edit ${formatPartNum(part.partNumber)}` : "New part"} onClose={() => closeGuard(isDirty, save, onClose)} wide>
+    <Modal title={part ? `Edit ${formatPartNum(part.partNumber)}` : "New part"} info="part" onClose={() => closeGuard(isDirty, save, onClose)} wide>
       <PrefillBar p={pre} form={form} />
       <Field label="Name" required><PrefillInput p={pre} field="name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. 16x25x1 Furnace Filter" /></Field>
       <Field label="Description"><PrefillInput p={pre} field="description" multiline style={{ minHeight: 50 }} value={form.description || ""} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
@@ -2404,7 +2425,7 @@ function ChecklistTemplateEditor({ steps, setSteps }) {
 function ChecklistRunner({ steps, onUpdateStep, readOnly }) {
   return (
     <div style={{ marginTop: 4, marginBottom: 14, paddingTop: 12, borderTop: `1px solid ${C.lineSoft}` }}>
-      <div style={{ fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 8 }}>Checklist</div>
+      <div style={{ fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 8 }}>Checklist<InfoTip k="checklist" /></div>
       {steps.map((s, i) => {
         const hasRange = s.expectedMin !== "" && s.expectedMin != null && s.expectedMax !== "" && s.expectedMax != null;
         const hasValue = s.value !== "" && s.value != null;
@@ -2553,7 +2574,7 @@ function StandbyFields({ form, setForm }) {
   );
   return (
     <div style={{ border: `1px solid ${C.lineSoft}`, borderRadius: 4, padding: "10px 12px", marginBottom: 12 }}>
-      <div style={{ fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 6 }}>Standby</div>
+      <div style={{ fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 6 }}>Standby<InfoTip k="standby" /></div>
       <label style={{ display: "flex", alignItems: "center", gap: 7, fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink, cursor: "pointer", marginBottom: 8 }}>
         <input type="checkbox" checked={!!form.standby} onChange={(e) => setForm({ ...form, standby: e.target.checked })} />
         Put this PM Base on standby (no new occurrences are generated)
@@ -2840,7 +2861,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
       </div>
 
       {isFormOpen && (
-        <Modal title={modal === "new" ? "Submit a work request" : "Edit work request"} onClose={() => closeGuard(isDirty, modal === "new" ? submitRequest : saveEditRequest, () => setModal(null))} wide>
+        <Modal title={modal === "new" ? "Submit a work request" : "Edit work request"} info="wrForm" onClose={() => closeGuard(isDirty, modal === "new" ? submitRequest : saveEditRequest, () => setModal(null))} wide>
           <Field label="Title" required><input style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="What needs attention?" autoFocus /></Field>
           <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 70 }} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
           <AssetBomPicker data={data} assetId={form.assetId} bomNodeId={form.bomNodeId} onChange={({ assetId, bomNodeId }) => setForm({ ...form, assetId, bomNodeId, locationId: assetId ? data.assets.find((a) => a.id === assetId).locationId : form.locationId })} />
@@ -2890,7 +2911,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
       )}
 
       {modal && modal.action === "convert" && (
-        <Modal title="Convert to work order" onClose={() => setModal(null)} wide>
+        <Modal title="Convert to work order" info="convert" onClose={() => setModal(null)} wide>
           <Field label="Work order type">
             <select style={inputStyle} value={reviewForm.type} onChange={(e) => setReviewForm({ ...reviewForm, type: e.target.value })}>
               <option value="PM">PM</option>
@@ -2917,7 +2938,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
         </Modal>
       )}
       {modal && modal.action === "decline" && (
-        <Modal title="Decline request" onClose={() => setModal(null)}>
+        <Modal title="Decline request" info="decline" onClose={() => setModal(null)}>
           <Field label="Reason (shown to the submitter)" required><textarea style={{ ...inputStyle, minHeight: 70 }} value={reviewForm.reason} onChange={(e) => setReviewForm({ ...reviewForm, reason: e.target.value })} autoFocus /></Field>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
             <Btn variant="ghost" onClick={() => setModal(null)}>Cancel</Btn>
@@ -2926,7 +2947,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
         </Modal>
       )}
       {modal && modal.action === "info" && (
-        <Modal title="Request more info" onClose={() => setModal(null)}>
+        <Modal title="Request more info" info="moreInfo" onClose={() => setModal(null)}>
           <Field label="What do you need to know?" required><textarea style={{ ...inputStyle, minHeight: 70 }} value={reviewForm.reason} onChange={(e) => setReviewForm({ ...reviewForm, reason: e.target.value })} autoFocus /></Field>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
             <Btn variant="ghost" onClick={() => setModal(null)}>Cancel</Btn>
@@ -2935,7 +2956,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
         </Modal>
       )}
       {modal && modal.action === "merge" && (
-        <Modal title="Merge into an existing work order" onClose={() => setModal(null)}>
+        <Modal title="Merge into an existing work order" info="merge" onClose={() => setModal(null)}>
           <Field label="Existing work order" required>
             <select style={inputStyle} value={reviewForm.mergeInto} onChange={(e) => setReviewForm({ ...reviewForm, mergeInto: e.target.value })}>
               <option value="">— choose —</option>
@@ -2959,7 +2980,7 @@ function PmBaseDetail({ data, base, onOpenInstance }) {
   const linked = data.workOrders.filter((w) => w.sourcePmBaseId === base.id).sort((a, b) => (a.requiredByDate || "").localeCompare(b.requiredByDate || ""));
   return (
     <div style={{ marginTop: 8 }}>
-      <div style={{ fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 6 }}>Generated PM instances</div>
+      <div style={{ fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 6 }}>Generated PM instances<InfoTip k="genPm" /></div>
       {linked.length === 0 && <Empty text="None generated yet." />}
       {linked.map((w) => (
         <div key={w.id} onClick={() => onOpenInstance(w.id)} className="hk-row" style={{ display: "flex", justifyContent: "space-between", padding: "8px 6px", borderTop: `1px solid ${C.lineSoft}`, cursor: "pointer" }}>
@@ -2985,7 +3006,7 @@ function ArchiveModal({ data, onClose, goToOrder }) {
     .sort((a, b) => (b.verifiedDate || "").localeCompare(a.verifiedDate || ""));
 
   return (
-    <Modal title="Closed work order archive" onClose={onClose} wide>
+    <Modal title="Closed work order archive" info="archive" onClose={onClose} wide>
       <input style={{ ...inputStyle, marginBottom: 10 }} placeholder="Search by title or number…" value={search} onChange={(e) => setSearch(e.target.value)} />
       <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
         <select style={inputStyle} value={locFilter} onChange={(e) => setLocFilter(e.target.value)}>
@@ -3026,7 +3047,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
   const [users, setUsers] = useState([]);
   const blank = {
     title: "", type: "Unplanned", assetId: null, bomNodeId: null, locationId: data.locations[0]?.id || "",
-    description: "", scheduledDate: "", requiredByDate: "", vendorId: "", benchmarkId: "", executorId: "",
+    description: "", scheduledDate: "", requiredByDate: "", vendorId: "", benchmarkId: "", executorId: "", executorIds: [], estHours: "", crewRequired: "",
     priority: "Medium", pmMode: "Non-fixed", frequencyValue: "3", frequencyUnit: "months", fixedDates: [], parts: [],
     failureCode: "", rootCause: "",
     triggerType: "calendar", meterIntervalValue: "", seasonalAnchor: "Spring", seasonalOffsetDays: "0",
@@ -3040,6 +3061,8 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
   const detailInitial = useRef(null);
   const detailDirty = !!openId && JSON.stringify(detailEdits) !== detailInitial.current;
   const [commentDraft, setCommentDraft] = useState("");
+  const [hoursAsk, setHoursAsk] = useState(null);
+  const askHours = () => new Promise((resolve) => setHoursAsk({ resolve }));
 
   useEffect(() => { if (pendingFilter) consumeFilter(); }, []); // eslint-disable-line
   useEffect(() => { api.listUsers().then(setUsers).catch(() => setUsers([])); }, []);
@@ -3086,7 +3109,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
         description: form.description, sourceRequestId: null,
         sourceBenchmarkId: form.type === "Corrective" ? (form.benchmarkId || null) : null,
         sourcePmBaseId: null, sourceFixedDate: null,
-        priority: form.priority, executorId: form.executorId || "",
+        priority: form.priority, executorId: form.executorId || "", executorIds: [...(form.executorIds || [])], estHours: form.estHours || "", crewRequired: form.crewRequired || "",
         scheduledDate: form.type === "PM Base" ? "" : form.scheduledDate,
         requiredByDate: form.type === "PM Base" ? "" : (form.requiredByDate || ""),
         completedDate: null, verifiedDate: null,
@@ -3160,6 +3183,11 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
       comment = await dialog.promptMsg("Add a comment to complete this work order — how did it go?", "", { title: "Completion comment", multiline: true, required: true, okLabel: "Complete" });
       if (comment == null || !String(comment).trim()) return;
     }
+    let hoursWorked = null;
+    if (status === "Completed" && execOn() && openWO.type !== "PM Base") {
+      hoursWorked = await askHours();
+      if (!hoursWorked) return;
+    }
     if (status === "Scheduled" && !openWO.scheduledDate) {
       await dialog.alertMsg("Set a scheduled date (and save) to schedule this work order — it moves to Scheduled automatically.");
       return;
@@ -3178,6 +3206,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
         w.comments.push({ id: uid("cm"), author: currentUser, date: todayISO(), text: String(comment).trim() });
       }
       if (status === "Completed" && !w.completedDate) w.completedDate = todayISO();
+      if (hoursWorked) w.timeEntries = [...(w.timeEntries || []), ...hoursWorked.map((h) => ({ id: uid("te"), executorId: h.executorId, hours: h.hours, date: todayLocal(), by: currentUser }))];
       if (status === "Closed" && !w.verifiedDate) w.verifiedDate = todayISO();
       if (status === "Completed" && w.type === "PM" && w.sourcePmBaseId && !wasTerminal) regeneratePmAfterCompletion(d, w);
       if (status === "Completed" && !w.partsDeducted) {
@@ -3308,7 +3337,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
     if (allowedLocs && !allowedLocs.has(w.locationId)) return false;
     if (priorityFilter !== "all" && w.priority !== priorityFilter) return false;
     if (typeFilter !== "all" && w.type !== typeFilter) return false;
-    if (executorFilter && w.executorId !== executorFilter) return false;
+    if (executorFilter && !execIdsOf(w).includes(executorFilter)) return false;
     if (dueFilter !== "all") {
       const notDone = !isDoneStatus(w.status);
       if (!notDone) return false;
@@ -3372,9 +3401,12 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
               {assignableUsers.map((u) => <option key={u.id} value={u.id}>{u.username}{u.id === currentUserId ? " (me)" : ""}</option>)}
             </select>
             {isAdmin(role) && (
+              <>
               <Btn small variant={selectedIds.size ? "primary" : "ghost"} onClick={autoSchedule} title="Sets each selected Active work order's scheduled date to its required-by date">
                 <Calendar size={13} /> Auto schedule{selectedIds.size ? ` (${selectedIds.size})` : ""}
               </Btn>
+              <InfoTip k="autoSchedule" />
+              </>
             )}
           </div>
 
@@ -3430,7 +3462,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
 
           {pmBases.length > 0 && (
             <div style={{ marginTop: 24 }}>
-              <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 8 }}>PM Base templates</div>
+              <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 8 }}>PM Base templates<InfoTip k="pmBases" /></div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 10 }}>
                 {pmBases.map((b) => {
                   const linked = data.workOrders.filter((w) => w.sourcePmBaseId === b.id);
@@ -3457,8 +3489,15 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
         </div>
       </div>
 
+      {hoursAsk && openWO && (
+        <div style={{ position: "relative", zIndex: 70 }}>
+          <HoursWorkedModal wo={openWO} staff={assignableUsers} currentUserId={currentUserId}
+            onCancel={() => { hoursAsk.resolve(null); setHoursAsk(null); }}
+            onSave={(h) => { hoursAsk.resolve(h); setHoursAsk(null); }} />
+        </div>
+      )}
       {modal === "new" && (
-        <Modal title="New work order" onClose={() => closeGuard(isDirty, createWO, () => setModal(null))} wide>
+        <Modal title="New work order" info="newWo" onClose={() => closeGuard(isDirty, createWO, () => setModal(null))} wide>
           <Field label="Title" required><input style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} autoFocus /></Field>
           <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <Field label="Type">
@@ -3519,12 +3558,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                 {data.vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
               </select>
             </Field>
-            <Field label="Executor">
-              <select style={inputStyle} value={form.executorId} onChange={(e) => setForm({ ...form, executorId: e.target.value })}>
-                <option value="">— unassigned —</option>
-                {assignableUsers.map((u) => <option key={u.id} value={u.id}>{u.username} ({u.role})</option>)}
-              </select>
-            </Field>
+            <ExecutorPicker obj={form} onChange={(p) => setForm({ ...form, ...p })} users={assignableUsers} />
           </div>
           {form.type !== "PM Base" && (
             <PartsPicker data={data} update={update} value={form.parts} onChange={(v) => setForm({ ...form, parts: v })} defaultLocationId={form.locationId} currentUser={currentUser} role={role} />
@@ -3538,7 +3572,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
       )}
 
       {openWO && (
-        <Modal title={`${formatWoNum(openWO.number)} · ${openWO.title}`} onClose={() => closeGuard(detailDirty, saveDetail, () => setOpenId(null))} wide>
+        <Modal title={`${formatWoNum(openWO.number)} · ${openWO.title}`} info="woDetail" onClose={() => closeGuard(detailDirty, saveDetail, () => setOpenId(null))} wide>
           <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
             <Tag text={openWO.type} color={WO_TYPE_COLORS[openWO.type]} soft={C.panelAlt} />
             {openWO.type !== "PM Base" && <Tag text={openWO.status} color={WO_STATUS_COLORS[openWO.status]} soft={C.panelAlt} />}
@@ -3568,12 +3602,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                       </select>
                     </Field>
                   </div>
-                  <Field label="Executor">
-                    <select style={inputStyle} value={detailEdits.executorId || ""} onChange={(e) => setDetailEdits({ ...detailEdits, executorId: e.target.value })}>
-                      <option value="">— unassigned —</option>
-                      {assignableUsers.map((u) => <option key={u.id} value={u.id}>{u.username} ({u.role})</option>)}
-                    </select>
-                  </Field>
+                  <ExecutorPicker obj={detailEdits} onChange={(p) => setDetailEdits({ ...detailEdits, ...p })} users={assignableUsers} />
                   <PmBaseFields form={detailEdits} setForm={setDetailEdits} data={data} />
                   <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 16 }}>
                     <Btn small onClick={saveDetail}>Save changes</Btn>
@@ -3621,12 +3650,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                         {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
                       </select>
                     </Field>
-                    <Field label="Executor">
-                      <select style={inputStyle} value={detailEdits.executorId || ""} onChange={(e) => setDetailEdits({ ...detailEdits, executorId: e.target.value })}>
-                        <option value="">— unassigned —</option>
-                        {assignableUsers.map((u) => <option key={u.id} value={u.id}>{u.username} ({u.role})</option>)}
-                      </select>
-                    </Field>
+                    <ExecutorPicker obj={detailEdits} onChange={(p) => setDetailEdits({ ...detailEdits, ...p })} users={assignableUsers} />
                   </div>
                   {(openWO.type === "Corrective" || openWO.type === "Unplanned") && (
                     <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -3654,7 +3678,8 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                       ["Cost", openWO.cost ? `$${openWO.cost}` : "—"],
                       ["Vendor", openWO.vendorId ? (nameOf(data.vendors, openWO.vendorId) || "—") : "—"],
                       ["Priority", openWO.priority || "Medium"],
-                      ["Executor", (assignableUsers.find((u) => u.id === openWO.executorId) || {}).username || "Unassigned"],
+                      ["Executor", (execIdsOf(openWO).map((id) => (assignableUsers.find((u) => u.id === id) || {}).username).filter(Boolean).join(", ")) || "Unassigned"],
+                      ...(execOn() ? [["Estimate", `${openWO.estHours ? fmtH(openWO.estHours) + " h" : "—"} × ${crewOf(openWO)} executor${crewOf(openWO) === 1 ? "" : "s"}`], ["Hours logged", (openWO.timeEntries || []).length ? `${fmtH((openWO.timeEntries || []).reduce((t, e) => t + (Number(e.hours) || 0), 0))} h` : "—"]] : []),
                       ...(openWO.failureCode ? [["Failure code", openWO.failureCode]] : []),
                       ...(openWO.meterValueAtGeneration != null ? [["Triggered at", `${openWO.meterValueAtGeneration}${(data.assets.find((a) => a.id === openWO.assetId) || {}).meterUnit ? " " + data.assets.find((a) => a.id === openWO.assetId).meterUnit : ""}`]] : []),
                     ].map(([k, v]) => (
@@ -3727,7 +3752,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
 
               {(isDoneStatus(openWO.status) || (openWO.comments || []).length > 0) && (
                 <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${C.lineSoft}` }}>
-                  <div style={{ fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 8 }}>Comments</div>
+                  <div style={{ fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 8 }}>Comments<InfoTip k="comments" /></div>
                   {(openWO.comments || []).length === 0 && <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint, marginBottom: 8 }}>No comments yet.</div>}
                   {(openWO.comments || []).map((c) => (
                     <div key={c.id} style={{ padding: "6px 0", borderTop: `1px solid ${C.lineSoft}` }}>
@@ -3848,7 +3873,7 @@ function VendorsView({ data, update, role, currentUser }) {
         ))}
       </Panel>
       {modal && (
-        <Modal title={modal === "add" ? "Add vendor" : "Edit vendor"} onClose={() => closeGuard(isDirty, save, () => setModal(null))}>
+        <Modal title={modal === "add" ? "Add vendor" : "Edit vendor"} info="vendor" onClose={() => closeGuard(isDirty, save, () => setModal(null))}>
           {canWrite(role) && <PrefillBar p={pre} form={form} />}
           <Field label="Name" required><PrefillInput p={pre} field="name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
           <Field label="Specialty"><input style={inputStyle} value={form.specialty} onChange={(e) => setForm({ ...form, specialty: e.target.value })} /></Field>
@@ -3976,7 +4001,7 @@ function BudgetView({ data }) {
         </Panel>
       </div>
       <Panel style={{ padding: 18 }}>
-        <div style={{ fontFamily: FONT_HEAD, fontSize: 14, fontWeight: 600, marginBottom: 12, color: C.ink }}>Spend by category</div>
+        <div style={{ fontFamily: FONT_HEAD, fontSize: 14, fontWeight: 600, marginBottom: 12, color: C.ink }}>Spend by category<InfoTip k="spend" /></div>
         {Object.keys(byCategory).length === 0 && <Empty text="No costs logged yet." />}
         {Object.entries(byCategory).map(([cat, amt]) => (
           <div key={cat} style={{ marginBottom: 10 }}>
@@ -4015,7 +4040,7 @@ function ScheduleView({ data, role, currentUserId, goToOrder }) {
   data.workOrders.forEach((w) => {
     if (w.type === "PM Base" || !w.scheduledDate) return;
     if (allowedLocs && !allowedLocs.has(w.locationId)) return;
-    if (executorFilter && w.executorId !== executorFilter) return;
+    if (executorFilter && !execIdsOf(w).includes(executorFilter)) return;
     const d = new Date(w.scheduledDate + "T00:00:00");
     if (d.getFullYear() === cursor.year && d.getMonth() === cursor.month) {
       const day = d.getDate();
@@ -4140,6 +4165,10 @@ const SHEET_SPECS = [
       standby: w.standby ? "yes" : "",
       standbyWindow: w.standbyWindow && w.standbyWindow.enabled ? JSON.stringify(w.standbyWindow) : "",
       standbyNow: w.standbyNow ? "yes" : "",
+      // v2.4
+      estHours: w.estHours || "", crewRequired: w.crewRequired || "", executorIds: (w.executorIds || []).join(","),
+      startTimes: w.startTimes && Object.keys(w.startTimes).length ? JSON.stringify(w.startTimes) : "",
+      timeEntries: (w.timeEntries && w.timeEntries.length) ? JSON.stringify(w.timeEntries) : "",
     }),
     fromRow: (r) => {
       const fixedDates = String(r.fixedDates || "").split(",").map((s) => s.trim()).filter(Boolean).map((tok) => {
@@ -4178,6 +4207,10 @@ const SHEET_SPECS = [
         standby: String(r.standby || "").toLowerCase() === "yes",
         standbyWindow: (() => { try { return r.standbyWindow ? JSON.parse(r.standbyWindow) : null; } catch { return null; } })(),
         standbyNow: String(r.standbyNow || "").toLowerCase() === "yes",
+        estHours: r.estHours !== "" && r.estHours != null ? String(r.estHours) : "", crewRequired: r.crewRequired !== "" && r.crewRequired != null ? String(r.crewRequired) : "",
+        executorIds: String(r.executorIds || "").split(",").map((x) => x.trim()).filter(Boolean),
+        startTimes: (() => { try { return r.startTimes ? JSON.parse(r.startTimes) : {}; } catch { return {}; } })(),
+        timeEntries: (() => { try { const c = r.timeEntries ? JSON.parse(r.timeEntries) : []; return Array.isArray(c) ? c : []; } catch { return []; } })(),
       };
     },
   },
@@ -4223,6 +4256,28 @@ const SHEET_SPECS = [
     key: "purchaseList", sheetName: "Purchase List", idPrefix: "pl",
     toRow: (p) => ({ id: p.id, partId: p.partId || "", name: p.name || "", qty: p.qty || "", note: p.note || "", addedBy: p.addedBy || "", date: p.date || "" }),
     fromRow: (r) => ({ id: r.id, partId: r.partId ? String(r.partId) : null, name: String(r.name || ""), qty: Number(r.qty) || 1, note: String(r.note || ""), addedBy: String(r.addedBy || ""), date: String(r.date || "") }),
+  },
+  {
+    // v2.4: scheduled shifts, shift templates and executor colours.
+    key: "workShifts", sheetName: "Work Shifts", idPrefix: "sh",
+    toRow: (s) => ({ id: s.id, executorId: s.executorId || "", date: s.date || "", start: s.start || "", end: s.end || "" }),
+    fromRow: (r) => ({ id: r.id, executorId: String(r.executorId || ""), date: String(r.date || ""), start: String(r.start || ""), end: String(r.end || "") }),
+  },
+  {
+    key: "shiftTemplates", sheetName: "Shift Templates", idPrefix: "tpl",
+    toRow: (t) => ({ id: t.id, name: t.name || "", kind: t.kind || "daily", shift: t.shift ? JSON.stringify(t.shift) : "", days: t.days ? JSON.stringify(t.days) : "" }),
+    fromRow: (r) => {
+      const j = (v, dflt) => { try { return v ? JSON.parse(v) : dflt; } catch { return dflt; } };
+      const kind = String(r.kind || "daily") === "weekly" ? "weekly" : "daily";
+      return kind === "weekly" ? { id: r.id, name: String(r.name || ""), kind, days: j(r.days, []) } : { id: r.id, name: String(r.name || ""), kind, shift: j(r.shift, {}) };
+    },
+  },
+  {
+    key: "executorColors", sheetName: "Executor Colours", idPrefix: "ec",
+    fromData: (d) => Object.entries(d.executorColors || {}).map(([id, colour]) => ({ id, colour })),
+    toData: (list) => Object.fromEntries(list.filter((x) => /^#[0-9a-fA-F]{6}$/.test(x.colour || "")).map((x) => [x.id, x.colour])),
+    toRow: (c) => ({ id: c.id, colour: c.colour || "" }),
+    fromRow: (r) => ({ id: String(r.id || ""), colour: String(r.colour || "") }),
   },
 ];
 
@@ -4511,11 +4566,11 @@ function buildImportResult(current, picks) {
   for (const [key, { mode, records }] of Object.entries(picks)) {
     const spec = SHEET_SPECS.find((sp) => sp.key === key);
     if (!spec) continue;
-    const existing = next[key] || [];
+    const existing = spec.fromData ? spec.fromData(next) : (next[key] || []);
     const clean = records.map((r) => { const { __blankId, ...rec } = r; return rec; });
     if (mode === "replace") {
       summary[key] = { added: clean.length, updated: 0, removed: existing.length };
-      next[key] = clean;
+      next[key] = spec.toData ? spec.toData(clean) : clean;
     } else {
       let added = 0, updated = 0;
       const numField = key === "inventory" ? "partNumber" : "number";
@@ -4527,7 +4582,7 @@ function buildImportResult(current, picks) {
         if (idx >= 0) { rec.id = list[idx].id; list[idx] = rec; updated++; } else { list.push(rec); added++; }
       });
       summary[key] = { added, updated, removed: 0 };
-      next[key] = list;
+      next[key] = spec.toData ? spec.toData(list) : list;
     }
   }
   // numbers for new rows + counters (never lower than before, so numbers aren't reused)
@@ -4730,7 +4785,7 @@ function ImportModal({ data, update, onClose, initialFile }) {
   );
 
   return (
-    <Modal title="Import from Excel" onClose={close} wide>
+    <Modal title="Import from Excel" info="excelImport" onClose={close} wide>
       {step === "loading" && <div style={{ ...small, color: C.inkSoft, display: "flex", alignItems: "center", gap: 8 }}><Loader2 className="animate-spin" size={14} /> Reading and checking the file…</div>}
       {step === "review" && fatal && (
         <>
@@ -4864,7 +4919,7 @@ function BackupTools({ data, update }) {
     ]);
     XLSX.utils.book_append_sheet(wb, readme, "Read me");
     SHEET_SPECS.forEach((spec) => {
-      const rows = (data[spec.key] || []).map(spec.toRow);
+      const rows = (spec.fromData ? spec.fromData(data) : (data[spec.key] || [])).map(spec.toRow);
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows.length ? rows : [], rows.length ? undefined : { header: Object.keys(spec.toRow({ id: "" })) }), spec.sheetName);
     });
     const userRows = server.users.map((u) => ({ username: u.username, role: u.role, email: u.email, notifyPmOverdue: u.notifyPmOverdue ? "yes" : "no", notifyWarrantyExpiring: u.notifyWarrantyExpiring ? "yes" : "no", notifyWorkRequestUnreviewed: u.notifyWorkRequestUnreviewed ? "yes" : "no", mustChangePassword: u.mustChangePassword ? "yes" : "", ...(creds ? { passwordHash: u.passwordHash } : {}) }));
@@ -4932,7 +4987,7 @@ function BackupTools({ data, update }) {
   const note = { fontFamily: FONT_BODY, fontSize: 12, color: C.inkSoft };
   return (
     <Panel style={{ padding: 18 }}>
-      <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 4 }}>Backup & bulk edit</div>
+      <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 4 }}>Backup & bulk edit<InfoTip k="backup" /></div>
       <div style={{ ...note, marginBottom: 14 }}>
         Export everything to an Excel file — edit it (including bulk changes across many rows) and re-import to apply the changes, or just keep it as a backup. The file also carries members, alarms, alarm mappings, and your branding settings and logo. On import you choose which tabs to apply, and the file is checked first — if anything is wrong you get an error log and nothing changes.
       </div>
@@ -4990,7 +5045,7 @@ function MemberNotifyModal({ user, onClose, onSaved }) {
     finally { setBusy(false); }
   };
   return (
-    <Modal title={`Notifications — ${user.username}`} onClose={onClose}>
+    <Modal title={`Notifications — ${user.username}`} info="notify" onClose={onClose}>
       <Field label="Email (notifications and password reset)"><input type="email" style={inputStyle} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="name@example.com" /></Field>
       {error && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.rust, marginBottom: 10 }}>{error}</div>}
       <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginBottom: 10 }}>
@@ -5031,7 +5086,7 @@ function ResetPasswordModal({ user, onClose, onDone }) {
   };
   const copy = async () => { try { await navigator.clipboard.writeText(result); setCopied(true); } catch (e) { /* clipboard blocked */ } };
   return (
-    <Modal title={`Reset password — ${user.username}`} onClose={onClose}>
+    <Modal title={`Reset password — ${user.username}`} info="resetPw" onClose={onClose}>
       {!result ? (
         <>
           <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkSoft, marginBottom: 12 }}>
@@ -5089,7 +5144,7 @@ function MemberManagementInline({ currentUser }) {
 
   return (
     <Panel style={{ padding: 18 }}>
-      <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 10 }}>Members</div>
+      <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 10 }}>Members<InfoTip k="members" /></div>
       {users === null && <Empty text="Loading…" />}
       {users && users.map((u) => (
         <div key={u.id} className="hk-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 4px", borderTop: `1px solid ${C.lineSoft}` }}>
@@ -5107,7 +5162,7 @@ function MemberManagementInline({ currentUser }) {
           </div>
         </div>
       ))}
-      <div style={{ fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink, margin: "16px 0 8px" }}>Add a member</div>
+      <div style={{ fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink, margin: "16px 0 8px" }}>Add a member<InfoTip k="addMember" /></div>
       <div className="hk-grid-3" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
         <Field label="Username" required><input style={inputStyle} value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></Field>
         <Field label="Temporary password" required><input type="password" style={inputStyle} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} autoComplete="new-password" /></Field>
@@ -5159,7 +5214,7 @@ function DeleteWorkOrderTool({ data, update }) {
 
   return (
     <Panel style={{ padding: 18 }}>
-      <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 4 }}>Delete a work order</div>
+      <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 4 }}>Delete a work order<InfoTip k="delWo" /></div>
       <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint, marginBottom: 12 }}>Search by number (e.g. WO-0012) or title. This also works for PM Base templates.</div>
       <input style={inputStyle} placeholder="WO-0012" value={query} onChange={(e) => setQuery(e.target.value)} />
       {query.trim() && results.length === 0 && <Empty text="No matching work orders." />}
@@ -5197,7 +5252,7 @@ function DeleteWorkRequestTool({ data, update }) {
 
   return (
     <Panel style={{ padding: 18 }}>
-      <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 4 }}>Delete a work request</div>
+      <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 4 }}>Delete a work request<InfoTip k="delWr" /></div>
       <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint, marginBottom: 12 }}>Search by number (e.g. WR-0004) or title.</div>
       <input style={inputStyle} placeholder="WR-0004" value={query} onChange={(e) => setQuery(e.target.value)} />
       {query.trim() && results.length === 0 && <Empty text="No matching work requests." />}
@@ -5235,7 +5290,7 @@ function AddPurchaseModal({ data, update, currentUser, onClose }) {
     onClose();
   };
   return (
-    <Modal title="Add a part to buy" onClose={onClose}>
+    <Modal title="Add a part to buy" info="buyPart" onClose={onClose}>
       <Field label="Part from the catalogue">
         <select style={inputStyle} value={partId} onChange={(e) => { setPartId(e.target.value); setError(""); }}>
           <option value="">— not in the catalogue —</option>
@@ -5509,7 +5564,7 @@ function AlarmsView({ data, update, role, currentUser, onAlarmsChanged, features
         <Panel style={{ padding: 16, marginBottom: 16 }}>
           {role === "Owner" && (
             <>
-              <div style={{ fontFamily: FONT_HEAD, fontSize: 13.5, fontWeight: 600, color: C.ink, marginBottom: 10 }}>Home Assistant webhook</div>
+              <div style={{ fontFamily: FONT_HEAD, fontSize: 13.5, fontWeight: 600, color: C.ink, marginBottom: 10 }}>Home Assistant webhook<InfoTip k="haWebhook" /></div>
               <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
                 <div>
                   <div style={{ fontFamily: FONT_BODY, fontSize: 10.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: "0.03em", marginBottom: 4 }}>Webhook URL</div>
@@ -5548,7 +5603,7 @@ function AlarmsView({ data, update, role, currentUser, onAlarmsChanged, features
               </pre>
             </>
           )}
-          <div style={{ fontFamily: FONT_HEAD, fontSize: 13.5, fontWeight: 600, color: C.ink, marginBottom: 6 }}>Sensor mappings</div>
+          <div style={{ fontFamily: FONT_HEAD, fontSize: 13.5, fontWeight: 600, color: C.ink, marginBottom: 6 }}>Sensor mappings<InfoTip k="sensorMaps" /></div>
           <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginBottom: 10 }}>Map an HA entity id to an asset/location so alerts from it arrive already linked, instead of unassigned.</div>
           {mappings.length === 0 && <Empty text="No sensor mappings yet." />}
           {mappings.map((m) => (
@@ -5616,7 +5671,7 @@ function AlarmsView({ data, update, role, currentUser, onAlarmsChanged, features
       </div>
 
       {modal && modal.action === "false" && (
-        <Modal title="Acknowledge as false alarm" onClose={() => setModal(null)}>
+        <Modal title="Acknowledge as false alarm" info="falseAlarm" onClose={() => setModal(null)}>
           <Field label="Reason (helps tune this sensor later)" required>
             <textarea style={{ ...inputStyle, minHeight: 70 }} value={actionForm.reason} onChange={(e) => setActionForm({ ...actionForm, reason: e.target.value })} autoFocus />
           </Field>
@@ -5627,7 +5682,7 @@ function AlarmsView({ data, update, role, currentUser, onAlarmsChanged, features
         </Modal>
       )}
       {modal && modal.action === "convert" && (
-        <Modal title="Create a work request from this alarm" onClose={() => setModal(null)} wide>
+        <Modal title="Create a work request from this alarm" info="alarmToWr" onClose={() => setModal(null)} wide>
           <Field label="Title" required><input style={inputStyle} value={actionForm.title} onChange={(e) => setActionForm({ ...actionForm, title: e.target.value })} autoFocus /></Field>
           <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 60 }} value={actionForm.description} onChange={(e) => setActionForm({ ...actionForm, description: e.target.value })} /></Field>
           <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -5652,7 +5707,7 @@ function AlarmsView({ data, update, role, currentUser, onAlarmsChanged, features
         </Modal>
       )}
       {modal && modal.action === "link" && (
-        <Modal title="Link to an existing work order" onClose={() => setModal(null)}>
+        <Modal title="Link to an existing work order" info="linkWo" onClose={() => setModal(null)}>
           <Field label="Work order" required>
             <select style={inputStyle} value={actionForm.mergeInto} onChange={(e) => setActionForm({ ...actionForm, mergeInto: e.target.value })}>
               <option value="">— choose —</option>
@@ -5666,7 +5721,7 @@ function AlarmsView({ data, update, role, currentUser, onAlarmsChanged, features
         </Modal>
       )}
       {mapForm && (
-        <Modal title={isEditingMap ? "Edit sensor mapping" : "Add sensor mapping"} onClose={() => setMapForm(null)}>
+        <Modal title={isEditingMap ? "Edit sensor mapping" : "Add sensor mapping"} info="sensorMap" onClose={() => setMapForm(null)}>
           <Field label="Entity id" required>
             <input style={inputStyle} value={mapForm.entityId} onChange={(e) => setMapForm({ ...mapForm, entityId: e.target.value })} placeholder="e.g. binary_sensor.basement_leak" autoFocus disabled={isEditingMap} />
           </Field>
@@ -5696,7 +5751,7 @@ function AlarmsView({ data, update, role, currentUser, onAlarmsChanged, features
         </Modal>
       )}
       {manualForm && (
-        <Modal title="Create alarm" onClose={() => setManualForm(null)} wide>
+        <Modal title="Create alarm" info="createAlarm" onClose={() => setManualForm(null)} wide>
           <Field label="Title" required><input style={inputStyle} value={manualForm.title} onChange={(e) => setManualForm({ ...manualForm, title: e.target.value })} autoFocus /></Field>
           <Field label="Details"><textarea style={{ ...inputStyle, minHeight: 60 }} value={manualForm.message} onChange={(e) => setManualForm({ ...manualForm, message: e.target.value })} /></Field>
           <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -5807,7 +5862,7 @@ function PmWizardCatalogEditor({ data, update }) {
     <Panel style={{ padding: 18 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10, marginBottom: 4 }}>
         <div>
-          <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink }}>PM Wizard starter catalogue</div>
+          <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink }}>PM Wizard starter catalogue<InfoTip k="pmWizardCatalog" /></div>
           <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint, marginTop: 2 }}>
             The suggested maintenance list the PM setup wizard offers when it's run on a {levelLabel(LOCATION_LEVELS[SETTINGS.terms.siteLevelIndex])}. Editing this doesn't change any PM Base already created.
           </div>
@@ -5848,7 +5903,7 @@ function PmWizardCatalogEditor({ data, update }) {
         </div>
       ))}
       {modal && form && (
-        <Modal title={modal === "edit" ? "Edit starter-catalogue entry" : "Add starter-catalogue entry"} onClose={() => { setModal(null); setForm(null); }} wide>
+        <Modal title={modal === "edit" ? "Edit starter-catalogue entry" : "Add starter-catalogue entry"} info="catEntry" onClose={() => { setModal(null); setForm(null); }} wide>
           <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <Field label="Type (Home, Facilities, …)">
               <input style={inputStyle} list="pmcat-types" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} />
@@ -6004,7 +6059,7 @@ function BrandingCard() {
   );
   return (
     <Panel style={{ padding: 18 }}>
-      <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 4 }}>Branding & terminology</div>
+      <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 4 }}>Branding & terminology<InfoTip k="branding" /></div>
       <div style={{ ...note, marginBottom: 12 }}>Make the app your own: name, logo, colours, and the words used for locations. Changes apply to everyone straight away and are included in the Excel backup.</div>
 
       <div style={grid}>
@@ -6079,7 +6134,7 @@ function FeaturesCard() {
   const hasKey = !!SETTINGS.geminiKeyDetected;
   return (
     <Panel style={{ padding: 18 }}>
-      <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 4 }}>Features</div>
+      <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 4 }}>Features<InfoTip k="features" /></div>
       <div style={{ ...note, marginBottom: 12 }}>Turn optional parts of the app on or off. Takes effect immediately.</div>
       <label style={row}>
         <input type="checkbox" disabled={busy} checked={!!SETTINGS.features.homeAssistantAlarms} onChange={(e) => setFeature("homeAssistantAlarms", e.target.checked)} style={{ marginTop: 3 }} />
@@ -6087,7 +6142,7 @@ function FeaturesCard() {
       </label>
       <label style={row}>
         <input type="checkbox" disabled={busy} checked={SETTINGS.features.linkPrefill !== false} onChange={(e) => setFeature("linkPrefill", e.target.checked)} style={{ marginTop: 3 }} />
-        <span>Fill in from a link<div style={note}>On asset, vendor and part forms, paste a web link and the name, maker, model, description and price are filled in from the page. Without AI it reads the page's own product details.</div></span>
+        <span>Fill in from a link<InfoTip k="linkFill" /><div style={note}>On asset, vendor and part forms, paste a web link and the name, maker, model, description and price are filled in from the page. Without AI it reads the page's own product details.</div></span>
       </label>
       <label style={{ ...row, opacity: SETTINGS.features.linkPrefill === false ? 0.5 : 1, marginLeft: 22 }}>
         <input type="checkbox" disabled={busy || !hasKey || SETTINGS.features.linkPrefill === false} checked={!!SETTINGS.features.linkPrefillAi} onChange={(e) => setFeature("linkPrefillAi", e.target.checked)} style={{ marginTop: 3 }} />
@@ -6096,6 +6151,23 @@ function FeaturesCard() {
           {hasKey ? "When on, the link and the page's text are sent to Google's Gemini service for each look-up." : "Set GEMINI_API_KEY in the Docker environment to make this available."}
         </div></span>
       </label>
+      <label style={row}>
+        <input type="checkbox" disabled={busy} checked={!!SETTINGS.features.executionScheduling} onChange={(e) => setFeature("executionScheduling", e.target.checked)} style={{ marginTop: 3 }} />
+        <span>Execution-based scheduling and time keeping<div style={note}>Renames Schedule to Labour assignment. Work orders get an estimated time per executor and a number of executors required; several executors can be assigned; the schedule gains Week and Day views with drag-and-drop; executors enter hours worked when completing a work order.</div></span>
+      </label>
+      <label style={row}>
+        <input type="checkbox" disabled={busy} checked={!!SETTINGS.features.workforceScheduling} onChange={(e) => setFeature("workforceScheduling", e.target.checked)} style={{ marginTop: 3 }} />
+        <span>Workforce scheduling<div style={note}>Adds a Workforce schedule tab where managers set each person's shifts (with daily and weekly templates) and everyone can view and export it. With execution-based scheduling on, people only appear on the labour assignment screen on days they are scheduled.</div></span>
+      </label>
+      {(() => {
+        const avail = !!SETTINGS.features.executionScheduling && !!SETTINGS.features.workforceScheduling;
+        return (
+          <label style={{ ...row, opacity: avail ? 1 : 0.5, marginLeft: 22 }}>
+            <input type="checkbox" disabled={busy || !avail} checked={avail && !!SETTINGS.features.hourlyAssignment} onChange={(e) => setFeature("hourlyAssignment", e.target.checked)} style={{ marginTop: 3 }} />
+            <span>Hourly labour assignments<div style={note}>{avail ? "Adds an hour grid to the day view so work orders can be dragged to a 30-minute start time inside each person's shift." : "Available only when both execution-based scheduling and workforce scheduling are on."}</div></span>
+          </label>
+        );
+      })()}
       <div style={{ ...note, marginTop: 6 }}>
         Emailed password reset: {SETTINGS.passwordResetEmail ? "available (mail server and APP_URL are configured)." : "not available. Set SMTP_HOST and APP_URL in the Docker environment to enable the “Forgot password?” link."}
       </div>
@@ -6103,18 +6175,1170 @@ function FeaturesCard() {
   );
 }
 
-function OwnerToolsView({ data, update, currentUser }) {
+/* ============================================================
+   v2.4 — "More info" notes for individual features. The small (i)
+   beside a card title or pop-up title opens one. Page-level notes
+   live in PAGE_INFO above.
+============================================================ */
+const FEATURE_INFO = {
+  // ---- cards and sections
+  nextDays: ["A seven-day look-ahead of work orders that are scheduled to start soon.", "Each box is one day. Click a work order to open it.", "Everyone can see it."],
+  wrAwaiting: ["Requests that have been submitted and are waiting for a manager or owner to decide.", "Click a request to jump to the Work Requests page. A manager then converts, merges, asks for more information or declines it.", "Everyone sees the list; managers and owners act on it."],
+  upcomingWo: ["The next work orders that are due or scheduled, soonest first, so nothing sneaks up on you.", "Click one to open its detail. Overdue work is shown in red.", "Everyone can see it."],
+  warranty: ["Assets whose warranty ends soon, so a repair can be claimed before cover lapses.", "Add a warranty end date on the asset. Assets appear here when the date is close.", "Everyone can see it; managers and owners edit the dates."],
+  bom: ["The Bill of Materials is the tree of components, sub-components and parts that make up an asset, such as a furnace, its blower and the blower motor.", "Add items with the + button. A work order can point at a specific item so repairs are recorded against the exact component. Items can link to parts in the catalogue.", "Executors, managers and owners can edit it; guests can only view."],
+  pmTasks: ["Lightweight reminders attached to this asset or component for things that recur.", "Add a reminder with a title and interval. For full scheduling with checklists and generated work orders, use a PM Base on the Work Orders page.", "Managers and owners edit; everyone can view."],
+  woHistory: ["Every work order ever raised against this asset, newest first. This is the asset's maintenance history.", "Click an entry to open it. Closed work stays here permanently.", "Everyone can see it."],
+  checklist: ["Steps to follow while doing the job. A step can be a tick, a numeric reading with an expected range, a required photo or a pass/fail.", "Work down the list in order. A reading outside its range raises an alarm for the managers automatically. Checklist progress is saved as you go.", "Executors, managers and owners can fill it in; managers and owners design the template on the PM Base."],
+  standby: ["Pauses a PM Base so it stops generating new jobs, either by hand or outside a yearly window (for example lawn care only from 1 May to 1 November).", "Tick Standby to pause now, or set the yearly window. Jobs already open are left alone. Generation resumes by itself when standby ends.", "Managers and owners."],
+  genPm: ["The jobs this PM Base has generated so far, with their status.", "Only one open job exists per base at a time; completing it creates the next. Click one to open it.", "Everyone can view."],
+  pmBases: ["PM Bases are templates for maintenance that repeats. They are never worked themselves; they generate PM work orders.", "Click a base to see its rule, checklist and generated jobs. Managers and owners create and edit bases, put them on standby, or delete them.", "Everyone can view; managers and owners edit."],
+  comments: ["The running conversation and notes on a work order, with who wrote each and when.", "Type a comment and select Add. Completing a Scheduled work order also requires a comment, which is added here.", "Executors, managers and owners can comment."],
+  spend: ["Costs logged on work orders, added up by asset category, so you can see where upkeep money goes.", "Nothing to maintain here; enter cost on work orders and this updates itself.", "Everyone can view."],
+  backup: ["Safety copies of your data and tools for bulk editing in Excel.", "Export to Excel for a spreadsheet of every record. Full backup (.zip) adds photos. Import lets you pick tabs from a file, checks it first and then applies it. Nightly snapshots are kept automatically.", "Owners only."],
+  members: ["Everyone who can sign in, with their role.", "Use the bell to set a member's email and which daily digests they receive, the key to set a temporary password, and the bin to remove them. Roles are Owner, Manager, Executor or Guest.", "Owners only."],
+  addMember: ["Creates a new account.", "Enter a username, a temporary password (they must change it at first sign-in), a role and, optionally, an email address.", "Owners only."],
+  delWo: ["Permanently deletes a work order found by its number or title. Use it for entries created by mistake.", "Search, select the work order and confirm. This cannot be undone and the number is not reused.", "Owners only."],
+  delWr: ["Permanently deletes a work request found by its number or title.", "Search, select it and confirm. This cannot be undone.", "Owners only."],
+  pmWizardCatalog: ["The list of starter maintenance jobs the PM setup wizard offers when you set up a property.", "Add, edit or remove entries (title, description, frequency, climate zones, type and sub type). Reset restores the built-in list.", "Owners only."],
+  branding: ["The name, logo, colours, location labels and top-bar title shown to everyone.", "Change the fields and select Save branding. Location levels are relabelled for display only; stored data is not changed. Reset to defaults undoes your changes.", "Owners only."],
+  features: ["Switches for optional parts of the app. Changes apply immediately.", "Home Assistant alarms, Fill in from a link (with optional AI), Execution-based scheduling and time keeping, Workforce scheduling, and Hourly labour assignments (needs the previous two). Turning something off hides it; nothing is deleted.", "Owners only."],
+  colours: ["Gives each person a colour that is used wherever their name or card appears on Labour assignment, Workforce schedule and shift template screens.", "Pick a colour with the swatch. Reset returns to the automatic colour.", "Managers and owners."],
+  templates: ["Named shift patterns used to schedule people quickly on the Workforce schedule.", "A daily template has a start, a duration (8, 8.5, 10, 10.5 or 12 hours) and an end: fill any two and the third is calculated. A weekly template does the same for each day of the week. An end before the start means an overnight shift.", "Managers and owners."],
+  myAccount: ["Your own email address and password.", "Select Open my account. Your email is used for notifications and password reset.", "Everyone except guests."],
+  myHours: ["Hours you have logged when completing work orders: the last 7 days, last 30 days and all time, with recent entries.", "Hours are entered when you move a work order to Completed. Nothing to maintain here.", "Everyone except guests see their own; managers and owners also see everyone's."],
+  hoursAll: ["Hours logged by every executor, with totals and recent entries.", "Use it for timesheets and to compare estimates with actual time.", "Managers and owners."],
+  sideList: ["Open work orders sorted by due date, waiting to be placed on the schedule.", "Drag a card onto a person's column (week or day view) or a day on the month view. Untick Unscheduled only to include work that already has a date. Red text means overdue.", "Managers and owners."],
+  haWebhook: ["The address and key a Home Assistant automation uses to send alarms into this app.", "Copy the URL and key into a Home Assistant REST command. Each message becomes an alarm. Regenerating the key stops the old one working.", "Managers and owners; only Owners can see or regenerate the key."],
+  sensorMaps: ["Links each Home Assistant sensor to the asset or location it watches.", "Add a mapping per sensor. Alarms from mapped sensors show on the right asset and on the location beacon.", "Managers and owners."],
+  linkFill: ["Pastes a product or supplier web link and fills in name, maker, model, description and price.", "On an asset, vendor or part form, paste the link and select Fill in. Only empty fields are filled, each with a clear (x). Optional AI improves results.", "Managers and owners who can edit those forms; Owners turn it on or off."],
+  autoSchedule: ["Schedules several Active work orders at once on their required-by dates.", "Tick the work orders on the board, then select Auto schedule and confirm. Work orders without a required-by date are skipped.", "Managers and owners."],
+  nameCards: ["One card per person. They stay in place so you can use them again and again.", "Drag a name onto a day or onto a week-number box, then choose a template or a one-time schedule.", "Managers and owners drag; everyone can see the team."],
+  // ---- pop-up windows
+  qr: ["A printable label for an asset. Scanning its QR code with a phone opens the asset's record.", "Print the label and stick it on the equipment. Scanning it takes signed-in people straight to the asset, where they can start a work order.", "Everyone can view and print."],
+  meter: ["Records a new reading of an asset's usage meter (hours, kilometres and so on).", "Enter the reading and date. Meter-based PM Bases generate a new job when the reading passes their interval.", "Managers and owners."],
+  pmWizard: ["Creates a starter set of PM Bases for a property from a catalogue of common jobs, scaled to the property's climate zone.", "Choose the climate zone, tick the jobs you want (use the filters and search), then create them. Each becomes an editable PM Base.", "Managers and owners."],
+  location: ["A place in the household tree: property, structure, floor, room, area and sub-area.", "Choose a parent and name it. Properties also hold an address, year built and climate zone.", "Managers and owners."],
+  bomNode: ["A component, sub-component or part within an asset.", "Name it, pick its parent in the tree and optionally link a catalogue part, install date and notes.", "Executors, managers and owners."],
+  asset: ["A piece of equipment worth maintaining.", "Enter name, category and location. Manufacturer, model, serial, purchase date, warranty end and manual link are optional. Meter fields enable usage-based maintenance. The link fill-in can complete details from a web page.", "Managers and owners."],
+  part: ["A spare part or consumable in the catalogue.", "Give it a name and quantity on hand. Add manufacturer, cost, reorder level and a purchase link. The part number is assigned automatically.", "Managers and owners edit; everyone can adjust quantity."],
+  wrForm: ["Reports that something needs attention.", "Describe the problem, choose its location (and asset if known), set a priority and, optionally, attach photos. You can edit your request until a manager decides it.", "Executors, managers and owners."],
+  convert: ["Turns an approved request into a work order.", "Check the details, set dates, executor and priority and select Convert. The request is marked Approved and linked to the new work order.", "Managers and owners."],
+  decline: ["Closes a request without doing work.", "Give a reason. The requester can see it.", "Managers and owners."],
+  moreInfo: ["Sends a request back for clarification.", "Write what you need to know. The request moves to Under Review and the requester can edit and resubmit.", "Managers and owners."],
+  merge: ["Combines a request into a work order that already exists, so duplicates do not pile up.", "Pick the open work order. The request is marked Merged and linked to it.", "Managers and owners."],
+  archive: ["Every Closed work order, kept permanently as history.", "Search or scroll, and click one to read it.", "Everyone can view."],
+  newWo: ["Creates a work order directly.", "Give it a title, type, location and required-by date. Add a scheduled date to make it Scheduled. Executors, estimate and crew appear when execution-based scheduling is on. PM Base types add a repeat rule.", "Executors, managers and owners."],
+  woDetail: ["Everything about one work order: its facts, status buttons, checklist, parts, comments and photos.", "Use the status buttons to move it along. Managers and owners can edit fields and Close it. Completing may ask for a comment and, with execution-based scheduling on, hours worked.", "Everyone can view; executors change status and comment; managers and owners edit."],
+  vendor: ["A contractor or service provider you call on.", "Name, specialty, phone, email and website. Work orders can reference a vendor.", "Managers and owners."],
+  excelImport: ["Applies selected tabs from an Excel backup after checking the whole file.", "Tick the tabs to apply and choose Update and add or Replace tab. Nothing changes until the pre-check passes and you confirm.", "Owners only."],
+  notify: ["Sets a member's email and which daily digests they receive.", "Tick the digests wanted: overdue work orders, warranties expiring, unreviewed requests. Emails need an SMTP server configured.", "Owners only."],
+  resetPw: ["Sets a temporary password for a member.", "Enter a temporary password; they must choose their own at next sign-in. Their other sessions are ended.", "Owners only."],
+  buyPart: ["Adds a part to the shopping list by hand.", "Pick a catalogue part or type a name, then quantity and a note.", "Managers and owners."],
+  falseAlarm: ["Dismisses an alarm that was not real.", "Add a short note on why. It is kept in the alarm history.", "Managers and owners."],
+  alarmToWr: ["Raises a work request from an alarm.", "Review the pre-filled details and submit. The alarm links to the request.", "Managers and owners."],
+  linkWo: ["Connects an alarm to a work order that already covers it.", "Pick the work order. The alarm then shows it.", "Managers and owners."],
+  sensorMap: ["Tells the app which asset or location a Home Assistant sensor belongs to.", "Enter the sensor's entity id, pick the asset and/or location and a label. Alarms from that sensor are then placed correctly.", "Managers and owners."],
+  createAlarm: ["Records an alarm by hand.", "Describe it, set severity and optionally pick the asset or location.", "Managers and owners."],
+  catEntry: ["One starter job offered by the PM wizard.", "Title, description, how often, which climate zones, and its type and sub type.", "Owners only."],
+  tplModal: ["Creates or edits a shift template.", "Name it and fill in any two of start, duration and end; the third is calculated. For weekly templates tick the working days and set each. Save to reuse it.", "Managers and owners."],
+  hoursModal: ["Records the hours each executor spent when a work order is completed.", "Enter hours for each executor listed. They must be greater than zero. The totals feed the hours reports.", "Whoever completes the work order."],
+  applyShift: ["Chooses the shift to apply for the person you dropped.", "Pick a saved template or set a one-time schedule (optionally saving it as a template). The person's existing shifts on those days are replaced.", "Managers and owners."],
+  account: ["Your own email address and password.", "Change the email used for notifications and resets, or set a new password (signs out your other devices).", "Everyone except guests."],
+};
+function InfoTip({ k, size }) {
+  const [open, setOpen] = useState(false);
+  const f = FEATURE_INFO[k];
+  if (!f) return null;
+  return (
+    <>
+      <button type="button" aria-label="More info" title="More info" data-info={k} onClick={(e) => { e.stopPropagation(); setOpen(true); }}
+        style={{ background: "none", border: "none", cursor: "pointer", color: C.inkFaint, display: "inline-flex", alignItems: "center", verticalAlign: "middle", padding: "0 2px", marginLeft: 4 }}>
+        <Info size={size || 14} />
+      </button>
+      {open && createPortal(
+        <div style={{ position: "relative", zIndex: 80 }} onClick={(e) => e.stopPropagation()}>
+          <Modal title="About this feature" onClose={() => setOpen(false)}>
+            <InfoBlock label="Purpose" text={term(f[0])} />
+            <InfoBlock label="How to use it" text={term(f[1])} />
+            <InfoBlock label="Who can" text={term(f[2])} />
+          </Modal>
+        </div>, document.body)}
+    </>
+  );
+}
+
+/* ============================================================
+   v2.4 — HELP TAB: the training guide, with a linked table of contents
+============================================================ */
+function HelpView({ role }) {
+  const mgr = role === "Owner" || role === "Manager";
+  const [guide, setGuide] = useState(mgr ? "managers" : "executors");
+  const base = import.meta.env.BASE_URL;
+  const names = { executors: "MaintEnhance_Training_Guide_Executors.docx", managers: "MaintEnhance_Training_Guide_Managers_and_Owners.docx" };
+  const seg = (v, lab) => <button key={v} type="button" onClick={() => setGuide(v)} aria-pressed={guide === v} style={{ fontFamily: FONT_BODY, fontSize: 12.5, fontWeight: 600, padding: "6px 12px", border: "none", cursor: "pointer", background: guide === v ? C.navy : "transparent", color: guide === v ? "#fff" : C.ink }}>{lab}</button>;
   return (
     <div>
-      <SectionHeader title="Owner Tools" subtitle="Administrative controls: accounts, branding, backups, and record clean-up." info={PAGE_INFO.owner} />
+      <SectionHeader
+        title="Help" subtitle="The training guide. Use the contents list to jump to any subject."
+        info={PAGE_INFO.help}
+        action={
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <div style={{ display: "inline-flex", border: `1px solid ${C.line}`, borderRadius: 3, overflow: "hidden" }}>{seg("executors", "Executor guide")}{seg("managers", "Manager & Owner guide")}</div>
+            <a href={`${base}help/${names[guide]}`} download style={{ textDecoration: "none" }}><Btn small variant="ghost"><Download size={13} /> Download .docx</Btn></a>
+          </div>
+        }
+      />
+      <iframe key={guide} title="Training guide" data-helpframe src={`${base}help/${guide}.html`} style={{ width: "100%", height: "calc(100vh - 190px)", minHeight: 480, border: `1px solid ${C.line}`, borderRadius: 4, background: "#fff" }} />
+    </div>
+  );
+}
+
+/* ============================================================
+   v2.4 — SHARED HELPERS (labour assignment, workforce schedule, tools)
+============================================================ */
+const FEAT = () => (SETTINGS && SETTINGS.features) || {};
+const execOn = () => !!FEAT().executionScheduling;
+const workforceOn = () => !!FEAT().workforceScheduling;
+const hourlyOn = () => execOn() && workforceOn() && !!FEAT().hourlyAssignment;
+
+const EXEC_PALETTE = ["#2F6FB0", "#C2571A", "#2E8B57", "#8E44AD", "#B8860B", "#C0392B", "#16A085", "#D35498", "#5D6D7E", "#7D6608"];
+function defaultExecColor(id) {
+  let h = 0;
+  for (const ch of String(id)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return EXEC_PALETTE[h % EXEC_PALETTE.length];
+}
+function execColor(data, id) {
+  const c = data && data.executorColors && data.executorColors[id];
+  return /^#[0-9a-fA-F]{6}$/.test(c || "") ? c : defaultExecColor(id);
+}
+function textOn(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex || "");
+  if (!m) return "#fff";
+  const n = parseInt(m[1], 16);
+  return (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) > 165 ? "#1b1b1b" : "#fff";
+}
+
+const pad2 = (n) => String(n).padStart(2, "0");
+const isoLocal = (dt) => `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
+const parseISO = (s) => new Date(s + "T00:00:00");
+const todayLocal = () => isoLocal(new Date());
+const addDaysISO = (s, n) => { const d = parseISO(s); d.setDate(d.getDate() + n); return isoLocal(d); };
+const addMonthsISO = (s, n) => { const d = parseISO(s); d.setDate(1); d.setMonth(d.getMonth() + n); return isoLocal(d); };
+const weekStartISO = (s) => addDaysISO(s, -parseISO(s).getDay());
+// ISO-8601 week number of the week containing the given Sunday-first week's Wednesday.
+function isoWeekNum(s) {
+  const d = parseISO(addDaysISO(weekStartISO(s), 3));
+  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const dn = t.getUTCDay() || 7;
+  t.setUTCDate(t.getUTCDate() + 4 - dn);
+  const y0 = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+  return Math.ceil(((t - y0) / 86400000 + 1) / 7);
+}
+const fmtShort = (s) => parseISO(s).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+
+const toMin = (t) => {
+  if (!/^\d{1,2}:\d{2}$/.test(t || "")) return null;
+  const [h, m] = t.split(":").map(Number);
+  return h * 60 + m;
+};
+const fromMin = (m) => { m = ((m % 1440) + 1440) % 1440; return `${pad2(Math.floor(m / 60))}:${pad2(m % 60)}`; };
+const SHIFT_DURS = [8, 8.5, 10, 10.5, 12];
+const fmtH = (h) => { const n = Number(h); return Number.isFinite(n) ? String(Math.round(n * 100) / 100) : "—"; };
+
+// Shift = { start:"HH:MM", dur:"8", end:"HH:MM", touched:[...] }. Fill any two
+// of start / duration / end and the third is calculated. `touched` remembers
+// the two most recently edited fields so the older one is the one recalculated.
+function editShift(sh, field, value) {
+  const n = { ...sh, [field]: value };
+  const t = [field, ...(sh.touched || []).filter((x) => x !== field)].slice(0, 2);
+  n.touched = t;
+  if (t.length === 2) {
+    const third = ["start", "dur", "end"].find((f) => !t.includes(f));
+    const s = toMin(n.start), e = toMin(n.end), d = n.dur === "" || n.dur == null ? null : Number(n.dur);
+    if (third === "end" && s != null && d != null) n.end = fromMin(s + Math.round(d * 60));
+    else if (third === "start" && e != null && d != null) n.start = fromMin(e - Math.round(d * 60));
+    else if (third === "dur" && s != null && e != null) { const diff = (e - s + 1440) % 1440; n.dur = diff === 0 ? "" : String(diff / 60); }
+  }
+  return n;
+}
+const blankShift = () => ({ start: "", dur: "", end: "", touched: [] });
+const shiftOk = (sh) => !!sh && toMin(sh.start) != null && toMin(sh.end) != null && toMin(sh.start) !== toMin(sh.end);
+// End at or before start means the shift runs past midnight; it is always
+// shown on the day it starts.
+function shiftSpan(sh) {
+  const s = toMin(sh.start), e0 = toMin(sh.end);
+  if (s == null || e0 == null) return null;
+  return { s, e: e0 <= s ? e0 + 1440 : e0 };
+}
+const shiftText = (sh) => `${sh.start}–${sh.end}`;
+function dayCoverage(dayShifts) {
+  const iv = dayShifts.map(shiftSpan).filter(Boolean).sort((a, b) => a.s - b.s);
+  if (!iv.length) return null;
+  const gaps = [];
+  let cur = iv[0].e, last = iv[0].e;
+  for (let i = 1; i < iv.length; i++) {
+    if (iv[i].s > cur) gaps.push([cur, iv[i].s]);
+    cur = Math.max(cur, iv[i].e);
+    last = Math.max(last, iv[i].e);
+  }
+  return { first: iv[0].s, last, gaps };
+}
+const covText = (c) => `${fromMin(c.first)}–${fromMin(c.last)}${c.last >= 1440 ? " +1" : ""}`;
+const gapText = (c) => c.gaps.map(([a, b]) => `${fromMin(a)}–${fromMin(b)}`).join(", ");
+
+const execIdsOf = (w) => (w.executorIds && w.executorIds.length ? w.executorIds : (w.executorId ? [w.executorId] : []));
+const crewOf = (w) => Math.max(1, Number(w.crewRequired) || 1);
+const underStaffed = (w) => isOpenStatus(w.status) && execIdsOf(w).length < crewOf(w);
+const planFieldsFrom = (b) => ({ estHours: b.estHours || "", crewRequired: b.crewRequired || "", executorIds: [...(b.executorIds || [])] });
+
+// Weekly template/ad hoc days are indexed Sunday=0 … Saturday=6 (Date.getDay()).
+const blankWeek = () => Array.from({ length: 7 }, (_, i) => ({ ...blankShift(), off: i === 0 || i === 6 }));
+function shiftSummary(sh) { return shiftOk(sh) ? `${shiftText(sh)}${sh.dur ? ` (${fmtH(sh.dur)} h)` : ""}` : "not set"; }
+function templateSummary(t) {
+  if (t.kind === "daily") return shiftSummary(t.shift || {});
+  const on = (t.days || []).map((d, i) => (!d.off && shiftOk(d) ? `${WEEKDAY_LABELS[i]} ${shiftText(d)}` : null)).filter(Boolean);
+  return on.length ? on.join(" · ") : "no working days";
+}
+
+/* ---------- shift editors ---------- */
+function ShiftEditor({ value, onChange, compact }) {
+  const v = value || blankShift();
+  const durs = v.dur !== "" && v.dur != null && !SHIFT_DURS.includes(Number(v.dur)) ? [...SHIFT_DURS, Number(v.dur)].sort((a, b) => a - b) : SHIFT_DURS;
+  const lab = { fontFamily: FONT_BODY, fontSize: 10.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: "0.03em", marginBottom: 2 };
+  const s = toMin(v.start), e = toMin(v.end);
+  const overnight = s != null && e != null && e <= s;
+  return (
+    <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+      <div><div style={lab}>Start</div><input type="time" aria-label="Shift start" style={{ ...inputStyle, width: compact ? 112 : 124 }} value={v.start || ""} onChange={(ev) => onChange(editShift(v, "start", ev.target.value))} /></div>
+      <div><div style={lab}>Duration</div>
+        <select aria-label="Shift duration" style={{ ...inputStyle, width: compact ? 92 : 104 }} value={v.dur === "" || v.dur == null ? "" : String(Number(v.dur))} onChange={(ev) => onChange(editShift(v, "dur", ev.target.value))}>
+          <option value="">—</option>
+          {durs.map((d) => <option key={d} value={String(d)}>{fmtH(d)} h</option>)}
+        </select>
+      </div>
+      <div><div style={lab}>End</div><input type="time" aria-label="Shift end" style={{ ...inputStyle, width: compact ? 112 : 124 }} value={v.end || ""} onChange={(ev) => onChange(editShift(v, "end", ev.target.value))} /></div>
+      {overnight && <span style={{ fontFamily: FONT_BODY, fontSize: 11, color: C.orange, fontWeight: 700, paddingBottom: 9 }}>Overnight (ends next day)</span>}
+    </div>
+  );
+}
+function WeeklyEditor({ value, onChange }) {
+  const days = value && value.length === 7 ? value : blankWeek();
+  const setDay = (i, patch) => onChange(days.map((d, j) => (j === i ? (typeof patch === "function" ? patch(d) : { ...d, ...patch }) : d)));
+  return (
+    <div>
+      {days.map((d, i) => (
+        <div key={i} style={{ display: "flex", alignItems: "flex-end", gap: 10, padding: "6px 0", borderBottom: `1px solid ${C.lineSoft}`, flexWrap: "wrap" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, width: 78, fontFamily: FONT_BODY, fontSize: 13, fontWeight: 600, color: C.ink, paddingBottom: 8 }}>
+            <input type="checkbox" checked={!d.off} onChange={(ev) => setDay(i, { off: !ev.target.checked })} /> {WEEKDAY_LABELS[i]}
+          </label>
+          {d.off ? <span style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint, paddingBottom: 9 }}>Day off</span> : <ShiftEditor compact value={d} onChange={(sh) => setDay(i, () => ({ ...sh, off: false }))} />}
+        </div>
+      ))}
+      <div style={{ marginTop: 8 }}>
+        <Btn small variant="ghost" onClick={() => { const f = days.find((d) => !d.off && shiftOk(d)); if (f) onChange(days.map((d) => (d.off ? d : { ...f, off: false }))); }}>Copy first working day to all working days</Btn>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Tools tab: executor colours ---------- */
+function useStaff() {
+  const [users, setUsers] = useState([]);
+  useEffect(() => { api.listUsers().then(setUsers).catch(() => setUsers([])); }, []);
+  return users.filter((u) => u.role === "Owner" || u.role === "Manager" || u.role === "Executor");
+}
+function ExecutorColoursCard({ data, update }) {
+  const staff = useStaff();
+  const setColour = (id, v) => update((d) => { d.executorColors = d.executorColors || {}; if (v) d.executorColors[id] = v; else delete d.executorColors[id]; return d; });
+  return (
+    <Panel style={{ padding: 18 }}>
+      <div id="tools-colours" style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 4 }}>Executor colours<InfoTip k="colours" /></div>
+      <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkSoft, marginBottom: 12 }}>Each person's colour is used wherever their name or card appears on the labour assignment and workforce schedule screens, and in shift template previews.</div>
+      {staff.length === 0 && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkFaint }}>No accounts found.</div>}
+      {staff.map((u) => {
+        const col = execColor(data, u.id);
+        const custom = !!(data.executorColors && data.executorColors[u.id]);
+        return (
+          <div key={u.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", borderBottom: `1px solid ${C.lineSoft}` }}>
+            <input type="color" aria-label={`Colour for ${u.username}`} value={col} onChange={(e) => setColour(u.id, e.target.value)} style={{ width: 34, height: 26, padding: 0, border: `1px solid ${C.line}`, borderRadius: 3, background: "none", cursor: "pointer" }} />
+            <span style={{ background: col, color: textOn(col), fontFamily: FONT_BODY, fontSize: 12, fontWeight: 700, padding: "3px 10px", borderRadius: 11 }}>{u.username}</span>
+            <span style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, flex: 1 }}>{u.role}{custom ? "" : " · automatic colour"}</span>
+            {custom && <Btn small variant="ghost" onClick={() => setColour(u.id, null)}>Reset</Btn>}
+          </div>
+        );
+      })}
+    </Panel>
+  );
+}
+
+/* ---------- Tools tab: shift templates ---------- */
+function TemplateModal({ initial, onClose, onSave }) {
+  const [name, setName] = useState(initial.name || "");
+  const [shift, setShift] = useState(initial.shift || blankShift());
+  const [days, setDays] = useState(initial.days || blankWeek());
+  const [err, setErr] = useState("");
+  const weekly = initial.kind === "weekly";
+  const save = () => {
+    if (!name.trim()) { setErr("Give the template a name."); return; }
+    if (weekly) {
+      const working = days.filter((d) => !d.off);
+      if (!working.length) { setErr("Pick at least one working day."); return; }
+      if (working.some((d) => !shiftOk(d))) { setErr("Each working day needs a start and either a duration or an end time."); return; }
+    } else if (!shiftOk(shift)) { setErr("Fill in any two of start, duration and end."); return; }
+    onSave({ ...initial, name: name.trim(), kind: initial.kind, ...(weekly ? { days: days.map((d) => ({ off: !!d.off, start: d.start, dur: d.dur, end: d.end, touched: d.touched || [] })) } : { shift: { start: shift.start, dur: shift.dur, end: shift.end, touched: shift.touched || [] } }) });
+  };
+  return (
+    <Modal title={`${initial.id ? "Edit" : "New"} ${weekly ? "weekly" : "daily"} template`} info="tplModal" onClose={onClose} wide={weekly}>
+      <Field label="Template name" required><input style={inputStyle} value={name} onChange={(e) => setName(e.target.value)} placeholder={weekly ? "e.g. Mon–Fri days" : "e.g. Day shift"} /></Field>
+      <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkSoft, marginBottom: 10 }}>Fill in any two of start, duration and end — the third is calculated. An end time earlier than the start means the shift runs overnight and is shown on the day it starts.</div>
+      {weekly ? <WeeklyEditor value={days} onChange={setDays} /> : <ShiftEditor value={shift} onChange={setShift} />}
+      {err && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.rust, marginTop: 10 }}>{err}</div>}
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+        <Btn variant="primary" onClick={save}>Save template</Btn>
+      </div>
+    </Modal>
+  );
+}
+function ShiftTemplatesCard({ data, update }) {
+  const dialog = useDialog();
+  const [editing, setEditing] = useState(null);
+  const list = data.shiftTemplates || [];
+  const save = (t) => {
+    update((d) => {
+      d.shiftTemplates = d.shiftTemplates || [];
+      if (t.id) { const i = d.shiftTemplates.findIndex((x) => x.id === t.id); if (i >= 0) d.shiftTemplates[i] = t; }
+      else d.shiftTemplates.push({ ...t, id: uid("tpl") });
+      return d;
+    });
+    setEditing(null);
+  };
+  const del = async (t) => {
+    if (!(await dialog.confirm(`Delete the template “${t.name}”? Shifts already scheduled from it are not changed.`))) return;
+    update((d) => { d.shiftTemplates = (d.shiftTemplates || []).filter((x) => x.id !== t.id); return d; });
+  };
+  return (
+    <Panel style={{ padding: 18 }}>
+      <div id="tools-templates" style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 4 }}>Shift templates<InfoTip k="templates" /></div>
+      <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkSoft, marginBottom: 12 }}>Named daily or weekly shift patterns, applied by dragging a person onto a day or week on the Workforce schedule.</div>
+      {!workforceOn() && <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.orange, marginBottom: 10 }}>Workforce scheduling is turned off, so templates are not used yet. The Owner can turn it on under Features.</div>}
+      {list.length === 0 && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkFaint, marginBottom: 10 }}>No templates yet.</div>}
+      {list.map((t) => (
+        <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: `1px solid ${C.lineSoft}` }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, fontWeight: 600, color: C.ink }}>{t.name} <span style={{ fontSize: 11, fontWeight: 700, color: C.inkFaint }}>· {t.kind === "weekly" ? "Weekly" : "Daily"}</span></div>
+            <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkSoft }}>{templateSummary(t)}</div>
+          </div>
+          <button title="Edit" onClick={() => setEditing(t)} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkSoft }}><Pencil size={14} /></button>
+          <button title="Delete" onClick={() => del(t)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rust }}><Trash2 size={14} /></button>
+        </div>
+      ))}
+      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+        <Btn small onClick={() => setEditing({ kind: "daily" })}><Plus size={13} /> New daily template</Btn>
+        <Btn small onClick={() => setEditing({ kind: "weekly" })}><Plus size={13} /> New weekly template</Btn>
+      </div>
+      {editing && <TemplateModal initial={editing} onClose={() => setEditing(null)} onSave={save} />}
+    </Panel>
+  );
+}
+
+/* ---------- Tools tab: hours ---------- */
+function allTimeEntries(data) {
+  const out = [];
+  (data.workOrders || []).forEach((w) => (w.timeEntries || []).forEach((t) => out.push({ ...t, wo: w })));
+  return out.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+}
+function HoursCard({ data, scope, userId }) {
+  const staff = useStaff();
+  const name = (id) => (staff.find((u) => u.id === id) || {}).username || "Former member";
+  const entries = allTimeEntries(data).filter((t) => scope === "all" || t.executorId === userId);
+  const today = todayLocal(), d7 = addDaysISO(today, -6), d30 = addDaysISO(today, -29);
+  const sum = (arr) => arr.reduce((s, t) => s + (Number(t.hours) || 0), 0);
+  const ids = scope === "all" ? [...new Set(entries.map((t) => t.executorId))] : [userId];
+  const th = { textAlign: "left", fontFamily: FONT_BODY, fontSize: 10.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", padding: "4px 8px 4px 0" };
+  const td = { fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink, padding: "5px 8px 5px 0", borderTop: `1px solid ${C.lineSoft}` };
+  return (
+    <Panel style={{ padding: 18 }}>
+      <div id={scope === "all" ? "tools-hours-all" : "tools-hours-me"} style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 4 }}>{scope === "all" ? "Hours worked — all executors" : "My hours"}<InfoTip k={scope === "all" ? "hoursAll" : "myHours"} /></div>
+      <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkSoft, marginBottom: 10 }}>Hours are logged when a work order is moved to Completed.</div>
+      {entries.length === 0 ? <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkFaint }}>No hours logged yet.</div> : (
+        <>
+          <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: 12 }}>
+            <thead><tr>{scope === "all" && <th style={th}>Executor</th>}<th style={th}>Last 7 days</th><th style={th}>Last 30 days</th><th style={th}>All time</th></tr></thead>
+            <tbody>
+              {ids.map((id) => {
+                const mine = entries.filter((t) => t.executorId === id);
+                return (
+                  <tr key={id}>
+                    {scope === "all" && <td style={td}><span style={{ display: "inline-block", width: 9, height: 9, borderRadius: 5, background: execColor(data, id), marginRight: 6 }} />{name(id)}</td>}
+                    <td style={td}>{fmtH(sum(mine.filter((t) => t.date >= d7)))} h</td>
+                    <td style={td}>{fmtH(sum(mine.filter((t) => t.date >= d30)))} h</td>
+                    <td style={td}>{fmtH(sum(mine))} h</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <div style={{ fontFamily: FONT_BODY, fontSize: 11, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", marginBottom: 4 }}>Recent entries</div>
+          {entries.slice(0, 8).map((t) => (
+            <div key={t.id} style={{ display: "flex", gap: 10, fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink, padding: "4px 0", borderTop: `1px solid ${C.lineSoft}` }}>
+              <span style={{ width: 82, color: C.inkSoft }}>{t.date}</span>
+              <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{formatWoNum(t.wo.number)} {t.wo.title}</span>
+              {scope === "all" && <span style={{ color: C.inkSoft }}>{name(t.executorId)}</span>}
+              <span style={{ fontWeight: 700 }}>{fmtH(t.hours)} h</span>
+            </div>
+          ))}
+        </>
+      )}
+    </Panel>
+  );
+}
+
+/* ---------- hours worked prompt (on completion) ---------- */
+function HoursWorkedModal({ wo, staff, currentUserId, onCancel, onSave }) {
+  const ids = execIdsOf(wo).length ? execIdsOf(wo) : [currentUserId];
+  const [hrs, setHrs] = useState(() => Object.fromEntries(ids.map((i) => [i, wo.estHours ? String(wo.estHours) : ""])));
+  const [err, setErr] = useState("");
+  const nameOf2 = (id) => (staff.find((u) => u.id === id) || {}).username || "You";
+  const save = () => {
+    const out = [];
+    for (const id of ids) {
+      const n = Number(hrs[id]);
+      if (!(n > 0)) { setErr("Enter the hours worked for each executor (greater than 0)."); return; }
+      out.push({ executorId: id, hours: Math.round(n * 100) / 100 });
+    }
+    onSave(out);
+  };
+  return (
+    <Modal title="Hours worked" info="hoursModal" onClose={onCancel}>
+      <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.inkSoft, marginBottom: 12 }}>How many hours did each executor spend on {formatWoNum(wo.number)} {wo.title}?{wo.estHours ? ` (Estimate: ${fmtH(wo.estHours)} h each.)` : ""}</div>
+      {ids.map((id) => (
+        <Field key={id} label={`${nameOf2(id)} — hours`} required>
+          <input type="number" min="0" step="0.25" aria-label={`Hours for ${nameOf2(id)}`} style={{ ...inputStyle, boxSizing: "border-box" }} value={hrs[id]} onChange={(e) => setHrs({ ...hrs, [id]: e.target.value })} />
+        </Field>
+      ))}
+      {err && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.rust, marginBottom: 8 }}>{err}</div>}
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <Btn variant="ghost" onClick={onCancel}>Cancel</Btn>
+        <Btn variant="primary" onClick={save}>Complete</Btn>
+      </div>
+    </Modal>
+  );
+}
+
+/* ---------- work order form: executors, estimate, crew ---------- */
+function ExecutorPicker({ obj, onChange, users }) {
+  if (!execOn()) {
+    return (
+      <Field label="Executor">
+        <select style={inputStyle} value={obj.executorId || ""} onChange={(e) => onChange({ executorId: e.target.value })}>
+          <option value="">— unassigned —</option>
+          {users.map((u) => <option key={u.id} value={u.id}>{u.username} ({u.role})</option>)}
+        </select>
+      </Field>
+    );
+  }
+  const ids = execIdsOf(obj);
+  const toggle = (id) => { const next = ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]; onChange({ executorIds: next, executorId: next[0] || "" }); };
+  return (
+    <>
+      <Field label="Executors">
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          {users.map((u) => {
+            const on = ids.includes(u.id);
+            return (
+              <button key={u.id} type="button" onClick={() => toggle(u.id)} aria-pressed={on} title={`${u.username} (${u.role})`}
+                style={{ cursor: "pointer", fontFamily: FONT_BODY, fontSize: 12, fontWeight: 600, padding: "4px 10px", borderRadius: 12, border: `1px solid ${on ? C.navy : C.line}`, background: on ? C.navy : "transparent", color: on ? "#fff" : C.ink }}>
+                {on ? "✓ " : ""}{u.username}
+              </button>
+            );
+          })}
+          {users.length === 0 && <span style={{ fontSize: 12, color: C.inkFaint }}>No accounts</span>}
+        </div>
+      </Field>
+      <Field label="Estimated hours (per executor)">
+        <input type="number" min="0" step="0.25" style={inputStyle} value={obj.estHours || ""} onChange={(e) => onChange({ estHours: e.target.value })} placeholder="e.g. 2" />
+      </Field>
+      <Field label="Executors required">
+        <input type="number" min="1" step="1" style={inputStyle} value={obj.crewRequired || ""} onChange={(e) => onChange({ crewRequired: e.target.value })} placeholder="1" />
+      </Field>
+    </>
+  );
+}
+/* ============================================================
+   v2.4 — PLANNING CALENDAR (Labour assignment + Workforce schedule)
+============================================================ */
+const PC_CSS = `
+:root{--pc-week:color-mix(in srgb,var(--hk-bg) 86%,#000);}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--pc-week:color-mix(in srgb,var(--hk-bg) 84%,#fff);}}
+:root[data-theme="dark"]{--pc-week:color-mix(in srgb,var(--hk-bg) 84%,#fff);}
+.pc-over{outline:2px dashed var(--hk-orange);outline-offset:-2px;}
+.pc-card{cursor:grab;} .pc-card:active{cursor:grabbing;}
+`;
+const SLOT_H = 22;
+
+function ExecMultiFilter({ staff, value, onChange, data }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [open]);
+  const label = value.length === 0 ? "All executors" : value.length === 1 ? ((staff.find((u) => u.id === value[0]) || {}).username || "1 selected") : `${value.length} executors`;
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button type="button" aria-label="Filter by executors" onClick={() => setOpen((o) => !o)} style={{ ...inputStyle, width: "auto", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, textAlign: "left" }}>
+        {label} <ChevronDown size={13} />
+      </button>
+      {open && (
+        <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 30, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 4, padding: 8, minWidth: 190, maxHeight: 280, overflowY: "auto", boxShadow: "0 6px 20px rgba(0,0,0,0.18)" }}>
+          {staff.map((u) => (
+            <label key={u.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 4px", cursor: "pointer", fontFamily: FONT_BODY, fontSize: 13, color: C.ink }}>
+              <input type="checkbox" checked={value.includes(u.id)} onChange={() => onChange(value.includes(u.id) ? value.filter((x) => x !== u.id) : [...value, u.id])} />
+              <span style={{ width: 9, height: 9, borderRadius: 5, background: execColor(data, u.id) }} /> {u.username}
+            </label>
+          ))}
+          <div style={{ marginTop: 6 }}><Btn small variant="ghost" onClick={() => onChange([])}>Show all</Btn></div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function locationOptions(locations) {
+  const out = [];
+  const walk = (parent, depth) => locations.filter((l) => (l.parentId || null) === parent).forEach((l) => { out.push({ id: l.id, label: "  ".repeat(depth) + l.name }); walk(l.id, depth + 1); });
+  walk(null, 0);
+  return out;
+}
+
+function PlanWoCard({ w, data, fromExec, draggable, onOpen, onRemove, tight, style }) {
+  const under = underStaffed(w);
+  const crew = crewOf(w);
+  const done = isDoneStatus(w.status);
+  const tip = under ? `Needs ${crew} executor${crew === 1 ? "" : "s"}, ${execIdsOf(w).length} assigned` : "";
+  return (
+    <div
+      className="pc-card" draggable={!!draggable && !done} data-wo={w.id}
+      onDragStart={(e) => { e.dataTransfer.setData("text/plain", JSON.stringify({ t: "wo", id: w.id, from: fromExec || "" })); e.dataTransfer.effectAllowed = "move"; }}
+      onClick={() => onOpen && onOpen(w.id)} title={`${formatWoNum(w.number)} ${w.title}${tip ? " — " + tip : ""}`}
+      style={{
+        background: C.panel, border: `1px ${under ? "dashed" : "solid"} ${under ? C.rust : C.line}`, borderLeft: `4px solid ${WO_TYPE_COLORS[w.type] || C.navy}`,
+        borderRadius: 3, boxSizing: "border-box", padding: tight ? "1px 4px" : "4px 5px", marginBottom: tight ? 0 : 4, opacity: done ? 0.6 : 1, fontFamily: FONT_BODY, overflow: "hidden", minWidth: 0, ...style,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
+        <div style={{ fontSize: 10.5, fontWeight: 600, color: C.ink, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: tight ? "nowrap" : "normal", lineHeight: 1.25, maxHeight: tight ? undefined : 27 }}>
+          <span style={{ color: C.inkFaint }}>{formatWoNum(w.number)}</span> {w.title}
+        </div>
+        {tight && <span style={{ display: "inline-flex", alignItems: "center", gap: 2, fontSize: 10, color: C.inkSoft, flexShrink: 0 }}><User size={10} />{crew}</span>}
+        {tight && under && <AlertTriangle size={11} color="var(--hk-rust)" />}
+        {onRemove && <button type="button" title="Remove from this person's schedule" onClick={(e) => { e.stopPropagation(); onRemove(); }} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkFaint, padding: 0, display: "flex" }}><X size={10} /></button>}
+      </div>
+      {!tight && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 10, color: C.inkSoft, marginTop: 2 }}>
+          <span title="Executors required" style={{ display: "inline-flex", alignItems: "center", gap: 2 }}><User size={11} />{crew}</span>
+          <span title="Estimated hours per executor" style={{ display: "inline-flex", alignItems: "center", gap: 2 }}><Clock size={11} />{w.estHours ? fmtH(w.estHours) : "—"}</span>
+          {under && <span title={tip} style={{ display: "inline-flex", alignItems: "center", gap: 2, color: C.rust, fontWeight: 700 }}><AlertTriangle size={11} />Short</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PlanningCalendar({ kind, data, update, role, currentUserId, goToOrder, goTemplates }) {
+  const labour = kind === "labour";
+  const canEdit = isAdmin(role);
+  const dialog = useDialog();
+  const staff = useStaff();
+  const wfOn = workforceOn();
+  const hourly = labour && hourlyOn();
+  const [view, setView] = useState("month");
+  const [anchor, setAnchor] = useState(todayLocal());
+  const [execSel, setExecSel] = useState(labour && role === "Executor" ? [currentUserId] : []);
+  const [locFilter, setLocFilter] = useState("");
+  const [unschedOnly, setUnschedOnly] = useState(true);
+  const [popup, setPopup] = useState(null);
+
+  const shifts = data.workShifts || [];
+  const allowedLocs = locFilter ? descendantIds(data.locations, locFilter) : null;
+  const wos = data.workOrders.filter((w) => w.type !== "PM Base" && w.scheduledDate && (!allowedLocs || allowedLocs.has(w.locationId)));
+  const woPassesExec = (w) => !execSel.length || execIdsOf(w).some((i) => execSel.includes(i));
+  const wosOn = (date) => wos.filter((w) => w.scheduledDate === date);
+  const worksOn = (id, date) => shifts.some((s) => s.date === date && s.executorId === id);
+  const dayShifts = (date) => shifts.filter((s) => s.date === date);
+  const nameOf = (id) => (staff.find((u) => u.id === id) || {}).username || "Former member";
+
+  // Executors shown for a day on the labour screens.
+  const colsFor = (date) => staff.filter((u) => {
+    if (execSel.length && !execSel.includes(u.id)) return false;
+    const hasWo = wosOn(date).some((w) => execIdsOf(w).includes(u.id));
+    if (wfOn) return worksOn(u.id, date) || hasWo;
+    return u.role === "Executor" || execSel.includes(u.id) || hasWo;
+  });
+  const hoursFor = (id, date) => wosOn(date).filter((w) => execIdsOf(w).includes(id)).reduce((s, w) => s + (Number(w.estHours) || 0), 0);
+
+  /* ----- mutations ----- */
+  const placeWo = (woId, date, target, from, startTime) => update((d) => {
+    const w = d.workOrders.find((x) => x.id === woId);
+    if (!w || isDoneStatus(w.status)) return d;
+    let ids = [...execIdsOf(w)];
+    if (from && from !== target) ids = ids.filter((i) => i !== from);
+    if (target && !ids.includes(target)) ids.push(target);
+    const dateChanged = w.scheduledDate !== date;
+    w.executorIds = ids; w.executorId = ids[0] || "";
+    w.scheduledDate = date;
+    applyScheduleStatus(w);
+    if (dateChanged) w.startTimes = {};
+    w.startTimes = w.startTimes || {};
+    if (from && from !== target) delete w.startTimes[from];
+    if (target && startTime != null) { if (startTime === "") delete w.startTimes[target]; else w.startTimes[target] = startTime; }
+    return d;
+  });
+  const removeExec = (woId, execId) => update((d) => {
+    const w = d.workOrders.find((x) => x.id === woId);
+    if (!w) return d;
+    w.executorIds = execIdsOf(w).filter((i) => i !== execId); w.executorId = w.executorIds[0] || "";
+    if (w.startTimes) delete w.startTimes[execId];
+    return d;
+  });
+  const removeShift = (id) => update((d) => { d.workShifts = (d.workShifts || []).filter((s) => s.id !== id); return d; });
+  const applyShifts = (execId, list) => update((d) => {
+    d.workShifts = d.workShifts || [];
+    const dates = new Set(list.map((x) => x.date));
+    d.workShifts = d.workShifts.filter((s) => !(s.executorId === execId && dates.has(s.date)));
+    list.forEach((x) => { if (x.sh) d.workShifts.push({ id: uid("sh"), executorId: execId, date: x.date, start: x.sh.start, end: x.sh.end }); });
+    return d;
+  });
+
+  /* ----- drag/drop plumbing ----- */
+  const dz = (handler) => (canEdit ? {
+    onDragOver: (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; e.currentTarget.classList.add("pc-over"); },
+    onDragLeave: (e) => e.currentTarget.classList.remove("pc-over"),
+    onDrop: (e) => {
+      e.preventDefault(); e.stopPropagation(); e.currentTarget.classList.remove("pc-over");
+      let p = null;
+      try { p = JSON.parse(e.dataTransfer.getData("text/plain")); } catch { p = null; }
+      if (p) handler(p, e);
+    },
+  } : {});
+  const dropOnDay = (date, execId) => (p) => {
+    if (labour && p.t === "wo") placeWo(p.id, date, execId, p.from);
+    else if (!labour && p.t === "exec") setPopup({ execId: p.id, scope: "day", date });
+  };
+  const dropOnWeek = (weekStart) => (p) => { if (!labour && p.t === "exec") setPopup({ execId: p.id, scope: "week", date: weekStart }); };
+
+  /* ----- navigation ----- */
+  const step = (dir) => setAnchor((a) => (view === "month" ? addMonthsISO(a, dir) : addDaysISO(a, dir * (view === "week" ? 7 : 1))));
+  const up = () => setView((v) => (v === "day" ? "week" : "month"));
+  const openDay = (date) => { setAnchor(date); setView("day"); };
+  const openWeek = (date) => { setAnchor(date); setView("week"); };
+  const wkStart = weekStartISO(anchor);
+  const title = view === "month"
+    ? parseISO(anchor).toLocaleDateString(undefined, { month: "long", year: "numeric" })
+    : view === "week"
+      ? `Week ${isoWeekNum(anchor)} · ${fmtShort(wkStart)} – ${fmtShort(addDaysISO(wkStart, 6))}, ${parseISO(addDaysISO(wkStart, 6)).getFullYear()}`
+      : parseISO(anchor).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+
+  const exportPdf = () => exportSchedulePdf({ view, anchor, data, staff, shifts, title });
+
+  /* ----- small renderers ----- */
+  const execChip = (id, extra) => {
+    const col = execColor(data, id);
+    return <span style={{ background: col, color: textOn(col), fontFamily: FONT_BODY, fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 10, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%", ...extra }}>{nameOf(id)}</span>;
+  };
+  const covBadge = (date, big) => {
+    const c = dayCoverage(dayShifts(date));
+    if (!c) return null;
+    const bad = c.gaps.length > 0;
+    return <span data-cov={date} title={bad ? `Nobody is working ${gapText(c)}` : "Everyone's shifts cover this period"} style={{ fontFamily: FONT_BODY, fontSize: big ? 11.5 : 10, fontWeight: 700, color: bad ? "var(--hk-rust)" : C.inkSoft, whiteSpace: "nowrap" }}>{covText(c)}</span>;
+  };
+  const shiftChip = (s, big) => {
+    const col = execColor(data, s.executorId);
+    return (
+      <div key={s.id} data-shift={s.id} title={`${nameOf(s.executorId)} ${shiftText(s)}`} style={{ background: col, color: textOn(col), borderRadius: 2, padding: "2px 4px", marginBottom: 2, fontFamily: FONT_BODY, fontSize: big ? 11.5 : 10.5, fontWeight: 600, display: "flex", alignItems: "center", gap: 3, minWidth: 0 }}>
+        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{nameOf(s.executorId)} {shiftText(s)}</span>
+        {canEdit && <button type="button" title="Remove this shift" onClick={(e) => { e.stopPropagation(); removeShift(s.id); }} style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", padding: 0, display: "flex" }}><X size={10} /></button>}
+      </div>
+    );
+  };
+  const sortedShifts = (date) => dayShifts(date).filter((s) => !execSel.length || execSel.includes(s.executorId)).sort((a, b) => (toMin(a.start) || 0) - (toMin(b.start) || 0));
+  const isToday = (d) => d === todayLocal();
+
+  const weekHeaderCell = (ws, h) => (
+    <div
+      data-weekhdr={ws} {...dz(dropOnWeek(ws))}
+      onClick={() => openWeek(ws)} title={`Open week ${isoWeekNum(ws)}${!labour && canEdit ? " — or drop a name card here to schedule the whole week" : ""}`}
+      style={{ cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2, fontFamily: FONT_BODY, fontSize: 11, fontWeight: 700, color: C.inkSoft, minHeight: h || 0 }}
+    >
+      <span>W{isoWeekNum(ws)}</span>
+      {!labour && canEdit && <span style={{ fontSize: 9, fontWeight: 600, color: C.inkFaint }}>drop</span>}
+    </div>
+  );
+
+  /* ----- MONTH ----- */
+  const renderMonth = () => {
+    const first = parseISO(anchor); first.setDate(1);
+    const gridStart = weekStartISO(isoLocal(first));
+    const month = first.getMonth();
+    const weeks = [];
+    for (let ws = gridStart; ; ws = addDaysISO(ws, 7)) {
+      weeks.push(ws);
+      if (parseISO(addDaysISO(ws, 7)).getMonth() !== month && parseISO(addDaysISO(ws, 7)) > first) break;
+      if (weeks.length > 6) break;
+    }
+    return (
+      <div>
+        <div style={{ display: "grid", gridTemplateColumns: "44px repeat(7, minmax(0,1fr))", gap: 4, padding: "0 6px 4px" }}>
+          <div />
+          {WEEKDAY_LABELS.map((w) => <div key={w} style={{ fontFamily: FONT_BODY, fontSize: 11, fontWeight: 700, color: C.inkFaint, textAlign: "center" }}>{w}</div>)}
+        </div>
+        {weeks.map((ws) => (
+          <div key={ws} data-week={ws} style={{ display: "grid", gridTemplateColumns: "44px repeat(7, minmax(0,1fr))", gap: 4, background: "var(--pc-week)", border: `1px solid ${C.line}`, borderRadius: 4, padding: 6, marginBottom: 8 }}>
+            {weekHeaderCell(ws, 70)}
+            {Array.from({ length: 7 }).map((_, i) => {
+              const date = addDaysISO(ws, i);
+              const inMonth = parseISO(date).getMonth() === month;
+              const list = labour ? wosOn(date).filter(woPassesExec) : sortedShifts(date);
+              return (
+                <div key={date} data-day={date} {...dz(dropOnDay(date, ""))} style={{ minHeight: 84, minWidth: 0, border: `1px solid ${C.lineSoft}`, borderRadius: 3, padding: 4, background: isToday(date) ? C.orangeSoft : C.panel, opacity: inMonth ? 1 : 0.55 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 4, marginBottom: 3 }}>
+                    <span onClick={() => openDay(date)} title="Open this day" style={{ cursor: "pointer", fontFamily: FONT_BODY, fontSize: 11.5, fontWeight: 700, color: isToday(date) ? C.orange : C.inkFaint }}>{parseISO(date).getDate()}</span>
+                    {!labour && covBadge(date)}
+                  </div>
+                  {labour
+                    ? <>
+                      {list.slice(0, 3).map((w) => {
+                        const under = underStaffed(w);
+                        return (
+                          <div key={w.id} draggable={canEdit && !isDoneStatus(w.status)} className="pc-card"
+                            onDragStart={(e) => { e.dataTransfer.setData("text/plain", JSON.stringify({ t: "wo", id: w.id, from: "" })); }}
+                            onClick={() => goToOrder(w.id)} title={`${formatWoNum(w.number)} ${w.title}${under ? " — needs more executors" : ""}`}
+                            style={{ fontFamily: FONT_BODY, fontSize: 10.5, fontWeight: 600, color: "#fff", background: WO_TYPE_COLORS[w.type], borderRadius: 2, padding: "2px 4px", marginBottom: 2, display: "flex", alignItems: "center", gap: 3, minWidth: 0, outline: under ? "2px dashed var(--hk-rust)" : "none" }}>
+                            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{w.title}</span>
+                            {execIdsOf(w).slice(0, 3).map((id) => <span key={id} title={nameOf(id)} style={{ width: 8, height: 8, borderRadius: 4, background: execColor(data, id), border: "1px solid #fff", flexShrink: 0 }} />)}
+                            {under && <AlertTriangle size={10} />}
+                          </div>
+                        );
+                      })}
+                      {list.length > 3 && <div style={{ fontFamily: FONT_BODY, fontSize: 10, color: C.inkFaint }}>+{list.length - 3} more</div>}
+                    </>
+                    : <>
+                      {list.slice(0, 4).map((s) => shiftChip(s))}
+                      {list.length > 4 && <div style={{ fontFamily: FONT_BODY, fontSize: 10, color: C.inkFaint }}>+{list.length - 4} more</div>}
+                    </>}
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  /* ----- column header used by labour week boards and day view ----- */
+  const colHeader = (id, date, label) => {
+    const col = id ? execColor(data, id) : null;
+    const hrs = id ? hoursFor(id, date) : wosOn(date).filter((w) => !execIdsOf(w).length).reduce((s, w) => s + (Number(w.estHours) || 0), 0);
+    const off = id && wfOn && !worksOn(id, date);
+    return (
+      <div data-colhdr={`${id || "unassigned"}|${date}`} style={{ background: col || C.panelAlt, color: col ? textOn(col) : C.ink, padding: "0 6px", height: 28, boxSizing: "border-box", borderRadius: "3px 3px 0 0", fontFamily: FONT_BODY, fontSize: 11.5, fontWeight: 700, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 4, minWidth: 0 }}>
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label || (id ? nameOf(id) : "Unassigned")}</span>
+        <span title={off ? "Not on shift this day" : "Total estimated hours scheduled this day"} style={{ display: "inline-flex", alignItems: "center", gap: 3, flexShrink: 0, fontWeight: 600 }}>
+          {off && <AlertTriangle size={11} />}<Clock size={11} />{fmtH(hrs)}
+        </span>
+      </div>
+    );
+  };
+  const woList = (list, date, execId, fromExec) => list.map((w) => (
+    <PlanWoCard key={w.id} w={w} data={data} draggable={canEdit} fromExec={fromExec} onOpen={goToOrder} onRemove={canEdit && execId ? () => removeExec(w.id, execId) : null} />
+  ));
+
+  /* ----- WEEK ----- */
+  const renderWeek = () => {
+    const days = Array.from({ length: 7 }, (_, i) => addDaysISO(wkStart, i));
+    if (!labour) {
+      return (
+        <div data-week={wkStart} style={{ display: "grid", gridTemplateColumns: "44px repeat(7, minmax(0,1fr))", gap: 4, background: "var(--pc-week)", border: `1px solid ${C.line}`, borderRadius: 4, padding: 6 }}>
+          {weekHeaderCell(wkStart, 200)}
+          {days.map((date) => (
+            <div key={date} data-day={date} {...dz(dropOnDay(date))} style={{ minWidth: 0, background: isToday(date) ? C.orangeSoft : C.panel, border: `1px solid ${C.lineSoft}`, borderRadius: 3, minHeight: 200, padding: 4 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4, gap: 4 }}>
+                <span onClick={() => openDay(date)} style={{ cursor: "pointer", fontFamily: FONT_BODY, fontSize: 12, fontWeight: 700, color: C.ink }}>{parseISO(date).toLocaleDateString(undefined, { weekday: "short", day: "numeric" })}</span>
+                {covBadge(date)}
+              </div>
+              {sortedShifts(date).map((s) => shiftChip(s))}
+            </div>
+          ))}
+        </div>
+      );
+    }
+    const ids = new Set();
+    days.forEach((d) => colsFor(d).forEach((u) => ids.add(u.id)));
+    const people = staff.filter((u) => ids.has(u.id));
+    const boards = [...people.map((u) => ({ id: u.id })), { id: "" }];
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {people.length === 0 && wfOn && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkSoft }}>Nobody is scheduled to work this week. Set shifts on the Workforce schedule tab.</div>}
+        {boards.map(({ id }) => {
+          const col = id ? execColor(data, id) : C.line;
+          const total = days.reduce((s, d) => s + (id ? hoursFor(id, d) : 0), 0);
+          return (
+            <div key={id || "un"} data-board={id || "unassigned"} style={{ border: `1px solid ${C.line}`, borderLeft: `5px solid ${col}`, borderRadius: 4, background: "var(--pc-week)", padding: 6 }}>
+              <div style={{ fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 700, color: C.ink, marginBottom: 4, display: "flex", gap: 10, alignItems: "baseline" }}>
+                {id ? nameOf(id) : "Unassigned work"}{id && <span style={{ fontSize: 11.5, color: C.inkSoft, fontWeight: 600 }}>{fmtH(total)} h this week</span>}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0,1fr))", gap: 4 }}>
+                {days.map((date) => {
+                  const mine = (id ? wosOn(date).filter((w) => execIdsOf(w).includes(id)) : wosOn(date).filter((w) => !execIdsOf(w).length)).filter(woPassesExec);
+                  const off = id && wfOn && !worksOn(id, date) && mine.length === 0;
+                  return (
+                    <div key={date} data-cell={`${id || "unassigned"}|${date}`} {...(off ? {} : dz(dropOnDay(date, id)))} style={{ minWidth: 0, opacity: off ? 0.5 : 1 }}>
+                      <div onClick={() => openDay(date)} style={{ cursor: "pointer" }}>{colHeader(id, date, parseISO(date).toLocaleDateString(undefined, { weekday: "short", day: "numeric" }))}</div>
+                      <div style={{ minHeight: 70, background: off ? C.panelAlt : (isToday(date) ? C.orangeSoft : C.panel), border: `1px solid ${C.lineSoft}`, borderTop: "none", borderRadius: "0 0 3px 3px", padding: 3 }}>
+                        {off ? <div style={{ fontFamily: FONT_BODY, fontSize: 10, color: C.inkFaint, textAlign: "center", paddingTop: 6 }}>Off</div> : woList(mine, date, id, id)}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  /* ----- DAY ----- */
+  const renderDay = () => {
+    const date = anchor;
+    if (!labour) {
+      const cols = staff.filter((u) => !execSel.length || execSel.includes(u.id));
+      return (
+        <div data-day={date} {...dz(dropOnDay(date))} style={{ border: `1px solid ${C.line}`, borderRadius: 4, background: "var(--pc-week)", padding: 8 }}>
+          <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkSoft, marginBottom: 8, display: "flex", gap: 8, alignItems: "baseline" }}>Coverage {covBadge(date, true) || <span style={{ color: C.inkFaint }}>nobody scheduled</span>}{canEdit && <span style={{ color: C.inkFaint }}>· drop a name card anywhere here to schedule this day</span>}</div>
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.max(1, cols.length)}, minmax(0,1fr))`, gap: 6 }}>
+            {cols.map((u) => {
+              const mine = dayShifts(date).filter((s) => s.executorId === u.id);
+              const col = execColor(data, u.id);
+              return (
+                <div key={u.id} data-cell={`${u.id}|${date}`} style={{ minWidth: 0 }}>
+                  <div style={{ background: col, color: textOn(col), padding: "5px 6px", borderRadius: "3px 3px 0 0", fontFamily: FONT_BODY, fontSize: 12, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u.username}</div>
+                  <div style={{ minHeight: 90, background: C.panel, border: `1px solid ${C.lineSoft}`, borderTop: "none", padding: 5 }}>
+                    {mine.length === 0 ? <div style={{ fontFamily: FONT_BODY, fontSize: 11, color: C.inkFaint }}>Not scheduled</div> : mine.map((s) => shiftChip(s, true))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+    const cols = colsFor(date);
+    const colList = [...cols.map((u) => u.id), ""];
+    const empty = cols.length === 0 && wfOn;
+    return (
+      <div data-day={date} style={{ border: `1px solid ${C.line}`, borderRadius: 4, background: "var(--pc-week)", padding: 8 }}>
+        {empty && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkSoft, marginBottom: 8 }}>Nobody is scheduled to work this day. Set shifts on the Workforce schedule tab.</div>}
+        {hourly ? renderHourly(date, colList) : (
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(${colList.length}, minmax(0,1fr))`, gap: 6 }}>
+            {colList.map((id) => {
+              const mine = (id ? wosOn(date).filter((w) => execIdsOf(w).includes(id)) : wosOn(date).filter((w) => !execIdsOf(w).length)).filter(woPassesExec);
+              return (
+                <div key={id || "un"} data-cell={`${id || "unassigned"}|${date}`} {...dz(dropOnDay(date, id))} style={{ minWidth: 0 }}>
+                  {colHeader(id, date)}
+                  <div style={{ minHeight: 260, background: C.panel, border: `1px solid ${C.lineSoft}`, borderTop: "none", borderRadius: "0 0 3px 3px", padding: 4 }}>{woList(mine, date, id, id)}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  /* ----- hourly day grid ----- */
+  const renderHourly = (date, colList) => {
+    const real = colList.filter(Boolean);
+    const spans = real.flatMap((id) => dayShifts(date).filter((s) => s.executorId === id).map(shiftSpan).filter(Boolean));
+    let a0 = spans.length ? Math.min(...spans.map((x) => x.s)) : 360;
+    let a1 = spans.length ? Math.max(...spans.map((x) => x.e)) : 1080;
+    a0 = Math.floor(a0 / 60) * 60; a1 = Math.min(1440, Math.ceil(a1 / 60) * 60);
+    if (a1 <= a0) a1 = Math.min(1440, a0 + 60);
+    const slots = (a1 - a0) / 30;
+    const labels = Array.from({ length: slots }, (_, i) => a0 + i * 30);
+    return (
+      <div style={{ display: "grid", gridTemplateColumns: `38px repeat(${colList.length}, minmax(0,1fr))`, gap: 6 }}>
+        <div>
+          <div style={{ height: 28 + 64 }} />
+          <div>
+            {labels.map((m) => <div key={m} style={{ height: SLOT_H, fontFamily: FONT_BODY, fontSize: 9.5, color: C.inkFaint, textAlign: "right", paddingRight: 3, lineHeight: "10px" }}>{m % 60 === 0 ? fromMin(m) : ""}</div>)}
+          </div>
+        </div>
+        {colList.map((id) => {
+          const mine = (id ? wosOn(date).filter((w) => execIdsOf(w).includes(id)) : wosOn(date).filter((w) => !execIdsOf(w).length)).filter(woPassesExec);
+          const myShift = id ? dayShifts(date).filter((s) => s.executorId === id).map(shiftSpan).filter(Boolean) : [];
+          const inShift = (m) => myShift.some((x) => m >= x.s && m < x.e);
+          const placed = [], unplaced = [];
+          mine.forEach((w) => {
+            const st = id ? toMin((w.startTimes || {})[id]) : null;
+            if (st != null && st >= a0 && st < a1) placed.push({ w, s: st, e: st + Math.max(30, Math.round((Number(w.estHours) || 0.5) * 60 / 30) * 30) });
+            else unplaced.push(w);
+          });
+          const sorted = [...placed].sort((p, q) => p.s - q.s || q.e - p.e);
+          const laneEnd = []; const lane = {};
+          sorted.forEach((it) => { let l = laneEnd.findIndex((end) => end <= it.s); if (l < 0) { l = laneEnd.length; laneEnd.push(it.e); } else laneEnd[l] = it.e; lane[it.w.id] = l; });
+          const lanes = Math.max(1, laneEnd.length);
+          const onGridDrop = (p, e) => {
+            if (p.t !== "wo" || !id) return;
+            const rect = e.currentTarget.getBoundingClientRect();
+            const idx = Math.max(0, Math.min(slots - 1, Math.floor((e.clientY - rect.top) / SLOT_H)));
+            const start = a0 + idx * 30;
+            if (!inShift(start)) { dialog.alertMsg(`${nameOf(id)} is not scheduled to work at ${fromMin(start)} on this day.`); return; }
+            placeWo(p.id, date, id, p.from, fromMin(start));
+          };
+          return (
+            <div key={id || "un"} data-cell={`${id || "unassigned"}|${date}`} style={{ minWidth: 0 }}>
+              {colHeader(id, date)}
+              <div data-unplaced={id || "unassigned"} {...dz((p) => { if (p.t === "wo") placeWo(p.id, date, id, p.from, id ? "" : undefined); })} style={{ background: C.panel, border: `1px solid ${C.lineSoft}`, borderTop: "none", padding: 3, height: 64, boxSizing: "border-box", overflowY: "auto" }}>
+                <div style={{ fontFamily: FONT_BODY, fontSize: 9.5, color: C.inkFaint, marginBottom: 2 }}>{id ? "No start time" : "Unassigned"}</div>
+                {woList(unplaced, date, id, id)}
+              </div>
+              {id ? (
+                <div data-grid={id} {...dz(onGridDrop)} style={{ position: "relative", height: slots * SLOT_H, border: `1px solid ${C.lineSoft}`, borderTop: "none", background: C.panel }}>
+                  {labels.map((m, i) => (
+                    <div key={m} data-slot={`${id}|${fromMin(m)}`} style={{ position: "absolute", left: 0, right: 0, top: i * SLOT_H, height: SLOT_H, borderTop: `1px ${m % 60 === 0 ? "solid" : "dotted"} ${C.lineSoft}`, background: inShift(m) ? "transparent" : C.panelAlt, opacity: inShift(m) ? 1 : 0.85 }} />
+                  ))}
+                  {placed.map(({ w, s, e }) => (
+                    <PlanWoCard key={w.id} w={w} data={data} tight draggable={canEdit} fromExec={id} onOpen={goToOrder} onRemove={canEdit ? () => removeExec(w.id, id) : null}
+                      style={{ position: "absolute", top: ((s - a0) / 30) * SLOT_H + 1, height: ((e - s) / 30) * SLOT_H - 2, left: `${(lane[w.id] / lanes) * 100}%`, width: `calc(${100 / lanes}% - 2px)`, display: "flex", flexDirection: "column", justifyContent: "flex-start" }} />
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  /* ----- side list ----- */
+  const sideList = data.workOrders
+    .filter((w) => w.type !== "PM Base" && isOpenStatus(w.status) && (!unschedOnly || !w.scheduledDate) && (!allowedLocs || allowedLocs.has(w.locationId)))
+    .sort((a, b) => (a.requiredByDate || "9999").localeCompare(b.requiredByDate || "9999") || a.number - b.number);
+
+  const seg = (v, lab) => <button key={v} type="button" onClick={() => setView(v)} aria-pressed={view === v} style={{ fontFamily: FONT_BODY, fontSize: 12.5, fontWeight: 600, padding: "6px 12px", border: "none", cursor: "pointer", background: view === v ? C.navy : "transparent", color: view === v ? "#fff" : C.ink }}>{lab}</button>;
+
+  return (
+    <div>
+      <style>{PC_CSS}</style>
+      <SectionHeader
+        title={labour ? "Labour assignment" : "Workforce schedule"}
+        subtitle={labour ? "Who is doing which work, and when." : "Who is working, and when. Everyone can view; managers set it."}
+        info={labour ? PAGE_INFO.labour : PAGE_INFO.workforce}
+        action={!labour ? (
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn small variant="ghost" onClick={exportPdf}><Printer size={13} /> Export PDF</Btn>
+            {canEdit && <Btn small onClick={goTemplates}><Plus size={13} /> Create new template</Btn>}
+          </div>
+        ) : null}
+      />
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+        <Btn small variant="ghost" onClick={() => step(-1)} title="Previous"><ChevronLeft size={14} /></Btn>
+        <Btn small variant="ghost" onClick={() => step(1)} title="Next"><ChevronRight size={14} /></Btn>
+        <Btn small variant="ghost" onClick={up} disabled={view === "month"} title={view === "day" ? "Up to the week" : "Up to the month"}><ChevronUp size={14} /></Btn>
+        <Btn small variant="ghost" onClick={() => setAnchor(todayLocal())}>Today</Btn>
+        <span data-title style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 700, color: C.ink, minWidth: 180 }}>{title}</span>
+        <div style={{ display: "inline-flex", border: `1px solid ${C.line}`, borderRadius: 3, overflow: "hidden" }}>{seg("month", "Month")}{seg("week", "Week")}{seg("day", "Day")}</div>
+        <select aria-label="Filter by location" style={{ ...inputStyle, width: "auto", maxWidth: 220 }} value={locFilter} onChange={(e) => setLocFilter(e.target.value)}>
+          <option value="">All locations</option>
+          {locationOptions(data.locations).map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+        </select>
+        <ExecMultiFilter staff={staff} value={execSel} onChange={setExecSel} data={data} />
+      </div>
+      {!labour && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }} data-namecards>
+          <span style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginRight: 4 }}>{canEdit ? "Drag a name onto a day or a week:" : "Team:"}<InfoTip k="nameCards" /></span>
+          {staff.filter((u) => !execSel.length || execSel.includes(u.id)).map((u) => {
+            const col = execColor(data, u.id);
+            return (
+              <div key={u.id} data-namecard={u.id} className={canEdit ? "pc-card" : ""} draggable={canEdit}
+                onDragStart={(e) => { e.dataTransfer.setData("text/plain", JSON.stringify({ t: "exec", id: u.id })); e.dataTransfer.effectAllowed = "move"; }}
+                style={{ background: col, color: textOn(col), fontFamily: FONT_BODY, fontSize: 12.5, fontWeight: 700, padding: "5px 12px", borderRadius: 14 }}>{u.username}</div>
+            );
+          })}
+        </div>
+      )}
+      <div style={{ display: "grid", gridTemplateColumns: labour && canEdit ? "minmax(0,1fr) 236px" : "minmax(0,1fr)", gap: 14, alignItems: "start" }}>
+        <div style={{ minWidth: 0 }}>{view === "month" ? renderMonth() : view === "week" ? renderWeek() : renderDay()}</div>
+        {labour && canEdit && (
+          <Panel style={{ padding: 10, position: "sticky", top: 70, maxHeight: "calc(100vh - 100px)", overflowY: "auto" }}>
+            <div data-sidelist style={{ fontFamily: FONT_HEAD, fontSize: 13.5, fontWeight: 700, color: C.ink }}>Work orders to place<InfoTip k="sideList" /></div>
+            <div style={{ fontFamily: FONT_BODY, fontSize: 11, color: C.inkFaint, margin: "2px 0 6px" }}>By due date. Drag onto a person (week or day view) or a calendar day.</div>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontFamily: FONT_BODY, fontSize: 12, color: C.ink, marginBottom: 8 }}>
+              <input type="checkbox" checked={unschedOnly} onChange={(e) => setUnschedOnly(e.target.checked)} /> Unscheduled only
+            </label>
+            {sideList.length === 0 && <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint }}>Nothing waiting.</div>}
+            {sideList.map((w) => {
+              const overdue = w.requiredByDate && w.requiredByDate < todayLocal();
+              return (
+                <div key={w.id}>
+                  <PlanWoCard w={w} data={data} draggable fromExec="" onOpen={goToOrder} />
+                  <div style={{ fontFamily: FONT_BODY, fontSize: 10, color: overdue ? "var(--hk-rust)" : C.inkFaint, margin: "-2px 0 6px 4px" }}>{w.requiredByDate ? `Due ${fmtShort(w.requiredByDate)}` : "No due date"}{w.scheduledDate ? ` · scheduled ${fmtShort(w.scheduledDate)}` : ""}</div>
+                </div>
+              );
+            })}
+          </Panel>
+        )}
+      </div>
+      {popup && (
+        <ApplyShiftModal
+          popup={popup} data={data} name={nameOf(popup.execId)}
+          onClose={() => setPopup(null)}
+          onApply={(sh, weekDays, saveName) => {
+            const list = [];
+            if (popup.scope === "day") list.push({ date: popup.date, sh: shiftOk(sh) ? sh : null });
+            else for (let i = 0; i < 7; i++) { const d = weekDays[i]; list.push({ date: addDaysISO(popup.date, i), sh: d && !d.off && shiftOk(d) ? d : null }); }
+            applyShifts(popup.execId, list);
+            if (saveName) update((d) => { d.shiftTemplates = d.shiftTemplates || []; d.shiftTemplates.push(popup.scope === "day" ? { id: uid("tpl"), name: saveName, kind: "daily", shift: { start: sh.start, dur: sh.dur, end: sh.end, touched: [] } } : { id: uid("tpl"), name: saveName, kind: "weekly", days: weekDays.map((x) => ({ off: !!x.off, start: x.start, dur: x.dur, end: x.end, touched: [] })) }); return d; });
+            setPopup(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function ApplyShiftModal({ popup, data, name, onClose, onApply }) {
+  const day = popup.scope === "day";
+  const templates = (data.shiftTemplates || []).filter((t) => t.kind === (day ? "daily" : "weekly"));
+  const [mode, setMode] = useState("pick");
+  const [shift, setShift] = useState(blankShift());
+  const [days, setDays] = useState(blankWeek());
+  const [saveName, setSaveName] = useState("");
+  const [err, setErr] = useState("");
+  const when = day ? parseISO(popup.date).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" }) : `the week of ${fmtShort(popup.date)} (week ${isoWeekNum(popup.date)})`;
+  const adhoc = () => {
+    if (day ? !shiftOk(shift) : (days.filter((d) => !d.off).length === 0 || days.some((d) => !d.off && !shiftOk(d)))) { setErr(day ? "Fill in any two of start, duration and end." : "Pick working days and give each a start plus a duration or end."); return; }
+    onApply(shift, days, saveName.trim());
+  };
+  return (
+    <Modal title={`Schedule ${name}`} info="applyShift" onClose={onClose} wide={!day}>
+      <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.inkSoft, marginBottom: 12 }}>Apply a {day ? "daily" : "weekly"} schedule to {when}. Existing shifts for {name} on those days are replaced.</div>
+      {mode === "pick" ? (
+        <>
+          <div style={{ fontFamily: FONT_BODY, fontSize: 11, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", marginBottom: 4 }}>Saved {day ? "daily" : "weekly"} templates</div>
+          {templates.length === 0 && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkFaint, marginBottom: 8 }}>No {day ? "daily" : "weekly"} templates yet. Create one from the Workforce schedule's “Create new template” button, or set a one-time schedule below.</div>}
+          {templates.map((t) => (
+            <button key={t.id} type="button" data-template={t.name} onClick={() => onApply(day ? t.shift : null, day ? null : t.days)} style={{ display: "block", width: "100%", textAlign: "left", cursor: "pointer", background: C.panelAlt, border: `1px solid ${C.line}`, borderRadius: 3, padding: "8px 10px", marginBottom: 6 }}>
+              <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, fontWeight: 600, color: C.ink }}>{t.name}</div>
+              <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkSoft }}>{templateSummary(t)}</div>
+            </button>
+          ))}
+          <div style={{ marginTop: 10 }}><Btn small variant="ghost" onClick={() => setMode("adhoc")}>One-time {day ? "daily" : "weekly"} schedule…</Btn></div>
+        </>
+      ) : (
+        <>
+          {day ? <ShiftEditor value={shift} onChange={setShift} /> : <WeeklyEditor value={days} onChange={setDays} />}
+          <Field label="Save as a template (optional name)"><input style={{ ...inputStyle, marginTop: 10 }} value={saveName} onChange={(e) => setSaveName(e.target.value)} placeholder="Leave blank to use once" /></Field>
+          {err && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.rust, marginBottom: 8 }}>{err}</div>}
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <Btn variant="ghost" onClick={() => setMode("pick")}>Back</Btn>
+            <Btn variant="primary" onClick={adhoc}>Apply</Btn>
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+/* ---------- PDF export (print dialog → "Save as PDF") ---------- */
+function exportSchedulePdf({ view, anchor, data, staff, shifts, title }) {
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const nm = (id) => (staff.find((u) => u.id === id) || {}).username || "Former member";
+  const dayCell = (date, inMonth) => {
+    const list = shifts.filter((s) => s.date === date).sort((a, b) => (toMin(a.start) || 0) - (toMin(b.start) || 0));
+    const cov = dayCoverage(list);
+    const bad = cov && cov.gaps.length;
+    return `<td style="${inMonth ? "" : "background:#f1f1f1;color:#888"}"><div class="d"><b>${parseISO(date).getDate()}</b>${cov ? `<span class="${bad ? "bad" : ""}">${covText(cov)}${bad ? " ⚠ gap " + gapText(cov) : ""}</span>` : ""}</div>${list.map((s) => `<div class="s" style="border-left:4px solid ${execColor(data, s.executorId)}">${esc(nm(s.executorId))} ${esc(shiftText(s))}</div>`).join("")}</td>`;
+  };
+  let body = "";
+  if (view === "day") {
+    const list = shifts.filter((s) => s.date === anchor).sort((a, b) => (toMin(a.start) || 0) - (toMin(b.start) || 0));
+    const cov = dayCoverage(list);
+    body = `<p>${cov ? "Coverage " + covText(cov) + (cov.gaps.length ? ` — <span class="bad">nobody working ${gapText(cov)}</span>` : "") : "Nobody scheduled."}</p><table><tr><th>Name</th><th>Start</th><th>End</th></tr>${list.map((s) => `<tr><td style="border-left:6px solid ${execColor(data, s.executorId)}">${esc(nm(s.executorId))}</td><td>${s.start}</td><td>${s.end}${toMin(s.end) <= toMin(s.start) ? " (+1 day)" : ""}</td></tr>`).join("")}</table>`;
+  } else {
+    let weeks = [];
+    if (view === "week") weeks = [weekStartISO(anchor)];
+    else {
+      const first = parseISO(anchor); first.setDate(1);
+      for (let ws = weekStartISO(isoLocal(first)); ; ws = addDaysISO(ws, 7)) {
+        weeks.push(ws);
+        if (parseISO(addDaysISO(ws, 7)).getMonth() !== first.getMonth() && parseISO(addDaysISO(ws, 7)) > first) break;
+        if (weeks.length > 6) break;
+      }
+    }
+    const month = parseISO(anchor).getMonth();
+    body = `<table><tr><th style="width:36px">Wk</th>${WEEKDAY_LABELS.map((w) => `<th>${w}</th>`).join("")}</tr>${weeks.map((ws) => `<tr><th>${isoWeekNum(ws)}</th>${Array.from({ length: 7 }, (_, i) => { const d = addDaysISO(ws, i); return dayCell(d, view === "week" || parseISO(d).getMonth() === month); }).join("")}</tr>`).join("")}</table>`;
+  }
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>
+body{font-family:Arial,Helvetica,sans-serif;margin:18px;color:#111}h1{font-size:18px;margin:0 0 4px}.sub{color:#555;font-size:12px;margin-bottom:10px}
+table{border-collapse:collapse;width:100%;table-layout:fixed}th,td{border:1px solid #999;padding:3px;vertical-align:top;font-size:10px;word-wrap:break-word}th{background:#e8e8e8}
+td{height:${view === "week" ? 220 : 80}px}.d{display:flex;justify-content:space-between;margin-bottom:2px}.d span{font-size:9px;color:#444}.bad{color:#c00!important;font-weight:bold}
+.s{margin:1px 0;padding:1px 3px;background:#f6f6f6}@page{size:landscape;margin:10mm}</style></head><body>
+<h1>${esc(SETTINGS.brand.name)} — Workforce schedule</h1><div class="sub">${esc(title)}</div>${body}</body></html>`;
+  const w = window.open("", "_blank");
+  if (!w) { window.alert("Allow pop-ups for this site to export the schedule, then try again."); return; }
+  w.document.write(html); w.document.close(); w.focus();
+  setTimeout(() => { try { w.print(); } catch { /* user can print manually */ } }, 350);
+}
+
+/* ============================================================
+   TOOLS (formerly Owner Tools) — cards depend on role
+============================================================ */
+let TOOLS_FOCUS = null;
+function ToolsSection({ title, sub }) {
+  return (
+    <div style={{ margin: "8px 0 -4px" }}>
+      <div style={{ fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: "0.05em" }}>{title}</div>
+      <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint }}>{sub}</div>
+    </div>
+  );
+}
+function ToolsView({ data, update, currentUser, role, onOpenAccount }) {
+  const owner = role === "Owner", mgr = isAdmin(role);
+  useEffect(() => {
+    if (!TOOLS_FOCUS) return;
+    const id = TOOLS_FOCUS; TOOLS_FOCUS = null;
+    setTimeout(() => { const el = document.getElementById(id); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, 60);
+  }, []);
+  const me = currentUser || {};
+  return (
+    <div>
+      <SectionHeader title="Tools" subtitle={owner ? "Everything you can set up: your account, team scheduling tools, accounts, branding, backups and record clean-up." : mgr ? "Your account, hours and team scheduling tools." : "Your account and hours."} info={PAGE_INFO.owner} />
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <MemberManagementInline currentUser={currentUser} />
-        <BrandingCard />
-        <FeaturesCard />
-        <BackupTools data={data} update={update} />
-        <PmWizardCatalogEditor data={data} update={update} />
-        <DeleteWorkOrderTool data={data} update={update} />
-        <DeleteWorkRequestTool data={data} update={update} />
+        <ToolsSection title="Executor tools" sub="Available to everyone who works on maintenance." />
+        <Panel style={{ padding: 18 }}>
+          <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 4 }}>My account<InfoTip k="myAccount" /></div>
+          <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkSoft, marginBottom: 10 }}>Change your email address (used for notifications and password reset) and your password.</div>
+          <Btn small onClick={onOpenAccount}><Key size={13} /> Open my account</Btn>
+        </Panel>
+        {execOn() && <HoursCard data={data} scope="me" userId={me.id} />}
+        {mgr && <ToolsSection title="Manager tools" sub="Team scheduling and reporting." />}
+        {mgr && <ExecutorColoursCard data={data} update={update} />}
+        {mgr && <ShiftTemplatesCard data={data} update={update} />}
+        {mgr && execOn() && <HoursCard data={data} scope="all" userId={me.id} />}
+        {owner && <ToolsSection title="Owner tools" sub="Accounts, branding, features, backups and clean-up." />}
+        {owner && <MemberManagementInline currentUser={currentUser} />}
+        {owner && <BrandingCard />}
+        {owner && <FeaturesCard />}
+        {owner && <BackupTools data={data} update={update} />}
+        {owner && <PmWizardCatalogEditor data={data} update={update} />}
+        {owner && <DeleteWorkOrderTool data={data} update={update} />}
+        {owner && <DeleteWorkRequestTool data={data} update={update} />}
       </div>
     </div>
   );
@@ -6312,7 +7536,7 @@ function AccountModal({ user, onClose, onUserChanged }) {
   };
   const sub = { fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink, margin: "4px 0 8px" };
   return (
-    <Modal title={`My account — ${user.username}`} onClose={onClose}>
+    <Modal title={`My account — ${user.username}`} info="account" onClose={onClose}>
       <div style={sub}>Email</div>
       <Field label="Email address (used for notifications and to reset your password)">
         <input type="email" style={inputStyle} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@example.com" />
@@ -6350,6 +7574,10 @@ function normalizeData(d) {
     if (w.type !== "PM Base" && LEGACY_STATUS_MAP[w.status]) w.status = LEGACY_STATUS_MAP[w.status];
   });
   if (!Array.isArray(d.purchaseList)) d.purchaseList = [];
+  // v2.4: executor colours, shift templates and scheduled shifts.
+  if (!d.executorColors || typeof d.executorColors !== "object") d.executorColors = {};
+  if (!Array.isArray(d.shiftTemplates)) d.shiftTemplates = [];
+  if (!Array.isArray(d.workShifts)) d.workShifts = [];
   return d;
 }
 
@@ -6590,13 +7818,19 @@ function MaintEnhanceAppInner() {
     assets: <AssetsView data={data} update={update} role={role} goToOrder={goToOrder} deepLinkAssetId={tab === "assets" ? deepLinkAssetId.current : null} onConsumeDeepLink={consumeDeepLinkAsset} onNewOrderForAsset={goToNewOrderForAsset} />,
     requests: <WorkRequestsView data={data} update={update} role={role} currentUser={user.username} goToOrder={goToOrder} pendingFilter={tab === "requests" ? pendingFilter : null} consumeFilter={() => setPendingFilter(null)} isOnline={isOnline} queueWorkRequest={queueWorkRequest} />,
     orders: <WorkOrdersView data={data} update={update} role={role} currentUser={user.username} currentUserId={user.id} openId={openOrderId} setOpenId={setOpenOrderId} pendingFilter={tab === "orders" ? pendingFilter : null} consumeFilter={() => setPendingFilter(null)} prefillOrder={tab === "orders" ? prefillOrder : null} consumePrefill={() => setPrefillOrder(null)} />,
-    schedule: <ScheduleView data={data} role={role} currentUserId={user.id} goToOrder={goToOrder} />,
+    schedule: execOn()
+      ? <PlanningCalendar key="labour" kind="labour" data={data} update={update} role={role} currentUserId={user.id} goToOrder={goToOrder} />
+      : <ScheduleView data={data} role={role} currentUserId={user.id} goToOrder={goToOrder} />,
+    workforce: workforceOn()
+      ? <PlanningCalendar key="workforce" kind="workforce" data={data} update={update} role={role} currentUserId={user.id} goToOrder={goToOrder} goTemplates={() => { TOOLS_FOCUS = "tools-templates"; setTab("owner"); }} />
+      : <Dashboard data={data} setTab={setTab} role={role} applyFilter={applyFilter} goToOrder={goToOrder} goToRequest={goToRequest} />,
     vendors: <VendorsView data={data} update={update} role={role} currentUser={user.username} />,
     parts: <PartsView data={data} update={update} role={role} currentUser={user.username} />,
     budget: <BudgetView data={data} />,
     purchasing: isAdmin(role) ? <PurchasingView data={data} update={update} currentUser={user.username} goToOrder={goToOrder} /> : <Dashboard data={data} setTab={setTab} role={role} applyFilter={applyFilter} goToOrder={goToOrder} goToRequest={goToRequest} />,
     alarms: isAdmin(role) ? <AlarmsView data={data} update={update} role={role} currentUser={user.username} onAlarmsChanged={refreshAlarmCount} features={SETTINGS.features} /> : <Dashboard data={data} setTab={setTab} role={role} applyFilter={applyFilter} goToOrder={goToOrder} goToRequest={goToRequest} />,
-    owner: role === "Owner" ? <OwnerToolsView data={data} update={update} currentUser={user} /> : <Dashboard data={data} setTab={setTab} role={role} applyFilter={applyFilter} goToOrder={goToOrder} goToRequest={goToRequest} />,
+    help: <HelpView role={role} />,
+    owner: role !== "Guest" ? <ToolsView data={data} update={update} currentUser={user} role={role} onOpenAccount={() => setShowAccount(true)} /> : <Dashboard data={data} setTab={setTab} role={role} applyFilter={applyFilter} goToOrder={goToOrder} goToRequest={goToRequest} />,
   };
 
   return (

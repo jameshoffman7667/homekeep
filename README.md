@@ -8,6 +8,8 @@
 > names throughout this file. That's expected for now — only the product
 > name shown to users has changed.
 
+> **v2.4 note:** Owner Tools is now **Tools** (cards depend on your role). Three optional Owner toggles under Tools → Features add execution-based scheduling and time keeping (Labour assignment with Month/Week/Day views, estimates, crews, hours worked), workforce scheduling (shift templates, schedule and PDF export) and hourly labour assignments. The in-app Help tab serves the training guides from `frontend/public/help/`, with Word copies alongside.
+>
 > **v2.3 note:** the PM setup wizard now draws on one combined catalogue (Type and sub type filters), the Alarms page has a location filter with flashing beacons, and asset/vendor/part forms can fill in from a pasted link (optional Gemini AI via `GEMINI_API_KEY`; Owner Tools → Features).
 >
 > **v2.2 note:** branding, location labels and optional features (such as

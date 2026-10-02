@@ -19,6 +19,13 @@ the Git commit's summary line) and a **Commit extended description**
 
 ---
 
+## v2.4
+
+**Commit short description:** `v2.4: Labour assignment & workforce schedule`
+
+**Commit extended description:**
+v2.4 renames Owner Tools to Tools, with cards by role (executors: My account, My hours; managers add Executor colours, Shift templates, hours report; owners keep the rest). Three Owner toggles, off by default: execution-based scheduling and time keeping, workforce scheduling, hourly labour assignment (needs both others). Scheduling renames Schedule to Labour assignment: work orders gain estimated hours, crew required and multiple executors; Month, Week and Day views, filters, a due-date side list, under-staffed flags and a required hours-worked prompt on completion. Workforce schedule adds daily and weekly shift templates, drag-and-drop names, overnight shifts, coverage-gap warnings and PDF export; hourly mode adds a 30-minute grid. New data is in Excel export and import. Also: a Help tab opens the training guide with a linked contents list (Word copies downloadable), (i) info buttons now cover cards, pages and pop-ups, and both training guides are updated for v2.4. Tested in a browser harness only, not in a live deployment.
+
 ## v2.3
 
 **Commit short description:** `v2.3: Catalogue types, alarm beacons, link fill`
