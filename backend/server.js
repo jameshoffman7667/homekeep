@@ -8,6 +8,7 @@ const db = require("./db");
 const SEED = require("./seed");
 const { hashPassword, verifyPassword, signToken, requireAuth, requireOwner } = require("./auth");
 const { startNotificationScheduler } = require("./notify");
+const { FEATURES } = require("./features");
 
 const app = express();
 const PORT = process.env.PORT || 8040;
@@ -90,7 +91,10 @@ app.post("/api/auth/logout", (req, res) => {
 });
 
 app.get("/api/auth/me", requireAuth, (req, res) => {
-  res.json(req.user);
+  // v2: which componentized features this deployment has turned on
+  // (see features.js) rides along with the session response, so the
+  // frontend never needs a separate round trip to find out.
+  res.json({ ...req.user, features: FEATURES });
 });
 
 /* -------------------------------------------------------------
@@ -261,6 +265,18 @@ function requireAdminRole(req, res, next) {
   }
   next();
 }
+// v2: componentization gate for the Home Assistant-specific alarm
+// routes (webhook, webhook key, entity mappings) — see features.js.
+// Responds 404, not 403: when this component is off, these routes
+// don't exist for this deployment, full stop (also matters for the
+// unauthenticated webhook route below, which shouldn't hint at a key
+// being checkable when the feature itself is disabled).
+function requireHaAlarmsFeature(req, res, next) {
+  if (!FEATURES.homeAssistantAlarms) {
+    return res.status(404).json({ error: "Not found" });
+  }
+  next();
+}
 function rowToMapping(r) {
   return { entityId: r.entity_id, assetId: r.asset_id || null, locationId: r.location_id || null, label: r.label || "" };
 }
@@ -277,10 +293,11 @@ function rowToAlarm(r) {
 }
 
 // Owner-only: the webhook URL's API key. Generated on first request.
-app.get("/api/alarms/webhook-key", requireAuth, requireOwner, (req, res) => {
+// Gated on the homeAssistantAlarms component (v2) — see requireHaAlarmsFeature.
+app.get("/api/alarms/webhook-key", requireAuth, requireOwner, requireHaAlarmsFeature, (req, res) => {
   res.json({ key: getOrCreateWebhookKey() });
 });
-app.post("/api/alarms/webhook-key/regenerate", requireAuth, requireOwner, (req, res) => {
+app.post("/api/alarms/webhook-key/regenerate", requireAuth, requireOwner, requireHaAlarmsFeature, (req, res) => {
   const key = randomUUID().replace(/-/g, "");
   setSetting("alarm_webhook_key", key);
   res.json({ key });
@@ -288,10 +305,11 @@ app.post("/api/alarms/webhook-key/regenerate", requireAuth, requireOwner, (req, 
 
 // Entity-id → asset/location mapping, so repeat alerts from the same
 // sensor auto-resolve their asset/location without re-entering it.
-app.get("/api/alarm-mappings", requireAuth, (req, res) => {
+// Home-Assistant-specific, so also gated on the component (v2).
+app.get("/api/alarm-mappings", requireAuth, requireHaAlarmsFeature, (req, res) => {
   res.json(db.prepare("SELECT * FROM alarm_entity_map ORDER BY entity_id").all().map(rowToMapping));
 });
-app.post("/api/alarm-mappings", requireAuth, requireAdminRole, (req, res) => {
+app.post("/api/alarm-mappings", requireAuth, requireAdminRole, requireHaAlarmsFeature, (req, res) => {
   const { entityId, assetId, locationId, label } = req.body || {};
   if (!entityId || !entityId.trim()) return res.status(400).json({ error: "An entity id is required" });
   db.prepare(
@@ -300,14 +318,17 @@ app.post("/api/alarm-mappings", requireAuth, requireAdminRole, (req, res) => {
   ).run(entityId.trim(), assetId || null, locationId || null, (label || "").trim() || null);
   res.json(rowToMapping(db.prepare("SELECT * FROM alarm_entity_map WHERE entity_id = ?").get(entityId.trim())));
 });
-app.delete("/api/alarm-mappings/:entityId", requireAuth, requireAdminRole, (req, res) => {
+app.delete("/api/alarm-mappings/:entityId", requireAuth, requireAdminRole, requireHaAlarmsFeature, (req, res) => {
   db.prepare("DELETE FROM alarm_entity_map WHERE entity_id = ?").run(req.params.entityId);
   res.json({ ok: true });
 });
 
 // The inbound webhook itself. Home Assistant's rest_command POSTs here —
-// see the Alarms dashboard tab for the exact payload shape/example.
-app.post("/api/alarms", (req, res) => {
+// see the Alarm Dashboard for the exact payload shape/example. No
+// requireAuth (HA has no browser session), but still gated on the
+// component (v2) — a disabled deployment 404s a POST here exactly like
+// any other route that doesn't exist for it.
+app.post("/api/alarms", requireHaAlarmsFeature, (req, res) => {
   const provided = req.header("X-Api-Key") || (req.header("Authorization") || "").replace(/^Bearer\s+/i, "");
   if (!provided || provided !== getOrCreateWebhookKey()) {
     return res.status(401).json({ error: "Invalid or missing API key" });

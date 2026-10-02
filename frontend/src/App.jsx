@@ -1009,10 +1009,10 @@ const PAGE_INFO = {
     features: ["Grouped by work order", "Shows quantity needed, on hand, and the shortfall to buy", "Click through to the work order"],
   },
   alarms: {
-    purpose: "One dashboard for everything that needs attention right now, from any source: sensor-triggered alerts pushed in from Home Assistant (a leak, a smoke/CO alarm, a freezer running warm), a numeric PM checklist reading that came back outside its expected range, or an alarm raised by hand — upstream of Work Requests, since not every alert should become a work item.",
-    workflow: "Home Assistant does its own threshold/debounce/duration logic and POSTs to MaintEnhance's webhook only when it decides something's actually wrong; a numeric checklist step raises one automatically the moment a reading falls outside its configured min/max; anyone can also raise one by hand with \"Create alarm.\" Each open alarm can be acknowledged as a false alarm (with a reason, to help tune noisy sensors), turned into a new Work Request, or linked onto an existing Work Order as evidence.",
-    permissions: "Owners and Managers only. The webhook API key and sensor-to-asset mappings are configured here too. (Raising an alarm itself — automatically from a checklist, or manually — isn't role-gated, since anyone filling in a checklist needs to be able to trigger one.)",
-    features: ["Open queue sorted by severity and age, plus a resolved/false-alarm history", "\"Create alarm\" for a manual entry, independent of any sensor or checklist", "A numeric PM checklist step outside its expected range raises one automatically (deduped per work order/step)", "Acknowledge as false alarm, create Work Request, or link to an existing Work Order", "Entity-to-asset/location mapping so a repeat alert from the same sensor auto-links", "Webhook URL and API key, with a Home Assistant rest_command example", "Source-agnostic design — 'home_assistant', 'pm_checklist', and 'manual' today, room for more push sources later"],
+    purpose: "One dashboard for everything that needs attention right now, from any source: sensor-triggered alerts pushed in from Home Assistant, where that component is enabled for this deployment (a leak, a smoke/CO alarm, a freezer running warm), a numeric PM checklist reading that came back outside its expected range, or an alarm raised by hand — upstream of Work Requests, since not every alert should become a work item.",
+    workflow: "Where enabled, Home Assistant does its own threshold/debounce/duration logic and POSTs to MaintEnhance's webhook only when it decides something's actually wrong; a numeric checklist step raises one automatically the moment a reading falls outside its configured min/max; anyone can also raise one by hand with \"Create alarm.\" Each open alarm can be acknowledged as a false alarm (with a reason, to help tune noisy sensors), turned into a new Work Request, or linked onto an existing Work Order as evidence.",
+    permissions: "Owners and Managers only. Where the Home Assistant component is enabled, the webhook API key and sensor-to-asset mappings are also configured here, Owner-only for the key. (Raising an alarm itself — automatically from a checklist, or manually — isn't role-gated, since anyone filling in a checklist needs to be able to trigger one.)",
+    features: ["Open queue sorted by severity and age, plus a resolved/false-alarm history", "\"Create alarm\" for a manual entry, independent of any sensor or checklist", "A numeric PM checklist step outside its expected range raises one automatically (deduped per work order/step)", "Acknowledge as false alarm, create Work Request, or link to an existing Work Order", "Home Assistant webhook, API key, and entity-to-asset/location mapping — a componentized feature a deployment can turn off (v2)", "Source-agnostic design — 'home_assistant', 'pm_checklist', and 'manual' today, room for more push sources later"],
   },
 };
 
@@ -1140,7 +1140,7 @@ function Sidebar({ tab, setTab, open, role, counts, onNavigate }) {
         })}
       </div>
       <div style={{ padding: 14, borderTop: "1px solid rgba(255,255,255,0.12)", fontFamily: FONT_BODY, fontSize: 11, color: "#8FA0AF" }}>
-        v1.8 · matches the MaintEnhance functional spec
+        v2 · matches the MaintEnhance functional spec
       </div>
     </div>
   );
@@ -4127,7 +4127,15 @@ function PurchasingView({ data, goToOrder }) {
 const ALARM_SEVERITY_LABELS = { critical: "Critical", warning: "Warning", info: "Info" };
 const ALARM_SOURCE_LABELS = { home_assistant: "Home Assistant", manual: "Manual", pm_checklist: "PM checklist" };
 
-function AlarmsView({ data, update, role, currentUser, onAlarmsChanged }) {
+function AlarmsView({ data, update, role, currentUser, onAlarmsChanged, features }) {
+  // v2: the Home Assistant webhook integration is a componentized
+  // feature (see backend/features.js) — a deployment can turn it off
+  // entirely via FEATURE_HA_ALARMS. The rest of this dashboard (manual
+  // alarms, PM-checklist-triggered alarms) stays on regardless.
+  // `features` is undefined for a moment while the session is loading
+  // (api.me() hasn't resolved yet), so default to on rather than
+  // flashing the setup UI and then yanking it away.
+  const haAlarmsEnabled = !features || features.homeAssistantAlarms !== false;
   const dialog = useDialog();
   const [tab, setTab] = useState("open");
   const [alarms, setAlarms] = useState([]);
@@ -4145,8 +4153,13 @@ function AlarmsView({ data, update, role, currentUser, onAlarmsChanged }) {
     setLoading(true);
     api.listAlarms().then((rows) => { setAlarms(rows); setLoading(false); }).catch(() => setLoading(false));
   };
-  useEffect(() => { load(); api.listAlarmMappings().then(setMappings).catch(() => setMappings([])); }, []); // eslint-disable-line
-  useEffect(() => { if (role === "Owner") api.getWebhookKey().then((r) => setWebhookKey(r.key)).catch(() => {}); }, [role]);
+  useEffect(() => {
+    load();
+    if (haAlarmsEnabled) api.listAlarmMappings().then(setMappings).catch(() => setMappings([]));
+  }, []); // eslint-disable-line
+  useEffect(() => {
+    if (role === "Owner" && haAlarmsEnabled) api.getWebhookKey().then((r) => setWebhookKey(r.key)).catch(() => {});
+  }, [role, haAlarmsEnabled]);
 
   const afterChange = () => { load(); onAlarmsChanged && onAlarmsChanged(); };
 
@@ -4253,17 +4266,21 @@ function AlarmsView({ data, update, role, currentUser, onAlarmsChanged }) {
     <div>
       <SectionHeader
         title="Alarm Dashboard"
-        subtitle="Everything that needs attention right now: sensor alerts from Home Assistant, out-of-spec PM checklist readings, and manually raised alarms."
+        subtitle={
+          haAlarmsEnabled
+            ? "Everything that needs attention right now: sensor alerts from Home Assistant, out-of-spec PM checklist readings, and manually raised alarms."
+            : "Everything that needs attention right now: out-of-spec PM checklist readings and manually raised alarms."
+        }
         info={PAGE_INFO.alarms}
         action={
           <div style={{ display: "flex", gap: 8 }}>
             {isAdmin(role) && <Btn small variant="primary" onClick={openManualForm}><Plus size={13} /> Create alarm</Btn>}
-            {isAdmin(role) && <Btn small variant="ghost" onClick={() => setShowSetup((s) => !s)}><Key size={13} /> Webhook & sensor setup</Btn>}
+            {isAdmin(role) && haAlarmsEnabled && <Btn small variant="ghost" onClick={() => setShowSetup((s) => !s)}><Key size={13} /> Webhook & sensor setup</Btn>}
           </div>
         }
       />
 
-      {showSetup && isAdmin(role) && (
+      {showSetup && isAdmin(role) && haAlarmsEnabled && (
         <Panel style={{ padding: 16, marginBottom: 16 }}>
           {role === "Owner" && (
             <>
@@ -4904,7 +4921,7 @@ export default function MaintEnhanceApp() {
     parts: <PartsView data={data} update={update} role={role} currentUser={user.username} />,
     budget: <BudgetView data={data} />,
     purchasing: isAdmin(role) ? <PurchasingView data={data} goToOrder={goToOrder} /> : <Dashboard data={data} setTab={setTab} role={role} applyFilter={applyFilter} goToOrder={goToOrder} goToRequest={goToRequest} />,
-    alarms: isAdmin(role) ? <AlarmsView data={data} update={update} role={role} currentUser={user.username} onAlarmsChanged={refreshAlarmCount} /> : <Dashboard data={data} setTab={setTab} role={role} applyFilter={applyFilter} goToOrder={goToOrder} goToRequest={goToRequest} />,
+    alarms: isAdmin(role) ? <AlarmsView data={data} update={update} role={role} currentUser={user.username} onAlarmsChanged={refreshAlarmCount} features={user.features} /> : <Dashboard data={data} setTab={setTab} role={role} applyFilter={applyFilter} goToOrder={goToOrder} goToRequest={goToRequest} />,
     owner: role === "Owner" ? <OwnerToolsView data={data} update={update} currentUser={user} /> : <Dashboard data={data} setTab={setTab} role={role} applyFilter={applyFilter} goToOrder={goToOrder} goToRequest={goToRequest} />,
   };
 

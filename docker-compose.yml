@@ -32,6 +32,11 @@ services:
       - SMTP_FROM=${SMTP_FROM:-}
       - NOTIFY_WARRANTY_WINDOW_DAYS=${NOTIFY_WARRANTY_WINDOW_DAYS:-30}
       - NOTIFY_UNREVIEWED_WINDOW_DAYS=${NOTIFY_UNREVIEWED_WINDOW_DAYS:-3}
+      # Componentized features (v2) — see .env.example and
+      # backend/features.js. Set FEATURE_HA_ALARMS=false in a fork's own
+      # .env (or Portainer stack env) to ship that edition without the
+      # Home Assistant alarm integration.
+      - FEATURE_HA_ALARMS=${FEATURE_HA_ALARMS:-true}
     volumes:
       - homekeep_data:/data
     ports:

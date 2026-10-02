@@ -8,6 +8,14 @@
 > names throughout this file. That's expected for now — only the product
 > name shown to users has changed.
 
+> **v2 componentization note:** MaintEnhance now supports turning select
+> features off per deployment via env vars, so different "editions" (the
+> stock Home edition, a client/facility fork) can ship from the same
+> codebase without a code branch. So far this covers the Home Assistant
+> alarm integration (`FEATURE_HA_ALARMS`, see `.env.example`) — see
+> "Componentization / feature flags" in Section 12 for details and the
+> reasoning behind it.
+
 A standalone, single-container build of the MaintEnhance household CMMS: a
 Node/Express + SQLite backend with real multi-user accounts, serving a
 React frontend that's installable as a PWA on Android (or desktop).
@@ -434,10 +442,21 @@ The database volume is untouched by any of the above.
   building a Meter- or Seasonal-triggered starter entry isn't
   supported from the editor; create those by hand from Work Orders
   after running the wizard, same as before.
-- **No componentization / feature flags in this release.** v1.8 ships
-  every feature above as a normal, always-on part of the app — there's
-  no per-deployment toggle system yet. That's intentionally scoped for
-  a later v2 release (see Section 8 of the functional spec).
+- **Componentization / feature flags (v2).** The Home Assistant alarm
+  integration is now the first componentized feature — see the new
+  "Componentized features" callout above Section 1, and `FEATURE_HA_ALARMS`
+  in `.env.example`/`docker-compose.yml`. It's an env var read once at
+  startup, not an in-app Owner setting, and it's deliberately narrow for
+  now: only the webhook/API-key/entity-mapping piece is gated. Manual and
+  PM-checklist-triggered alarms (the rest of the Alarm Dashboard, v1.8)
+  stay on regardless — they aren't Home-Assistant-specific, so there was
+  no reason to make them optional. Turning the flag off makes the webhook
+  route, the webhook-key endpoints, and the sensor-mapping endpoints all
+  404 (indistinguishable from not existing), and hides the corresponding
+  "Webhook & sensor setup" UI. Toggling it doesn't delete anything —
+  historical Home-Assistant-sourced alarms and saved mappings stay in the
+  database and reappear if you turn it back on. This is meant to be the
+  pattern future componentized features follow, not a one-off.
 
 These are reasonable next additions if you want to keep building on
 this — the backend's REST API (`/api/*` in `server.js`) is a

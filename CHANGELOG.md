@@ -1,7 +1,8 @@
-# HomeKeep — Changelog
+# MaintEnhance (formerly HomeKeep) — Changelog
 
-Every entry below corresponds to one delivered `homekeep-docker` build
-(and, where noted, an updated functional spec). Versions **v0.1–v0.8**
+Every entry below corresponds to one delivered docker build — `homekeep-docker`
+through v1.7, `maintenhance-docker` from v1.8 onward (see the v1.8 entry
+below) — and, where noted, an updated functional spec. Versions **v0.1–v0.8**
 were pre-release builds. **v1** is the first official release, and is
 the point where the zip's top-level folder and the zip filename began
 carrying a matching `-vN` suffix, with the spec and this changelog
@@ -17,6 +18,31 @@ the Git commit's summary line) and a **Commit extended description**
 `git commit -m "<short>" -m "<extended>"`).
 
 ---
+
+## v2
+
+**Commit short description:** `v2: Componentization (feature-flag layer)`
+
+**Commit extended description:**
+v2 delivers the componentization work deferred from v1.8: a per-
+deployment feature-flag layer (`backend/features.js`) so different
+MaintEnhance "editions" — the stock Home edition, a client/facility
+fork like West Lincoln's — can enable only the subset of features they
+need, from one codebase, with no code branch. Flags are env vars read
+once at startup (`FEATURE_HA_ALARMS` for now, documented in
+`.env.example` and `docker-compose.yml`) rather than an in-app Owner
+setting, since which features a deployment offers is a decision made
+once when it's stood up, not something end users toggle daily. The
+Home Assistant alarm integration (webhook, API key, entity mapping —
+v1.7) is the first componentized feature: routes it owns now 404 when
+its flag is off, exactly as if they didn't exist, and the matching
+setup UI disappears from the Alarm Dashboard. Nothing is deleted when a
+component is turned off — historical Home-Assistant-sourced alarms and
+saved mappings stay in the database and reappear if it's re-enabled.
+The rest of the Alarm Dashboard (PM-checklist-triggered and manually-
+raised alarms, both v1.8) is **not** part of this component and stays
+on in every edition — it isn't Home-Assistant-specific. This is meant
+to establish the pattern future componentized features follow.
 
 ## v1.8
 
