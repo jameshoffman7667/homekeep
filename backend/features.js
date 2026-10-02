@@ -1,8 +1,8 @@
 // v2: the componentization / feature-flag layer.
 //
 // MaintEnhance is built and shipped from one codebase, but different
-// deployments ("editions" — the consumer Home edition, a Township/
-// municipal fork, future client forks) want a different subset of
+// deployments ("editions" — the consumer Home edition, a facilities-
+// oriented edition, future editions) want a different subset of
 // features active. Rather than branching the codebase per fork, each
 // optional feature is gated behind an env var read once at startup, so
 // a fork is just a docker-compose.yml (or Portainer stack env) with a
@@ -16,10 +16,13 @@
 // keeps a fork's identity in its deployment config, where it belongs.
 //
 // Adding a new componentized feature: add its flag here (default to
-// `true` so existing deployments keep today's behavior unchanged unless
-// they opt out), document the env var in .env.example and
+// `true` in the "home" edition so existing deployments keep today's
+// behavior unchanged unless they opt out; set each edition's default in
+// branding.config.js), document the env var in .env.example and
 // docker-compose.yml, and gate the relevant route(s)/UI on it — see
 // homeAssistantAlarms below and its use in server.js for the pattern.
+const { EDITION } = require("./edition");
+
 function readFlag(envVar, defaultValue) {
   const raw = process.env[envVar];
   if (raw == null || raw === "") return defaultValue;
@@ -30,11 +33,14 @@ const FEATURES = {
   // v1.7's Home Assistant sensor-alarm webhook integration (the inbound
   // webhook itself, the entity-to-asset/location mapping table, and the
   // webhook API key). Componentized in v2 so a fork with no Home
-  // Assistant story (e.g. a municipal/parks-and-rec deployment) can turn
+  // Assistant story (e.g. a facilities/parks-and-rec deployment) can turn
   // it off entirely, while keeping the rest of the Alarm Dashboard (v1.8's
   // PM-checklist-triggered and manually-raised alarms, which aren't
   // Home-Assistant-specific) always on regardless of this flag.
-  homeAssistantAlarms: readFlag("FEATURE_HA_ALARMS", true),
+  // Default comes from the deployment's edition preset (on for "home",
+  // off for "facilities" — see branding.config.js); the env var still
+  // overrides either way.
+  homeAssistantAlarms: readFlag("FEATURE_HA_ALARMS", EDITION.features && EDITION.features.homeAssistantAlarms !== false),
 };
 
 module.exports = { FEATURES };

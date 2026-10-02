@@ -10,7 +10,7 @@
 
 > **v2 componentization note:** MaintEnhance now supports turning select
 > features off per deployment via env vars, so different "editions" (the
-> stock Home edition, a client/facility fork) can ship from the same
+> stock Home edition, a client/facility edition) can ship from the same
 > codebase without a code branch. So far this covers the Home Assistant
 > alarm integration (`FEATURE_HA_ALARMS`, see `.env.example`) — see
 > "Componentization / feature flags" in Section 12 for details and the
@@ -56,6 +56,27 @@ Portainer stack built from this file alone (no repo, no Dockerfile,
 nothing else needed), always just work, whether the image comes from
 Docker Hub or one you built yourself. See "Prebuilding the image"
 below if you'd rather build than wait on Docker Hub.
+
+## Editions, branding & terminology (v2.1)
+
+One image serves every deployment. Set `EDITION=home` (default) or
+`EDITION=facilities`, then optionally override branding and wording with env
+vars (see `.env.example`): `BRAND_NAME`, `BRAND_SHORT_NAME`, `BRAND_TAGLINE`,
+`BRAND_LOGO_URL`, `BRAND_COLOR_*`, `ORG_NOUN`, `LOCATION_LEVEL_LABELS` (exactly
+six), `SITE_LEVEL_INDEX`. You can also drop a `branding.config.js` into the data
+volume (deep-merged over `backend/branding.config.js`). Precedence: shipped
+file < data-volume file < env vars.
+
+- Location labels are display-only; stored data uses stable keys, so you can
+  relabel later safely.
+- Logo: put it in the data volume under `branding/` and set
+  `BRAND_LOGO_URL=/branding/<file>`. The sidebar is dark, so use a light or
+  transparent logo.
+- `SEED_CATALOG_FILE` (or `pm-wizard-catalog.json` in the data volume) seeds the
+  PM wizard catalogue on first run only.
+- `/manifest.json` is now generated dynamically (name, theme colour). PWA
+  icons remain the default set.
+- Example facilities setup kit: `editions/facilities/`.
 
 ## 1. Prerequisites
 
@@ -380,6 +401,8 @@ The database volume is untouched by any of the above.
   not designed for multiple unrelated households on one instance.
 
 ## 12. Known simplifications vs. the full functional spec
+
+- **Editions (v2.1):** PWA home-screen icons can't be branded yet; long names need `BRAND_SHORT_NAME`; only the location hierarchy wording and the word "household" are configurable — other UI copy is shared across editions.
 
 - **Notifications** are in-app indicators plus an opt-in daily email
   digest (v1.2, requires SMTP configuration — see Section 6) — no push

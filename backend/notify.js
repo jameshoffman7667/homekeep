@@ -3,6 +3,7 @@
 // no SMTP_HOST set, this module does nothing but log once at startup.
 // See .env.example for the SMTP_* variables and README.md for setup.
 const db = require("./db");
+const { EDITION } = require("./edition");
 
 const SMTP_HOST = process.env.SMTP_HOST || "";
 const SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000; // once a day
@@ -103,7 +104,7 @@ async function runNotificationSweep() {
     const today = todayISO();
     const users = getNotifiableUsers();
     const t = getTransporter();
-    const from = process.env.SMTP_FROM || `MaintEnhance <maintenhance@${SMTP_HOST}>`;
+    const from = process.env.SMTP_FROM || `${EDITION.brand.name} <maintenhance@${SMTP_HOST}>`;
 
     for (const user of users) {
       const body = buildDigest(data, user, today);
@@ -112,8 +113,8 @@ async function runNotificationSweep() {
         await t.sendMail({
           from,
           to: user.email,
-          subject: "MaintEnhance — items that need attention",
-          text: `Hi ${user.username},\n\n${body}\n\n— MaintEnhance`,
+          subject: `${EDITION.brand.name} — items that need attention`,
+          text: `Hi ${user.username},\n\n${body}\n\n— ${EDITION.brand.name}`,
         });
         console.log(`[maintenhance] Sent notification digest to ${user.email}`);
       } catch (e) {

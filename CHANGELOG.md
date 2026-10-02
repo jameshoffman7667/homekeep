@@ -19,6 +19,13 @@ the Git commit's summary line) and a **Commit extended description**
 
 ---
 
+## v2.1
+
+**Commit short description:** `v2.1: Edition config, branding & terminology`
+
+**Commit extended description:**
+v2.1 extends v2's componentization with a per-deployment **edition layer**, driven by the facilities-edition decisions. `EDITION` (home | facilities) selects a preset in `backend/branding.config.js`; an optional `DATA_DIR/branding.config.js` and env vars (`BRAND_*`, `ORG_NOUN`, `LOCATION_LEVEL_LABELS`, `SITE_LEVEL_INDEX`) override it. Branding (name, logo, colours) is served at runtime from a public `/api/config`, so one image serves every fork; `/manifest.json` is now dynamic. Location hierarchy labels are configurable (Facilities: Organization, Site, Structure/Zone, Sub-zone, Area, Sub-area) but stored under stable keys, so relabelling later is display-only and Excel import accepts either. The Facilities edition turns Home Assistant off by default, and `SEED_CATALOG_FILE` loads facility PM templates as data on first run. Roles are unchanged. Adds `editions/facilities/` (env example, checklist, draft catalogue). PWA icons stay default.
+
 ## v2
 
 **Commit short description:** `v2: Componentization (feature-flag layer)`
@@ -27,7 +34,7 @@ the Git commit's summary line) and a **Commit extended description**
 v2 delivers the componentization work deferred from v1.8: a per-
 deployment feature-flag layer (`backend/features.js`) so different
 MaintEnhance "editions" — the stock Home edition, a client/facility
-fork like West Lincoln's — can enable only the subset of features they
+edition — can enable only the subset of features they
 need, from one codebase, with no code branch. Flags are env vars read
 once at startup (`FEATURE_HA_ALARMS` for now, documented in
 `.env.example` and `docker-compose.yml`) rather than an in-app Owner
@@ -62,9 +69,9 @@ a numeric PM checklist reading outside its configured expected range
 alarm by hand via "Create alarm." The PM Wizard's starter-maintenance
 catalogue — previously hardcoded — is now editable from Owner Tools
 (add/edit/remove, plus its own Excel backup/restore tab), so a
-household or client fork can tune the suggested list without a code
+household or client edition can tune the suggested list without a code
 change. This release intentionally excludes the feature-flag/
-componentization layer discussed for the West Lincoln client fork —
+componentization layer discussed for client editions —
 everything above is a normal, always-on part of the base app;
 componentizing it into optional, toggleable pieces is scoped for a
 future v2 release.

@@ -9,9 +9,46 @@ const SEED = require("./seed");
 const { hashPassword, verifyPassword, signToken, requireAuth, requireOwner } = require("./auth");
 const { startNotificationScheduler } = require("./notify");
 const { FEATURES } = require("./features");
+const { EDITION, publicConfig } = require("./edition");
 
 const app = express();
 const PORT = process.env.PORT || 8040;
+
+// v2.1: first-run seed = the empty base shape, plus (optionally) an
+// edition's starter PM Wizard catalogue loaded as data — from the file
+// named by SEED_CATALOG_FILE, or DATA_DIR/pm-wizard-catalog.json if that
+// exists. Only ever applied when a deployment is first set up; after
+// that the catalogue is edited in-app or replaced via the Excel import.
+function buildSeed() {
+  const seed = JSON.parse(JSON.stringify(SEED));
+  const configured = process.env.SEED_CATALOG_FILE && process.env.SEED_CATALOG_FILE.trim();
+  const file = configured
+    ? path.resolve(db.DATA_DIR, configured)
+    : path.join(db.DATA_DIR, "pm-wizard-catalog.json");
+  if (!fs.existsSync(file)) {
+    if (configured) console.error("[maintenhance] SEED_CATALOG_FILE not found:", file);
+    return seed;
+  }
+  try {
+    const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+    const list = Array.isArray(raw) ? raw : raw.entries;
+    const clean = (list || [])
+      .filter((i) => i && String(i.title || "").trim())
+      .map((i, n) => ({
+        id: i.id ? String(i.id) : `wc_seed${n + 1}`,
+        title: String(i.title).trim(),
+        description: String(i.description || ""),
+        frequencyValue: Number(i.frequencyValue) || 12,
+        frequencyUnit: ["days", "weeks", "months", "years"].includes(i.frequencyUnit) ? i.frequencyUnit : "months",
+        zones: i.zones === "all" || !Array.isArray(i.zones) ? "all" : i.zones.map(String),
+      }));
+    seed.pmWizardCatalog = clean;
+    console.log(`[maintenhance] Seeded ${clean.length} PM Wizard catalogue entries from ${file}`);
+  } catch (e) {
+    console.error("[maintenhance] Couldn't read the seed catalogue file:", e.message);
+  }
+  return seed;
+}
 
 // Photo/document attachments (v1.6) — stored on disk under the same
 // mounted-volume DATA_DIR the SQLite file lives in, so they survive
@@ -49,6 +86,13 @@ const COOKIE_OPTS = {
 /* -------------------------------------------------------------
    Auth & first-run setup
 ------------------------------------------------------------- */
+// v2.1: public (pre-login) edition config — brand, colours, terminology,
+// feature flags. The login screen, page title, and theme need this before
+// anyone is signed in; nothing in it is sensitive.
+app.get("/api/config", (req, res) => {
+  res.json(publicConfig(FEATURES));
+});
+
 app.get("/api/auth/setup-status", (req, res) => {
   const count = db.prepare("SELECT COUNT(*) AS n FROM users").get().n;
   res.json({ needsSetup: count === 0 });
@@ -68,7 +112,7 @@ app.post("/api/auth/setup", (req, res) => {
     hashPassword(password),
     "Owner"
   );
-  db.prepare("INSERT OR REPLACE INTO app_data (id, data) VALUES (1, ?)").run(JSON.stringify(SEED));
+  db.prepare("INSERT OR REPLACE INTO app_data (id, data) VALUES (1, ?)").run(JSON.stringify(buildSeed()));
   const user = { id, username: username.trim(), role: "Owner" };
   res.cookie("maintenhance_token", signToken(user), COOKIE_OPTS);
   res.json(user);
@@ -180,8 +224,9 @@ app.delete("/api/users/:id", requireAuth, requireOwner, (req, res) => {
 app.get("/api/data", requireAuth, (req, res) => {
   const row = db.prepare("SELECT data FROM app_data WHERE id = 1").get();
   if (!row) {
-    db.prepare("INSERT INTO app_data (id, data) VALUES (1, ?)").run(JSON.stringify(SEED));
-    return res.json(SEED);
+    const seed = buildSeed();
+    db.prepare("INSERT INTO app_data (id, data) VALUES (1, ?)").run(JSON.stringify(seed));
+    return res.json(seed);
   }
   res.json(JSON.parse(row.data));
 });
@@ -426,6 +471,27 @@ app.patch("/api/alarms/:id", requireAuth, requireAdminRole, (req, res) => {
    Serve the built frontend (single-container deployment)
 ------------------------------------------------------------- */
 const staticDir = path.join(__dirname, "public");
+
+// v2.1: the PWA manifest is generated from the edition config so the
+// installed app's name and theme colour match the deployment's branding.
+// Registered ahead of express.static so it wins over the built file.
+app.get("/manifest.json", (req, res) => {
+  let base = {};
+  try { base = JSON.parse(fs.readFileSync(path.join(staticDir, "manifest.json"), "utf8")); } catch (e) { /* dev/no build */ }
+  res.type("application/manifest+json").json({
+    ...base,
+    name: EDITION.brand.name,
+    short_name: EDITION.brand.shortName && EDITION.brand.name.length > 12 ? EDITION.brand.shortName : EDITION.brand.name,
+    description: `${EDITION.brand.name} — ${EDITION.brand.tagline || "maintenance management"}`,
+    theme_color: EDITION.brand.colors.primary,
+  });
+});
+// Logos and other per-deployment brand assets: drop files in
+// DATA_DIR/branding/ and reference them as /branding/<file> in
+// BRAND_LOGO_URL.
+const brandingDir = path.join(db.DATA_DIR, "branding");
+if (!fs.existsSync(brandingDir)) fs.mkdirSync(brandingDir, { recursive: true });
+app.use("/branding", express.static(brandingDir, { maxAge: "1h" }));
 app.use(express.static(staticDir));
 app.get("*", (req, res, next) => {
   if (req.path.startsWith("/api/")) return next();

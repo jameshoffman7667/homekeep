@@ -42,6 +42,12 @@ export const api = {
   updateUser: (id, patch) => request(`/api/users/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   removeUser: (id) => request(`/api/users/${id}`, { method: "DELETE" }),
 
+  // v2.1: public edition config (brand, colours, terminology, features).
+  getConfig: () => request("/api/config"),
+  // Logo/asset URLs from the config: "/branding/logo.png" needs the app's
+  // base path prepended on a subpath deploy; absolute URLs pass through.
+  brandUrl: (u) => (/^(https?:)?\/\//.test(u) ? u : withBase(u)),
+
   getData: () => request("/api/data"),
   saveData: (data) => request("/api/data", { method: "PUT", body: JSON.stringify(data) }),
 

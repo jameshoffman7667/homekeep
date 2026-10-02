@@ -215,6 +215,87 @@ const LEVEL_ICONS = {
   Area: Square,
   "Sub-area": Box,
 };
+
+/* ---- Edition config (v2.1) ----
+   Branding, terminology and feature flags come from the server's public
+   /api/config (see backend/edition.js + branding.config.js) and are applied
+   once, before the first render (see the MaintEnhanceApp wrapper at the
+   bottom). Location levels are STORED under the stable keys in
+   LOCATION_LEVELS above and only DISPLAYED via EDITION.terms.locationLevels,
+   so relabeling an edition never touches saved data. */
+const DEFAULT_EDITION = {
+  edition: "home",
+  brand: {
+    name: "MaintEnhance", shortName: "ME", tagline: "Maintenance Management", logoUrl: "",
+    colors: { primary: "#28415F", primaryDark: "#7FA3CC", accent: "#C85410", accentDark: "#E38C4E" },
+  },
+  terms: { orgNoun: "household", locationLevels: ["Property", "Structure", "Floor", "Room", "Area", "Sub-area"], siteLevelIndex: 0 },
+  features: { homeAssistantAlarms: true },
+};
+let EDITION = DEFAULT_EDITION;
+function applyEdition(cfg) {
+  if (!cfg) { EDITION = DEFAULT_EDITION; return; }
+  const levels = cfg.terms && Array.isArray(cfg.terms.locationLevels) && cfg.terms.locationLevels.length === LOCATION_LEVELS.length
+    ? cfg.terms.locationLevels : DEFAULT_EDITION.terms.locationLevels;
+  EDITION = {
+    ...DEFAULT_EDITION, ...cfg,
+    brand: { ...DEFAULT_EDITION.brand, ...(cfg.brand || {}), colors: { ...DEFAULT_EDITION.brand.colors, ...((cfg.brand || {}).colors || {}) } },
+    terms: { ...DEFAULT_EDITION.terms, ...(cfg.terms || {}), locationLevels: levels },
+    features: { ...DEFAULT_EDITION.features, ...(cfg.features || {}) },
+  };
+}
+function levelLabel(key) {
+  const i = LOCATION_LEVELS.indexOf(key);
+  return (i >= 0 && EDITION.terms.locationLevels[i]) || key;
+}
+// Accepts either a stored key or any edition's label (Excel imports may
+// carry either), returning the stored key.
+function levelKeyFromLabel(v) {
+  const t = String(v || "").trim().toLowerCase();
+  if (!t) return "";
+  const byKey = LOCATION_LEVELS.find((k) => k.toLowerCase() === t);
+  if (byKey) return byKey;
+  const i = EDITION.terms.locationLevels.findIndex((l) => l.toLowerCase() === t);
+  return i >= 0 ? LOCATION_LEVELS[i] : String(v).trim();
+}
+// The level that carries address / year built / climate zone and offers
+// the PM setup wizard — "Property" at home, "Site" in the facilities edition.
+function isSiteLevel(key) { return key === LOCATION_LEVELS[EDITION.terms.siteLevelIndex]; }
+// Swaps the word "household" for this edition's organisation noun.
+function term(str) {
+  if (typeof str !== "string") return str;
+  const n = EDITION.terms.orgNoun || "household";
+  return str.replace(/household/g, n).replace(/Household/g, n.charAt(0).toUpperCase() + n.slice(1));
+}
+function brandSlug() { return EDITION.brand.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "maintenhance"; }
+const SAFE_COLOR = /^[#a-zA-Z0-9(),.%\s-]+$/;
+function BrandStyle() {
+  const c = EDITION.brand.colors, d = DEFAULT_EDITION.brand.colors;
+  const ok = (v) => typeof v === "string" && SAFE_COLOR.test(v);
+  const light = [], dark = [];
+  if (ok(c.primary) && c.primary !== d.primary) light.push(`--hk-navy:${c.primary}`, `--hk-navy-soft:color-mix(in srgb, ${c.primary} 14%, var(--hk-panel))`);
+  if (ok(c.accent) && c.accent !== d.accent) light.push(`--hk-orange:${c.accent}`, `--hk-orange-soft:color-mix(in srgb, ${c.accent} 20%, var(--hk-panel))`);
+  if (ok(c.primaryDark) && c.primaryDark !== d.primaryDark) dark.push(`--hk-navy:${c.primaryDark}`, `--hk-navy-soft:color-mix(in srgb, ${c.primaryDark} 22%, var(--hk-panel))`);
+  if (ok(c.accentDark) && c.accentDark !== d.accentDark) dark.push(`--hk-orange:${c.accentDark}`, `--hk-orange-soft:color-mix(in srgb, ${c.accentDark} 22%, var(--hk-panel))`);
+  if (!light.length && !dark.length) return null;
+  // html:root outranks GlobalStyle's :root rules regardless of DOM order.
+  return (
+    <style>{`
+      ${light.length ? `html:root { ${light.join(";")} }` : ""}
+      ${dark.length ? `@media (prefers-color-scheme: dark) { html:root:not([data-theme="light"]) { ${dark.join(";")} } }
+      html:root[data-theme="dark"] { ${dark.join(";")} }` : ""}
+    `}</style>
+  );
+}
+function BrandMark({ size = 26, radius = 3 }) {
+  const url = EDITION.brand.logoUrl;
+  if (url) return <img src={api.brandUrl(url)} alt={EDITION.brand.name} style={{ height: size, width: "auto", maxWidth: size * 4, objectFit: "contain", flexShrink: 0 }} />;
+  return (
+    <div style={{ width: size, height: size, background: C.orange, borderRadius: radius, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+      <Wrench size={Math.round(size * 0.58)} color="#fff" />
+    </div>
+  );
+}
 const BOM_LEVELS = ["Component", "Sub-component", "Part"];
 const WO_TYPES = ["PM", "PM Base", "Benchmark", "Corrective", "Unplanned"];
 const WO_STATUSES = ["Open", "In Progress", "Completed", "Verified"];
@@ -805,15 +886,15 @@ function SectionHeader({ title, subtitle, action, info }) {
             </button>
           )}
         </div>
-        {subtitle && <p style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.inkSoft, margin: "4px 0 0" }}>{subtitle}</p>}
+        {subtitle && <p style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.inkSoft, margin: "4px 0 0" }}>{term(subtitle)}</p>}
       </div>
       {action}
       {showInfo && info && (
         <Modal title={`About ${title}`} onClose={() => setShowInfo(false)}>
-          <InfoBlock label="Purpose" text={info.purpose} />
-          <InfoBlock label="Workflow" text={info.workflow} />
-          <InfoBlock label="Permissions" text={info.permissions} />
-          <InfoBlock label="Features" items={info.features} />
+          <InfoBlock label="Purpose" text={term(info.purpose)} />
+          <InfoBlock label="Workflow" text={term(info.workflow)} />
+          <InfoBlock label="Permissions" text={term(info.permissions)} />
+          <InfoBlock label="Features" items={info.features && info.features.map(term)} />
         </Modal>
       )}
     </div>
@@ -867,7 +948,7 @@ function QrLabelModal({ asset, onClose }) {
       <body>
         <img src="${dataUrl}" />
         <h1>${asset.name}</h1>
-        <p>Scan to open this asset's record in MaintEnhance</p>
+        <p>Scan to open this asset's record in {EDITION.brand.name}</p>
         <script>window.onload = () => { window.print(); };</script>
       </body></html>
     `);
@@ -949,10 +1030,10 @@ const PAGE_INFO = {
     features: ["Stat cards for open work, pending requests, overdue work, and work due in 30 days", "Upcoming Work Orders list", "Work requests awaiting review", "7-day look-ahead strip", "Warranty-expiration warnings"],
   },
   locations: {
-    purpose: "The physical map of the household — every building, floor, room, and area — that everything else in MaintEnhance is organized around.",
-    workflow: "Build the tree top-down: a Property contains Structures, which contain Floors, Rooms, Areas, and Sub-areas. A new node defaults to the next level down from wherever you clicked +, though you can change it.",
+    purpose: "The physical map of the household — every building, floor, room, and area — that everything else in this system is organized around.",
+    get workflow() { const L = EDITION.terms.locationLevels; return `Build the tree top-down: a ${L[0]} contains ${L[1]}s, which contain ${L[2]}s, ${L[3]}s, ${L[4]}s, and ${L[5]}s. A new node defaults to the next level down from wherever you clicked +, though you can change it.`; },
     permissions: "Owners and Managers can add, rename, and remove locations. Everyone can view and use the tree to filter other pages.",
-    features: ["Expandable/collapsible hierarchy tree with expand-all/collapse-all", "Depth-aware default level when adding a node", "Asset counts per location", "Guards against deleting a location that still has children or assets", "PM setup wizard on a Property node — address/year-built/climate zone plus a starter set of recurring PM Bases scaled to that zone"],
+    get features() { const site = EDITION.terms.locationLevels[EDITION.terms.siteLevelIndex]; return ["Expandable/collapsible hierarchy tree with expand-all/collapse-all", "Depth-aware default level when adding a node", "Asset counts per location", "Guards against deleting a location that still has children or assets", `PM setup wizard on a ${site} node — address/year-built/climate zone plus a starter set of recurring PM Bases scaled to that zone`]; },
   },
   assets: {
     purpose: "A registry of everything in the home worth maintaining, and — for the ones worth tracking in detail — the components and parts that make them up.",
@@ -1111,12 +1192,10 @@ function Sidebar({ tab, setTab, open, role, counts, onNavigate }) {
     >
       <div style={{ padding: "20px 18px 14px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{ width: 26, height: 26, background: C.orange, borderRadius: 3, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-            <Wrench size={15} color="#fff" />
-          </div>
-          <span style={{ fontFamily: FONT_HEAD, fontWeight: 700, fontSize: 17, letterSpacing: "0.01em" }}>MaintEnhance</span>
+          <BrandMark size={26} />
+          <span style={{ fontFamily: FONT_HEAD, fontWeight: 700, fontSize: EDITION.brand.name.length > 14 ? 14.5 : 17, letterSpacing: "0.01em", lineHeight: 1.15, minWidth: 0 }}>{EDITION.brand.name}</span>
         </div>
-        <div style={{ fontFamily: FONT_BODY, fontSize: 11, color: "#B7C3CF", marginTop: 4 }}>Maintenance Management</div>
+        {EDITION.brand.tagline && <div style={{ fontFamily: FONT_BODY, fontSize: 11, color: "#B7C3CF", marginTop: 4 }}>{EDITION.brand.tagline}</div>}
       </div>
       <div style={{ flex: 1, padding: "6px 10px", overflowY: "auto" }}>
         {items.map((n) => {
@@ -1140,7 +1219,7 @@ function Sidebar({ tab, setTab, open, role, counts, onNavigate }) {
         })}
       </div>
       <div style={{ padding: 14, borderTop: "1px solid rgba(255,255,255,0.12)", fontFamily: FONT_BODY, fontSize: 11, color: "#8FA0AF" }}>
-        v2 · matches the MaintEnhance functional spec
+        v2.1 · matches the MaintEnhance functional spec
       </div>
     </div>
   );
@@ -1415,7 +1494,7 @@ function LocationsView({ data, update, role }) {
   const save = () => {
     if (!form.name.trim()) return;
     update((d) => {
-      const propFields = form.level === "Property" ? { address: form.address.trim(), yearBuilt: form.yearBuilt, climateZone: form.climateZone } : {};
+      const propFields = isSiteLevel(form.level) ? { address: form.address.trim(), yearBuilt: form.yearBuilt, climateZone: form.climateZone } : {};
       if (modal.mode === "add") {
         d.locations.push({ id: uid("loc"), name: form.name.trim(), level: form.level, parentId: modal.parentId || null, createdBy: null, ...propFields });
       } else {
@@ -1468,11 +1547,11 @@ function LocationsView({ data, update, role }) {
               )}
               <Icon size={14} color={C.inkFaint} />
               <span style={{ fontFamily: FONT_BODY, fontSize: 13.5, fontWeight: 600, color: C.ink, flex: 1 }}>{item.name}</span>
-              <Tag text={item.level} color={C.navy} soft={C.navySoft} />
+              <Tag text={levelLabel(item.level)} color={C.navy} soft={C.navySoft} />
               {assetCount > 0 && <span style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint }}>{assetCount} asset{assetCount > 1 ? "s" : ""}</span>}
               {isAdmin(role) && (
                 <div style={{ display: "flex", gap: 6 }}>
-                  {item.level === "Property" && (
+                  {isSiteLevel(item.level) && (
                     <button title="PM setup wizard" onClick={() => setWizardProperty(item)} style={{ background: "none", border: "none", cursor: "pointer", color: C.gold }}><Wand2 size={14} /></button>
                   )}
                   <button title="Add child" onClick={() => openAdd(item.id)} style={{ background: "none", border: "none", cursor: "pointer", color: C.navy }}><Plus size={15} /></button>
@@ -1510,7 +1589,7 @@ function LocationsView({ data, update, role }) {
           </Field>
           <Field label="Level">
             <select style={inputStyle} value={form.level} onChange={(e) => setForm({ ...form, level: e.target.value })}>
-              {LOCATION_LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}
+              {LOCATION_LEVELS.map((l) => <option key={l} value={l}>{levelLabel(l)}</option>)}
             </select>
           </Field>
           {modal.mode === "add" && (
@@ -1518,7 +1597,7 @@ function LocationsView({ data, update, role }) {
               Parent: {modal.parentId ? locationPath(data.locations, modal.parentId) : "— (top level)"}
             </div>
           )}
-          {form.level === "Property" && (
+          {isSiteLevel(form.level) && (
             <>
               <Field label="Address (optional)"><input style={inputStyle} value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} placeholder="123 Main St, Anytown, ST" /></Field>
               <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -1530,7 +1609,7 @@ function LocationsView({ data, update, role }) {
                 </Field>
               </div>
               <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 12 }}>
-                Used by the PM setup wizard (the wand icon next to a Property) to suggest a starter set of recurring maintenance.
+                Used by the PM setup wizard (the wand icon next to a {levelLabel(LOCATION_LEVELS[EDITION.terms.siteLevelIndex])}) to suggest a starter set of recurring maintenance.
               </div>
             </>
           )}
@@ -3687,8 +3766,8 @@ function ScheduleView({ data, role, currentUserId, goToOrder }) {
 const SHEET_SPECS = [
   {
     key: "locations", sheetName: "Locations", idPrefix: "loc",
-    toRow: (l) => ({ id: l.id, name: l.name, level: l.level, parentId: l.parentId || "", address: l.address || "", yearBuilt: l.yearBuilt || "", climateZone: l.climateZone || "", pmWizardRunAt: l.pmWizardRunAt || "", createdBy: l.createdBy || "" }),
-    fromRow: (r) => ({ id: r.id, name: String(r.name || ""), level: String(r.level || "Room"), parentId: r.parentId ? String(r.parentId) : null, address: String(r.address || ""), yearBuilt: String(r.yearBuilt || ""), climateZone: String(r.climateZone || ""), pmWizardRunAt: String(r.pmWizardRunAt || ""), createdBy: r.createdBy || null }),
+    toRow: (l) => ({ id: l.id, name: l.name, level: levelLabel(l.level), parentId: l.parentId || "", address: l.address || "", yearBuilt: l.yearBuilt || "", climateZone: l.climateZone || "", pmWizardRunAt: l.pmWizardRunAt || "", createdBy: l.createdBy || "" }),
+    fromRow: (r) => ({ id: r.id, name: String(r.name || ""), level: levelKeyFromLabel(r.level) || "Room", parentId: r.parentId ? String(r.parentId) : null, address: String(r.address || ""), yearBuilt: String(r.yearBuilt || ""), climateZone: String(r.climateZone || ""), pmWizardRunAt: String(r.pmWizardRunAt || ""), createdBy: r.createdBy || null }),
   },
   {
     key: "assets", sheetName: "Assets", idPrefix: "a",
@@ -3814,9 +3893,9 @@ function BackupTools({ data, update }) {
   const doExport = () => {
     const wb = XLSX.utils.book_new();
     const readme = XLSX.utils.aoa_to_sheet([
-      ["MaintEnhance backup"], ["Exported " + new Date().toLocaleString()], [""],
+      [`${EDITION.brand.name} backup`], ["Exported " + new Date().toLocaleString()], [""],
       ["Each tab is one data type. Edit rows in Excel and re-import this file to apply changes."],
-      ["To ADD a new row: leave its 'id' column blank — MaintEnhance assigns one on import."],
+      ["To ADD a new row: leave its 'id' column blank — the app assigns one on import."],
       ["To edit an existing row: keep its 'id' (and 'number'/'partNumber', where present) unchanged."],
       ["Don't rename the sheet tabs or column headers — import matches on those."],
     ]);
@@ -3826,7 +3905,7 @@ function BackupTools({ data, update }) {
       const ws = XLSX.utils.json_to_sheet(rows);
       XLSX.utils.book_append_sheet(wb, ws, spec.sheetName);
     });
-    XLSX.writeFile(wb, `maintenhance-backup-${todayISO()}.xlsx`);
+    XLSX.writeFile(wb, `${brandSlug()}-backup-${todayISO()}.xlsx`);
   };
 
   const doImport = async (file) => {
@@ -3853,7 +3932,7 @@ function BackupTools({ data, update }) {
       next.inventory.forEach((p) => { if (!p.partNumber) p.partNumber = ++maxPart; });
       next.counters = { wo: maxWo, wr: maxWr, part: maxPart };
 
-      const ok = await dialog.confirm("This will replace ALL current MaintEnhance data with the contents of this file. Continue?");
+      const ok = await dialog.confirm(`This will replace ALL current ${EDITION.brand.name} data with the contents of this file. Continue?`);
       if (!ok) return;
       update(() => next);
       await dialog.alertMsg("Import complete.");
@@ -4570,7 +4649,7 @@ function PmWizardCatalogEditor({ data, update }) {
         <div>
           <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink }}>PM Wizard starter catalogue</div>
           <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint, marginTop: 2 }}>
-            The suggested maintenance list the PM setup wizard offers when it's run on a Property. Editing this doesn't change any PM Base already created.
+            The suggested maintenance list the PM setup wizard offers when it's run on a {levelLabel(LOCATION_LEVELS[EDITION.terms.siteLevelIndex])}. Editing this doesn't change any PM Base already created.
           </div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
@@ -4678,11 +4757,11 @@ function AuthScreen({ onAuthed }) {
       <GlobalStyle />
       <Panel style={{ padding: 30, width: 380, maxWidth: "100%" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-          <div style={{ width: 28, height: 28, background: C.orange, borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center" }}><Wrench size={16} color="#fff" /></div>
-          <span style={{ fontFamily: FONT_HEAD, fontWeight: 700, fontSize: 19, color: C.ink }}>MaintEnhance</span>
+          <BrandMark size={28} radius={4} />
+          <span style={{ fontFamily: FONT_HEAD, fontWeight: 700, fontSize: 19, color: C.ink }}>{EDITION.brand.name}</span>
         </div>
         <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkFaint, marginBottom: 20 }}>
-          {mode === "setup" ? "Create the first Owner account to set up your household." : "Sign in to your household."}
+          {mode === "setup" ? term("Create the first Owner account to set up your household.") : term("Sign in to your household.")}
         </div>
         <form onSubmit={submit}>
           <Field label="Username" required><input style={inputStyle} value={username} onChange={(e) => setUsername(e.target.value)} autoFocus required /></Field>
@@ -4699,7 +4778,7 @@ function AuthScreen({ onAuthed }) {
 /* ============================================================
    APP SHELL
 ============================================================ */
-export default function MaintEnhanceApp() {
+function MaintEnhanceAppInner() {
   const [user, setUser] = useState(null);
   const [data, setDataRaw] = useState(null);
   // A scanned QR label (or any shared link) can land here as "#asset/<id>"
@@ -4898,7 +4977,7 @@ export default function MaintEnhanceApp() {
   if (!data) {
     return (
       <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: C.bg, fontFamily: FONT_BODY, color: C.inkSoft }}>
-        <GlobalStyle /><Loader2 className="animate-spin" size={18} style={{ marginRight: 8 }} /> Loading MaintEnhance…
+        <GlobalStyle /><Loader2 className="animate-spin" size={18} style={{ marginRight: 8 }} /> Loading {EDITION.brand.name}…
       </div>
     );
   }
@@ -4973,4 +5052,29 @@ export default function MaintEnhanceApp() {
       </div>
     </DialogProvider>
   );
+}
+
+/* ============================================================
+   EDITION BOOTSTRAP (v2.1)
+   Fetches the public edition config (brand, colours, terminology,
+   feature flags) and applies it before the app renders, so the login
+   screen and every label are correct from the first paint.
+============================================================ */
+export default function MaintEnhanceApp() {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    api.getConfig().then(applyEdition).catch(() => applyEdition(null)).finally(() => { if (alive) setReady(true); });
+    return () => { alive = false; };
+  }, []);
+  useEffect(() => {
+    if (!ready) return;
+    document.title = EDITION.brand.name;
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta && /^#[0-9a-fA-F]{3,8}$/.test(EDITION.brand.colors.primary)) meta.setAttribute("content", EDITION.brand.colors.primary);
+  }, [ready]);
+  if (!ready) {
+    return <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: C.bg }}><GlobalStyle /><Loader2 className="animate-spin" size={20} color={C.inkSoft} /></div>;
+  }
+  return (<><BrandStyle /><MaintEnhanceAppInner /></>);
 }
