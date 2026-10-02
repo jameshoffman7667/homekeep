@@ -1404,7 +1404,7 @@ function Sidebar({ tab, setTab, open, role, counts, onNavigate }) {
         })}
       </div>
       <div style={{ padding: 14, borderTop: "1px solid rgba(255,255,255,0.12)", fontFamily: FONT_BODY, fontSize: 11, color: "#8FA0AF" }}>
-        v2.4 · matches the MaintEnhance functional spec
+        v2.5 · matches the MaintEnhance functional spec
       </div>
     </div>
   );
@@ -6208,12 +6208,12 @@ const FEATURE_INFO = {
   myAccount: ["Your own email address and password.", "Select Open my account. Your email is used for notifications and password reset.", "Everyone except guests."],
   myHours: ["Hours you have logged when completing work orders: the last 7 days, last 30 days and all time, with recent entries.", "Hours are entered when you move a work order to Completed. Nothing to maintain here.", "Everyone except guests see their own; managers and owners also see everyone's."],
   hoursAll: ["Hours logged by every executor, with totals and recent entries.", "Use it for timesheets and to compare estimates with actual time.", "Managers and owners."],
-  sideList: ["Open work orders sorted by due date, waiting to be placed on the schedule.", "Drag a card onto a person's column (week or day view) or a day on the month view. Untick Unscheduled only to include work that already has a date. Red text means overdue.", "Managers and owners."],
+  sideList: ["Open work orders sorted by due date, waiting to be placed on the schedule.", "Drag a card onto a person's column (week or day view) or a day on the month view. On a touch screen, tap the card to pick it up, then tap where it should go (tap Cancel to put it down). Untick Unscheduled only to include work that already has a date. Red text means overdue.", "Managers and owners."],
   haWebhook: ["The address and key a Home Assistant automation uses to send alarms into this app.", "Copy the URL and key into a Home Assistant REST command. Each message becomes an alarm. Regenerating the key stops the old one working.", "Managers and owners; only Owners can see or regenerate the key."],
   sensorMaps: ["Links each Home Assistant sensor to the asset or location it watches.", "Add a mapping per sensor. Alarms from mapped sensors show on the right asset and on the location beacon.", "Managers and owners."],
   linkFill: ["Pastes a product or supplier web link and fills in name, maker, model, description and price.", "On an asset, vendor or part form, paste the link and select Fill in. Only empty fields are filled, each with a clear (x). Optional AI improves results.", "Managers and owners who can edit those forms; Owners turn it on or off."],
   autoSchedule: ["Schedules several Active work orders at once on their required-by dates.", "Tick the work orders on the board, then select Auto schedule and confirm. Work orders without a required-by date are skipped.", "Managers and owners."],
-  nameCards: ["One card per person. They stay in place so you can use them again and again.", "Drag a name onto a day or onto a week-number box, then choose a template or a one-time schedule.", "Managers and owners drag; everyone can see the team."],
+  nameCards: ["One card per person. They stay in place so you can use them again and again.", "Drag a name onto a day or onto a week-number box (on a touch screen, tap the name, then tap the day or week), then choose a template or a one-time schedule.", "Managers and owners drag; everyone can see the team."],
   // ---- pop-up windows
   qr: ["A printable label for an asset. Scanning its QR code with a phone opens the asset's record.", "Print the label and stick it on the equipment. Scanning it takes signed-in people straight to the asset, where they can start a work order.", "Everyone can view and print."],
   meter: ["Records a new reading of an asset's usage meter (hours, kilometres and so on).", "Enter the reading and date. Meter-based PM Bases generate a new job when the reading passes their interval.", "Managers and owners."],
@@ -6674,9 +6674,30 @@ const PC_CSS = `
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--pc-week:color-mix(in srgb,var(--hk-bg) 84%,#fff);}}
 :root[data-theme="dark"]{--pc-week:color-mix(in srgb,var(--hk-bg) 84%,#fff);}
 .pc-over{outline:2px dashed var(--hk-orange);outline-offset:-2px;}
-.pc-card{cursor:grab;} .pc-card:active{cursor:grabbing;}
+.pc-card{cursor:grab;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;} .pc-card:active{cursor:grabbing;}
+.pc-held{outline:2px solid var(--hk-orange)!important;outline-offset:1px;box-shadow:0 0 0 4px color-mix(in srgb,var(--hk-orange) 25%,transparent);}
+@media (pointer:coarse){.pc-card{cursor:pointer;}}
 `;
 const SLOT_H = 22;
+
+/* v2.5 touch support: tap (or tap and hold) a card to pick it up, then tap a target to place it.
+   Mouse drag and drop is unchanged; touch taps are recognised by event.nativeEvent.pointerType. */
+const HELD = { v: null, subs: new Set() };
+function setHeld(v) { HELD.v = v; HELD.subs.forEach((f) => f()); }
+function useHeld() {
+  const [, force] = useState(0);
+  useEffect(() => { const f = () => force((x) => x + 1); HELD.subs.add(f); return () => { HELD.subs.delete(f); }; }, []);
+  return HELD.v;
+}
+const sameHeld = (a, b) => !!a && !!b && a.t === b.t && a.id === b.id;
+// Returns true when the tap was used to pick up (or put down) the card, so the caller should not open it.
+function tapPick(e, payload) {
+  const pt = e && e.nativeEvent && e.nativeEvent.pointerType;
+  if (pt !== "touch" && !HELD.v) return false;
+  if (pt !== "touch" && HELD.v) return false; // a mouse click while holding bubbles to the drop target
+  if (HELD.v) { if (sameHeld(HELD.v, payload)) { e.stopPropagation(); setHeld(null); return true; } return false; }
+  e.stopPropagation(); setHeld(payload); return true;
+}
 
 function ExecMultiFilter({ staff, value, onChange, data }) {
   const [open, setOpen] = useState(false);
@@ -6719,12 +6740,14 @@ function PlanWoCard({ w, data, fromExec, draggable, onOpen, onRemove, tight, sty
   const under = underStaffed(w);
   const crew = crewOf(w);
   const done = isDoneStatus(w.status);
+  const held = useHeld();
+  const isHeld = sameHeld(held, { t: "wo", id: w.id });
   const tip = under ? `Needs ${crew} executor${crew === 1 ? "" : "s"}, ${execIdsOf(w).length} assigned` : "";
   return (
     <div
-      className="pc-card" draggable={!!draggable && !done} data-wo={w.id}
+      className={"pc-card" + (isHeld ? " pc-held" : "")} draggable={!!draggable && !done} data-wo={w.id}
       onDragStart={(e) => { e.dataTransfer.setData("text/plain", JSON.stringify({ t: "wo", id: w.id, from: fromExec || "" })); e.dataTransfer.effectAllowed = "move"; }}
-      onClick={() => onOpen && onOpen(w.id)} title={`${formatWoNum(w.number)} ${w.title}${tip ? " — " + tip : ""}`}
+      onClick={(e) => { if (draggable && !done && tapPick(e, { t: "wo", id: w.id, from: fromExec || "" })) return; onOpen && onOpen(w.id); }} title={`${formatWoNum(w.number)} ${w.title}${tip ? " — " + tip : ""}`}
       style={{
         background: C.panel, border: `1px ${under ? "dashed" : "solid"} ${under ? C.rust : C.line}`, borderLeft: `4px solid ${WO_TYPE_COLORS[w.type] || C.navy}`,
         borderRadius: 3, boxSizing: "border-box", padding: tight ? "1px 4px" : "4px 5px", marginBottom: tight ? 0 : 4, opacity: done ? 0.6 : 1, fontFamily: FONT_BODY, overflow: "hidden", minWidth: 0, ...style,
@@ -6815,6 +6838,13 @@ function PlanningCalendar({ kind, data, update, role, currentUserId, goToOrder, 
   });
 
   /* ----- drag/drop plumbing ----- */
+  const held = useHeld();
+  useEffect(() => {
+    const esc = (e) => { if (e.key === "Escape") setHeld(null); };
+    window.addEventListener("keydown", esc);
+    return () => { window.removeEventListener("keydown", esc); setHeld(null); };
+  }, []);
+  useEffect(() => { setHeld(null); }, [view, anchor]);
   const dz = (handler) => (canEdit ? {
     onDragOver: (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; e.currentTarget.classList.add("pc-over"); },
     onDragLeave: (e) => e.currentTarget.classList.remove("pc-over"),
@@ -6823,6 +6853,13 @@ function PlanningCalendar({ kind, data, update, role, currentUserId, goToOrder, 
       let p = null;
       try { p = JSON.parse(e.dataTransfer.getData("text/plain")); } catch { p = null; }
       if (p) handler(p, e);
+    },
+    onClick: (e) => {
+      const p = HELD.v;
+      if (!p) return;
+      e.stopPropagation();
+      setHeld(null);
+      handler(p, e);
     },
   } : {});
   const dropOnDay = (date, execId) => (p) => {
@@ -6871,7 +6908,7 @@ function PlanningCalendar({ kind, data, update, role, currentUserId, goToOrder, 
   const weekHeaderCell = (ws, h) => (
     <div
       data-weekhdr={ws} {...dz(dropOnWeek(ws))}
-      onClick={() => openWeek(ws)} title={`Open week ${isoWeekNum(ws)}${!labour && canEdit ? " — or drop a name card here to schedule the whole week" : ""}`}
+      onClick={(e) => { if (HELD.v) { dz(dropOnWeek(ws)).onClick(e); } else openWeek(ws); }} title={`Open week ${isoWeekNum(ws)}${!labour && canEdit ? " — or drop a name card here to schedule the whole week" : ""}`}
       style={{ cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2, fontFamily: FONT_BODY, fontSize: 11, fontWeight: 700, color: C.inkSoft, minHeight: h || 0 }}
     >
       <span>W{isoWeekNum(ws)}</span>
@@ -6906,7 +6943,7 @@ function PlanningCalendar({ kind, data, update, role, currentUserId, goToOrder, 
               return (
                 <div key={date} data-day={date} {...dz(dropOnDay(date, ""))} style={{ minHeight: 84, minWidth: 0, border: `1px solid ${C.lineSoft}`, borderRadius: 3, padding: 4, background: isToday(date) ? C.orangeSoft : C.panel, opacity: inMonth ? 1 : 0.55 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 4, marginBottom: 3 }}>
-                    <span onClick={() => openDay(date)} title="Open this day" style={{ cursor: "pointer", fontFamily: FONT_BODY, fontSize: 11.5, fontWeight: 700, color: isToday(date) ? C.orange : C.inkFaint }}>{parseISO(date).getDate()}</span>
+                    <span onClick={() => { if (!HELD.v) openDay(date); }} title="Open this day" style={{ cursor: "pointer", fontFamily: FONT_BODY, fontSize: 11.5, fontWeight: 700, color: isToday(date) ? C.orange : C.inkFaint }}>{parseISO(date).getDate()}</span>
                     {!labour && covBadge(date)}
                   </div>
                   {labour
@@ -6914,9 +6951,9 @@ function PlanningCalendar({ kind, data, update, role, currentUserId, goToOrder, 
                       {list.slice(0, 3).map((w) => {
                         const under = underStaffed(w);
                         return (
-                          <div key={w.id} draggable={canEdit && !isDoneStatus(w.status)} className="pc-card"
+                          <div key={w.id} draggable={canEdit && !isDoneStatus(w.status)} className={"pc-card" + (sameHeld(held, { t: "wo", id: w.id }) ? " pc-held" : "")}
                             onDragStart={(e) => { e.dataTransfer.setData("text/plain", JSON.stringify({ t: "wo", id: w.id, from: "" })); }}
-                            onClick={() => goToOrder(w.id)} title={`${formatWoNum(w.number)} ${w.title}${under ? " — needs more executors" : ""}`}
+                            onClick={(e) => { if (canEdit && !isDoneStatus(w.status) && tapPick(e, { t: "wo", id: w.id, from: "" })) return; goToOrder(w.id); }} title={`${formatWoNum(w.number)} ${w.title}${under ? " — needs more executors" : ""}`}
                             style={{ fontFamily: FONT_BODY, fontSize: 10.5, fontWeight: 600, color: "#fff", background: WO_TYPE_COLORS[w.type], borderRadius: 2, padding: "2px 4px", marginBottom: 2, display: "flex", alignItems: "center", gap: 3, minWidth: 0, outline: under ? "2px dashed var(--hk-rust)" : "none" }}>
                             <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{w.title}</span>
                             {execIdsOf(w).slice(0, 3).map((id) => <span key={id} title={nameOf(id)} style={{ width: 8, height: 8, borderRadius: 4, background: execColor(data, id), border: "1px solid #fff", flexShrink: 0 }} />)}
@@ -6967,7 +7004,7 @@ function PlanningCalendar({ kind, data, update, role, currentUserId, goToOrder, 
           {days.map((date) => (
             <div key={date} data-day={date} {...dz(dropOnDay(date))} style={{ minWidth: 0, background: isToday(date) ? C.orangeSoft : C.panel, border: `1px solid ${C.lineSoft}`, borderRadius: 3, minHeight: 200, padding: 4 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4, gap: 4 }}>
-                <span onClick={() => openDay(date)} style={{ cursor: "pointer", fontFamily: FONT_BODY, fontSize: 12, fontWeight: 700, color: C.ink }}>{parseISO(date).toLocaleDateString(undefined, { weekday: "short", day: "numeric" })}</span>
+                <span onClick={() => { if (!HELD.v) openDay(date); }} style={{ cursor: "pointer", fontFamily: FONT_BODY, fontSize: 12, fontWeight: 700, color: C.ink }}>{parseISO(date).toLocaleDateString(undefined, { weekday: "short", day: "numeric" })}</span>
                 {covBadge(date)}
               </div>
               {sortedShifts(date).map((s) => shiftChip(s))}
@@ -6997,7 +7034,7 @@ function PlanningCalendar({ kind, data, update, role, currentUserId, goToOrder, 
                   const off = id && wfOn && !worksOn(id, date) && mine.length === 0;
                   return (
                     <div key={date} data-cell={`${id || "unassigned"}|${date}`} {...(off ? {} : dz(dropOnDay(date, id)))} style={{ minWidth: 0, opacity: off ? 0.5 : 1 }}>
-                      <div onClick={() => openDay(date)} style={{ cursor: "pointer" }}>{colHeader(id, date, parseISO(date).toLocaleDateString(undefined, { weekday: "short", day: "numeric" }))}</div>
+                      <div onClick={() => { if (!HELD.v) openDay(date); }} style={{ cursor: "pointer" }}>{colHeader(id, date, parseISO(date).toLocaleDateString(undefined, { weekday: "short", day: "numeric" }))}</div>
                       <div style={{ minHeight: 70, background: off ? C.panelAlt : (isToday(date) ? C.orangeSoft : C.panel), border: `1px solid ${C.lineSoft}`, borderTop: "none", borderRadius: "0 0 3px 3px", padding: 3 }}>
                         {off ? <div style={{ fontFamily: FONT_BODY, fontSize: 10, color: C.inkFaint, textAlign: "center", paddingTop: 6 }}>Off</div> : woList(mine, date, id, id)}
                       </div>
@@ -7161,23 +7198,35 @@ function PlanningCalendar({ kind, data, update, role, currentUserId, goToOrder, 
       </div>
       {!labour && (
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }} data-namecards>
-          <span style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginRight: 4 }}>{canEdit ? "Drag a name onto a day or a week:" : "Team:"}<InfoTip k="nameCards" /></span>
+          <span style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginRight: 4 }}>{canEdit ? "Drag (or tap, then tap the day or week) a name:" : "Team:"}<InfoTip k="nameCards" /></span>
           {staff.filter((u) => !execSel.length || execSel.includes(u.id)).map((u) => {
             const col = execColor(data, u.id);
             return (
-              <div key={u.id} data-namecard={u.id} className={canEdit ? "pc-card" : ""} draggable={canEdit}
+              <div key={u.id} data-namecard={u.id} className={(canEdit ? "pc-card" : "") + (sameHeld(held, { t: "exec", id: u.id }) ? " pc-held" : "")} draggable={canEdit}
+                onClick={(e) => { if (canEdit) tapPick(e, { t: "exec", id: u.id }); }}
                 onDragStart={(e) => { e.dataTransfer.setData("text/plain", JSON.stringify({ t: "exec", id: u.id })); e.dataTransfer.effectAllowed = "move"; }}
                 style={{ background: col, color: textOn(col), fontFamily: FONT_BODY, fontSize: 12.5, fontWeight: 700, padding: "5px 12px", borderRadius: 14 }}>{u.username}</div>
             );
           })}
         </div>
       )}
+      {held && (() => {
+        const hw = held.t === "wo" ? (data.workOrders || []).find((x) => x.id === held.id) : null;
+        const label = held.t === "wo" ? (hw ? `${formatWoNum(hw.number)} ${hw.title}` : "work order") : nameOf(held.id);
+        return (
+          <div data-heldbar style={{ position: "sticky", top: 60, zIndex: 20, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", background: C.orangeSoft, border: `1px solid ${C.orange}`, borderRadius: 4, padding: "6px 10px", marginBottom: 10, fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink }}>
+            <span style={{ flex: 1, minWidth: 160 }}><b>Holding:</b> {label} — {held.t === "wo" ? (labour ? "tap a day, a person's day or an hour slot to place it." : "tap a day to place it.") : "tap a day or a week to schedule them."}</span>
+            {held.t === "wo" && <Btn small variant="ghost" onClick={() => { const id = held.id; setHeld(null); goToOrder(id); }}>Open</Btn>}
+            <Btn small variant="ghost" onClick={() => setHeld(null)}>Cancel</Btn>
+          </div>
+        );
+      })()}
       <div style={{ display: "grid", gridTemplateColumns: labour && canEdit ? "minmax(0,1fr) 236px" : "minmax(0,1fr)", gap: 14, alignItems: "start" }}>
         <div style={{ minWidth: 0 }}>{view === "month" ? renderMonth() : view === "week" ? renderWeek() : renderDay()}</div>
         {labour && canEdit && (
           <Panel style={{ padding: 10, position: "sticky", top: 70, maxHeight: "calc(100vh - 100px)", overflowY: "auto" }}>
             <div data-sidelist style={{ fontFamily: FONT_HEAD, fontSize: 13.5, fontWeight: 700, color: C.ink }}>Work orders to place<InfoTip k="sideList" /></div>
-            <div style={{ fontFamily: FONT_BODY, fontSize: 11, color: C.inkFaint, margin: "2px 0 6px" }}>By due date. Drag onto a person (week or day view) or a calendar day.</div>
+            <div style={{ fontFamily: FONT_BODY, fontSize: 11, color: C.inkFaint, margin: "2px 0 6px" }}>By due date. Drag (or tap, then tap the target) onto a person (week or day view) or a calendar day.</div>
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontFamily: FONT_BODY, fontSize: 12, color: C.ink, marginBottom: 8 }}>
               <input type="checkbox" checked={unschedOnly} onChange={(e) => setUnschedOnly(e.target.checked)} /> Unscheduled only
             </label>

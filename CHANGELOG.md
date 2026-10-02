@@ -19,12 +19,19 @@ the Git commit's summary line) and a **Commit extended description**
 
 ---
 
+## v2.5
+
+**Commit short description:** `v2.5: Touch drag-and-drop, split storage`
+
+**Commit extended description:**
+v2.5 adds touch support to Labour assignment and Workforce schedule. Tap (or tap and hold) a work order card, side-list card or person's name to pick it up; it is highlighted and a banner shows what you hold, with Open and Cancel buttons. Then tap a day, a person's day, a week box or an hour slot to place it. Tapping the held card again, Cancel or Escape puts it down; changing the view also cancels. Mouse drag and drop is unchanged, and a mouse click still opens the work order. Storage is split in two: the database stays on the fast /data volume (SSD), while photo attachments, nightly snapshots and temporary import files move to a /files volume that can sit on a disc pool. New optional variables FILES_DIR, ATTACH_DIR, BACKUP_DIR and TMP_DIR; FILES_DIR defaults to DATA_DIR so single-volume installs still work. Compose takes DATA_PATH and FILES_PATH to choose host folders. Fresh installs start with empty volumes. Tested in a browser harness only, not in a live deployment; the storage split was not run against a real database.
+
 ## v2.4
 
 **Commit short description:** `v2.4: Labour assignment & workforce schedule`
 
 **Commit extended description:**
-v2.4 renames Owner Tools to Tools, with cards by role (executors: My account, My hours; managers add Executor colours, Shift templates, hours report; owners keep the rest). Three Owner toggles, off by default: execution-based scheduling and time keeping, workforce scheduling, hourly labour assignment (needs both others). Scheduling renames Schedule to Labour assignment: work orders gain estimated hours, crew required and multiple executors; Month, Week and Day views, filters, a due-date side list, under-staffed flags and a required hours-worked prompt on completion. Workforce schedule adds daily and weekly shift templates, drag-and-drop names, overnight shifts, coverage-gap warnings and PDF export; hourly mode adds a 30-minute grid. New data is in Excel export and import. Also: a Help tab opens the training guide with a linked contents list (Word copies downloadable), (i) info buttons now cover cards, pages and pop-ups, and both training guides are updated for v2.4. The Docker image, compose service and container are renamed maintenhance (data volume unchanged). Tested in a browser harness only, not in a live deployment.
+v2.4 renames Owner Tools to Tools, with cards by role (executors: My account, My hours; managers add Executor colours, Shift templates, hours report; owners keep the rest). Three Owner toggles, off by default: execution-based scheduling and time keeping, workforce scheduling, hourly labour assignment (needs both others). Scheduling renames Schedule to Labour assignment: work orders gain estimated hours, crew required and multiple executors; Month, Week and Day views, filters, a due-date side list, under-staffed flags and a required hours-worked prompt on completion. Workforce schedule adds daily and weekly shift templates, drag-and-drop names, overnight shifts, coverage-gap warnings and PDF export; hourly mode adds a 30-minute grid. New data is in Excel export and import. Also: a Help tab opens the training guide with a linked contents list (Word copies downloadable), (i) info buttons now cover cards, pages and pop-ups, and both training guides are updated for v2.4. Everything is renamed maintenhance (image, container, volume, database file, packages), a fresh-start release. Tested in a browser harness only, not in a live deployment.
 
 ## v2.3
 

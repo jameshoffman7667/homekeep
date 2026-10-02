@@ -41,6 +41,8 @@ services:
       # newest BACKUP_KEEP (default 7); set BACKUP_SNAPSHOTS=false to turn off.
       - BACKUP_KEEP=${BACKUP_KEEP:-7}
       - BACKUP_SNAPSHOTS=${BACKUP_SNAPSHOTS:-true}
+      - DATA_DIR=/data
+      - FILES_DIR=/files
       # Optional: lets the Owner switch on AI-assisted "fill in from a link"
       # (Owner Tools -> Features). Read by the server only, never sent to
       # the browser. Blank = the plain page-details fallback is used.
@@ -49,10 +51,13 @@ services:
       # Name, logo, colours, location labels and feature toggles are set
       # in the app by the Owner (Owner Tools), not here.
     volumes:
-      # The volume key is deliberately still "homekeep_data" so existing
-      # installs keep their data when upgrading. Renaming it would make
-      # Docker create a new, empty volume.
-      - homekeep_data:/data
+      # Fast storage (SSD): the SQLite database. Set DATA_PATH in .env to a
+      # host folder to place it on a specific disk; blank = a named volume.
+      - ${DATA_PATH:-maintenhance_data}:/data
+      # Slow storage (e.g. a disc pool): photos, nightly snapshots and temp
+      # import files. Set FILES_PATH in .env to a host folder on the pool;
+      # blank = a named volume.
+      - ${FILES_PATH:-maintenhance_files}:/files
     ports:
       # Set PORT in your .env (or Portainer's stack environment variables)
       # to change this — both the host and container side move together.
@@ -60,4 +65,5 @@ services:
       - "${PORT:-8040}:${PORT:-8040}"
 
 volumes:
-  homekeep_data:
+  maintenhance_data:
+  maintenhance_files:

@@ -5,9 +5,9 @@
 //
 // Everything below is computed from self.registration.scope rather than
 // hardcoded absolute paths, so this works whether the app is deployed at
-// the domain root or under a subpath (e.g. /homekeep/).
+// the domain root or under a subpath (e.g. /maintenhance/).
 const SCOPE = self.registration.scope;
-const CACHE_NAME = "homekeep-shell-v1";
+const CACHE_NAME = "maintenhance-shell-v1";
 const SHELL_URLS = ["", "index.html", "manifest.json", "icon-192.png", "icon-512.png"].map(
   (p) => new URL(p, SCOPE).toString()
 );

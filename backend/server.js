@@ -29,7 +29,7 @@ function buildSeed() {
 // attachment's id (not the file itself) is ever stored in the app_data
 // JSON blob — see PUT /api/data's 2mb body limit above, which a photo
 // would blow past in no time if it were embedded inline.
-const ATTACH_DIR = path.join(db.DATA_DIR, "attachments");
+const ATTACH_DIR = db.ATTACH_DIR; // see FILES_DIR in db.js
 if (!fs.existsSync(ATTACH_DIR)) fs.mkdirSync(ATTACH_DIR, { recursive: true });
 const attachmentUpload = multer({
   storage: multer.diskStorage({

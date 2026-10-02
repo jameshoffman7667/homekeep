@@ -55,8 +55,8 @@ function stamp(d = new Date()) {
 }
 
 function register(app, { requireAuth, requireOwner, ATTACH_DIR }) {
-  const TMP_DIR = path.join(db.DATA_DIR, "tmp");
-  const SNAP_DIR = path.join(db.DATA_DIR, "backups");
+  const TMP_DIR = db.TMP_DIR;
+  const SNAP_DIR = db.BACKUP_DIR;
   for (const d of [TMP_DIR, SNAP_DIR]) if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
   // Leftover staged restores from a previous run are stale.
   for (const f of fs.readdirSync(TMP_DIR)) if (f.startsWith("stage-")) fs.unlink(path.join(TMP_DIR, f), () => {});

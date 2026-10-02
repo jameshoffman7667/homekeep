@@ -326,6 +326,10 @@ Three Owner toggles under Tools → Features, all default off. With all three of
 - **Help tab:** a menu item at the bottom of the left menu, visible to every signed-in role. It opens the training guide inside the app as a page with a linked table of contents (one link per subject and screen) and a switch between the Executor guide and the Manager & Owner guide (managers and owners open the latter by default). Each guide can be downloaded as a Word (.docx) file. The guides are bundled with the app as static files under `help/`.
 - **Information buttons (i):** a small round button beside page titles, card headings and pop-up titles opens a short note covering the purpose of the area, how to use it, and who may use it. The note opens above any pop-up already on screen without closing it. Buttons cover every page, card, form and dialog, including the v2.4 scheduling features. Terminology follows the Owner's branding settings.
 
+### 3.19 Touch support and split storage (v2.5)
+- **Touch (tap to pick up, tap to place):** on touch screens, tapping a work order card (calendar or side list) or a person's name card picks it up. The card is highlighted and a banner shows what is held, with Open (work orders) and Cancel. Tapping a drop target places it: a calendar day, a person's day cell, a week-number box, or an hour slot in the hourly grid, with the same results and validation as a mouse drop. Tapping the held card again, Cancel, Escape or changing the view puts it down. Touch devices open a work order from the banner's Open button (a tap picks up instead). Mouse behaviour is unchanged.
+- **Split storage:** `DATA_DIR` (default `/data`) holds the database and should be on fast local storage. `FILES_DIR` (default `/files` in the image; falls back to `DATA_DIR`) holds `attachments/`, `backups/` and `tmp/` and may be on slower storage. `ATTACH_DIR`, `BACKUP_DIR` and `TMP_DIR` override individual folders. `docker-compose.yml` mounts two volumes, selectable per host folder with `DATA_PATH` and `FILES_PATH`.
+
 ## 4. Non-Functional Requirements
 
 | Category | Requirement |

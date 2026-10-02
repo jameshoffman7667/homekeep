@@ -1,14 +1,11 @@
-# HomeKeep — self-hosted deployment
+# MaintEnhance — self-hosted deployment
 
-> **v1.8 branding note:** the in-app UI is now branded **MaintEnhance**
-> (short form "ME") — this was previously called HomeKeep. The repo name,
-> npm package names below are
-> *not* renamed yet, so you'll still see "homekeep" in clone URLs and in the
-> `homekeep_data` volume name (kept so existing data carries over).
-> **v2.4:** the Docker image, compose service and container are now named
-> `maintenhance` (see "Upgrading from the homekeep image name" below).
+> **MaintEnhance** (short form "ME") is the product name used throughout.
+> (Versions before v1.8 were called HomeKeep; see CHANGELOG.md.)
 
-> **v2.4 note:** Owner Tools is now **Tools** (cards depend on your role). Three optional Owner toggles under Tools → Features add execution-based scheduling and time keeping (Labour assignment with Month/Week/Day views, estimates, crews, hours worked), workforce scheduling (shift templates, schedule and PDF export) and hourly labour assignments. The in-app Help tab serves the training guides from `frontend/public/help/`, with Word copies alongside.
+> **v2.5 note:** touch screens can now use the planning calendars (tap a card, tap where it goes), and storage is split into a fast `/data` volume (database) and a slower `/files` volume (photos, snapshots, temp files) — see §9 and `.env.example`.
+>
+> **v2.4 note:** the image, container, volume, repo and database file are now all named `maintenhance` — this is a **fresh-start** release (data from earlier versions is not carried over). Owner Tools is now **Tools** (cards depend on your role). Three optional Owner toggles under Tools → Features add execution-based scheduling and time keeping (Labour assignment with Month/Week/Day views, estimates, crews, hours worked), workforce scheduling (shift templates, schedule and PDF export) and hourly labour assignments. The in-app Help tab serves the training guides from `frontend/public/help/`, with Word copies alongside.
 >
 > **v2.3 note:** the PM setup wizard now draws on one combined catalogue (Type and sub type filters), the Alarms page has a location filter with flashing beacons, and asset/vendor/part forms can fill in from a pasted link (optional Gemini AI via `GEMINI_API_KEY`; Owner Tools → Features).
 >
@@ -28,7 +25,7 @@ support, or a small cloud VM.
 ## What's inside
 
 ```
-homekeep/
+maintenhance/
 ├── .github/workflows/
 │   └── docker-publish.yml   # CI: builds & pushes the image to Docker Hub on push
 ├── Dockerfile              # multi-stage build: frontend build → backend runtime
@@ -83,12 +80,12 @@ Secrets stay in the Docker environment (`JWT_SECRET`, `SMTP_*`).
 ## 2. Publish this repo to GitHub
 
 ```bash
-cd homekeep
+cd maintenhance
 git init
 git add .
 git commit -m "Initial commit"
 git branch -M main
-git remote add origin https://github.com/jameshoffman7667/homekeep.git
+git remote add origin https://github.com/jameshoffman7667/maintenhance.git
 git push -u origin main
 ```
 
@@ -124,7 +121,7 @@ credentials are needed to pull it. If you'd rather keep it private, see
 ## 3. Quick start — running it yourself with Docker Compose
 
 ```bash
-cd homekeep
+cd maintenhance
 cp .env.example .env
 # Edit .env and set JWT_SECRET to a long random string, e.g.:
 #   openssl rand -hex 32
@@ -154,7 +151,7 @@ the image yourself and either use it locally or push it up.
 
 **Build it:**
 ```bash
-cd homekeep
+cd maintenhance
 docker build -t maintenhance:latest .
 ```
 (On Windows, run this from PowerShell or Command Prompt with Docker
@@ -179,10 +176,10 @@ docker push <your-dockerhub-username>/maintenhance:latest
 Then point `docker-compose.yml`'s `image:` line at that tag.
 
 **Building for a subpath deployment** (e.g. serving at
-`example.com/homekeep/` — see §7): pass `VITE_BASE_PATH` as a build
+`example.com/maintenhance/` — see §7): pass `VITE_BASE_PATH` as a build
 argument, since it has to be baked into the frontend at build time:
 ```bash
-docker build --build-arg VITE_BASE_PATH=/homekeep/ -t maintenhance:latest .
+docker build --build-arg VITE_BASE_PATH=/maintenhance/ -t maintenhance:latest .
 ```
 Leave it off for a normal root deployment (the default).
 
@@ -216,7 +213,7 @@ just pulls (or finds locally) the image named in `image:`.
 
 1. **Stacks → Add stack**, build method **Repository**.
 2. **Repository URL:** your GitHub repo (e.g.
-   `https://github.com/jameshoffman7667/homekeep`).
+   `https://github.com/jameshoffman7667/maintenhance`).
 3. **Compose path:** `docker-compose.yml` (the default).
 4. Under **Environment variables**, add:
    - `JWT_SECRET` → a long random string (e.g. output of `openssl rand -hex 32`)
@@ -323,10 +320,10 @@ a domain (or subdomain) pointed at your home's public IP:
   containers via Docker labels; a good fit if you're already running
   several services this way.
 
-For a **subpath** deployment (e.g. `example.com/homekeep/` rather than
+For a **subpath** deployment (e.g. `example.com/maintenhance/` rather than
 a dedicated subdomain) specifically: build the image with
-`VITE_BASE_PATH=/homekeep/` (see §4), and configure your reverse proxy
-to strip the `/homekeep` prefix before forwarding to the container
+`VITE_BASE_PATH=/maintenhance/` (see §4), and configure your reverse proxy
+to strip the `/maintenhance` prefix before forwarding to the container
 (Caddy calls this `handle_path`; other proxies have equivalent
 "strip prefix" options) — otherwise the app's own asset requests won't
 line up with what the proxy is expecting. A dedicated subdomain avoids
@@ -349,21 +346,39 @@ without router configuration or a reverse proxy of your own. Set
 
 ## 9. Data & backups
 
-All data lives in the `homekeep_data` Docker volume — the SQLite
-database plus, as of v1.6, an `attachments/` folder of uploaded work
-request photos. The command below backs up the whole volume, so both
-are covered automatically:
+Storage is split into two volumes (v2.5):
+
+| Volume (container path) | Holds | Put it on |
+| --- | --- | --- |
+| `maintenhance_data` (`/data`) | the SQLite database `maintenhance.db` and its journal files | fast storage (SSD) |
+| `maintenhance_files` (`/files`) | `attachments/` (work-request photos), `backups/` (nightly snapshots), `tmp/` (import staging) | slower storage (disc pool) |
+
+By default both are Docker named volumes. To place them on specific disks,
+set `DATA_PATH` and `FILES_PATH` in `.env` (or the Portainer stack variables)
+to host folders, e.g. `DATA_PATH=/mnt/ssd/maintenhance` and
+`FILES_PATH=/mnt/pool/maintenhance`. Create the folders first. Do not put the
+database on a network share (NFS/SMB): SQLite needs a local filesystem.
+
+Running the image without compose? `FILES_DIR` defaults to `DATA_DIR`, so a
+single volume still works. `ATTACH_DIR`, `BACKUP_DIR` and `TMP_DIR` can
+override individual folders.
+
+Back up both volumes (the database is the important one; the nightly
+snapshots are a safe copy of it, so keeping them on the pool also protects
+against an SSD failure):
 
 ```bash
-docker run --rm -v homekeep_homekeep_data:/data -v "$PWD":/backup \
-  alpine tar czf /backup/maintenhance-backup-$(date +%F).tar.gz -C /data .
+docker run --rm -v maintenhance_maintenhance_data:/data -v "$PWD":/backup \
+  alpine tar czf /backup/maintenhance-data-$(date +%F).tar.gz -C /data .
+docker run --rm -v maintenhance_maintenhance_files:/data -v "$PWD":/backup \
+  alpine tar czf /backup/maintenhance-files-$(date +%F).tar.gz -C /data .
 ```
 
-(Volume name may be prefixed differently depending on your project
-folder name — run `docker volume ls` to check.)
+(Volume names are prefixed by your stack or folder name — run
+`docker volume ls` to check. With host folders, just back up the folders.)
 
-To restore, reverse the tar command into a fresh volume before starting
-the container.
+To restore, reverse the tar commands into fresh volumes before starting the
+container.
 
 MaintEnhance also has its own in-app backup (v2.2), independent of the above.
 As an Owner, **Owner Tools → Backup & bulk edit** offers:
@@ -461,10 +476,7 @@ The database volume is untouched by any of the above.
   `DATA_DIR` volume (Section 9) if you want them covered. The open-alarm
   count badge is polled every 30 seconds while the app is open, not
   pushed to the browser in real time.
-- **v1.8 rebrand (HomeKeep → MaintEnhance)** is UI/product-name only —
-  see the note at the top of this file for what's deliberately left
-  unchanged (repo name, Docker Hub image, npm package names, PWA
-  manifest). Two upgrade side effects: the session cookie was renamed,
+- **v1.8 rebrand (HomeKeep → MaintEnhance)** was a product-name change. Two upgrade side effects: the session cookie was renamed,
   so **everyone needs to log back in once** after upgrading to v1.8;
   and the offline work-request queue's local IndexedDB store was also
   renamed, so if a device has requests still queued (not yet synced)
@@ -482,16 +494,3 @@ The database volume is untouched by any of the above.
   supported from the editor; create those by hand from Work Orders
   after running the wizard, same as before.
 - **Optional features (v2.2).** The Home Assistant alarm integration is switched on or off by the Owner in Owner Tools → Features (no restart needed). Only the webhook/API-key/mapping piece is gated; manual and checklist-raised alarms stay on.
-
-
-## Upgrading from the homekeep image name
-
-v2.4 publishes the image as `<DOCKERHUB_USERNAME>/maintenhance` and renames the
-compose service and container to `maintenhance`. Your data is not affected: the
-volume is still `homekeep_data` (and the database file is still `homekeep.db`).
-
-1. Push v2.4 to GitHub with the updated workflow so the `maintenhance` image is published.
-2. Update the stack (Portainer: Pull and redeploy; Compose: `docker compose pull && docker compose up -d --remove-orphans`).
-   Keep the same stack / project name, otherwise Docker creates a new, empty volume.
-3. Point any reverse proxy at the new container name `maintenhance:8040`.
-4. Once it works, you may delete the old `homekeep` repository on Docker Hub.

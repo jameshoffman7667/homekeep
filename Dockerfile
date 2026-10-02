@@ -5,7 +5,7 @@ COPY frontend/package.json ./
 RUN npm install
 COPY frontend/ ./
 # Leave unset for a normal root deployment. Set to something like
-# "/homekeep/" (leading AND trailing slash) to build the app for serving
+# "/maintenhance/" (leading AND trailing slash) to build the app for serving
 # under a subpath behind a reverse proxy — see README.md.
 ARG VITE_BASE_PATH=/
 ENV VITE_BASE_PATH=$VITE_BASE_PATH
@@ -30,7 +30,11 @@ COPY --from=frontend-build /app/frontend/dist ./public
 # SQLite database lives here — mount a volume at this path so data
 # survives container rebuilds/restarts (see docker-compose.yml).
 ENV DATA_DIR=/data
-RUN mkdir -p /data
+# Bulk files (photos, snapshots, temp files) - mount a second, slower volume
+# here if you want them off the database's fast storage. Defaults to DATA_DIR
+# when FILES_DIR is unset; docker-compose.yml sets it to /files.
+ENV FILES_DIR=/files
+RUN mkdir -p /data /files
 
 # Default port if none is supplied at runtime. docker-compose.yml passes
 # PORT as an environment variable at `docker compose up` time, which

@@ -7,16 +7,11 @@ const Database = require("better-sqlite3");
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
-// Kept as "homekeep.db" even after the v1.8 MaintEnhance rebrand —
-// renaming the actual file would mean an upgraded deployment opens a
-// fresh, empty database next to its real one (the old file, under the
-// old name, would simply go unread). Nothing outside this file ever
-// sees this filename, so there's no user-facing cost to leaving it.
-const db = new Database(path.join(DATA_DIR, "homekeep.db"));
+const db = new Database(path.join(DATA_DIR, "maintenhance.db"));
 db.pragma("journal_mode = WAL");
 
 // Migration (v1.8): the single-row JSON-blob table was named `household`
-// from HomeKeep's original single-household scope. Renamed to the
+// from the app's original single-household scope. Renamed to the
 // brand-neutral `app_data` as part of the MaintEnhance rebrand — this
 // runs once per deployment and preserves the existing row exactly (a
 // plain ALTER TABLE RENAME, not a copy), so an upgrade never touches
@@ -190,3 +185,18 @@ try {
 // duplicating the env-var-vs-default logic above.
 module.exports = db;
 module.exports.DATA_DIR = DATA_DIR;
+
+// v2.5 split storage. DATA_DIR holds the database (keep it on fast local
+// storage such as an SSD). FILES_DIR holds bulk data - photo attachments,
+// nightly snapshots and temp import files - and may sit on slower storage
+// such as a disc pool. It defaults to DATA_DIR, so a single volume still works.
+// ATTACH_DIR, BACKUP_DIR and TMP_DIR override individual folders.
+const FILES_DIR = process.env.FILES_DIR || DATA_DIR;
+const ATTACH_DIR = process.env.ATTACH_DIR || path.join(FILES_DIR, "attachments");
+const BACKUP_DIR = process.env.BACKUP_DIR || path.join(FILES_DIR, "backups");
+const TMP_DIR = process.env.TMP_DIR || path.join(FILES_DIR, "tmp");
+for (const d of [FILES_DIR, ATTACH_DIR, BACKUP_DIR, TMP_DIR]) if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
+module.exports.FILES_DIR = FILES_DIR;
+module.exports.ATTACH_DIR = ATTACH_DIR;
+module.exports.BACKUP_DIR = BACKUP_DIR;
+module.exports.TMP_DIR = TMP_DIR;
