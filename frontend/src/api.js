@@ -2,6 +2,8 @@
 // ends with a trailing slash — "/" for a normal root deploy, "/maintenhance/"
 // for a subpath deploy). Every API path below is written as "/api/..." for
 // readability and rewritten to sit under that base here, in one place.
+import { shrinkImage } from "./imageShrink.js";
+
 const BASE_URL = import.meta.env.BASE_URL;
 function withBase(path) {
   return BASE_URL + path.replace(/^\//, "");
@@ -22,9 +24,29 @@ async function request(path, options) {
   if (!res.ok) {
     const err = new Error((body && body.error) || `Request failed (${res.status})`);
     err.status = res.status;
+    err.code = body && body.code;
+    err.errors = body && body.errors;
+    // v2.2: an Owner-reset account is locked out of everything but the
+    // change-password screen until the password is replaced.
+    if (res.status === 403 && err.code === "PASSWORD_CHANGE_REQUIRED" && typeof window !== "undefined") {
+      window.dispatchEvent(new Event("me-password-change-required"));
+    }
     throw err;
   }
   return body;
+}
+
+// POST/PUT a raw binary body and read a JSON reply (backup upload).
+async function rawJson(method, path, body) {
+  const res = await fetch(withBase(path), { method, credentials: "include", headers: { "Content-Type": "application/octet-stream" }, body });
+  let out = null;
+  try { out = await res.json(); } catch (e) { out = null; }
+  if (!res.ok) {
+    const err = new Error((out && out.error) || `Request failed (${res.status})`);
+    err.status = res.status;
+    throw err;
+  }
+  return out;
 }
 
 export const api = {
@@ -35,6 +57,14 @@ export const api = {
     request("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password }) }),
   logout: () => request("/api/auth/logout", { method: "POST" }),
   me: () => request("/api/auth/me"),
+  // v2.2: password change / reset
+  changePassword: (currentPassword, newPassword) =>
+    request("/api/auth/change-password", { method: "POST", body: JSON.stringify({ currentPassword, newPassword }) }),
+  updateProfile: (email) => request("/api/auth/profile", { method: "PATCH", body: JSON.stringify({ email }) }),
+  forgotPassword: (identifier) => request("/api/auth/forgot", { method: "POST", body: JSON.stringify({ identifier }) }),
+  resetPassword: (token, newPassword) => request("/api/auth/reset", { method: "POST", body: JSON.stringify({ token, newPassword }) }),
+  ownerResetPassword: (id, password) =>
+    request(`/api/users/${id}/reset-password`, { method: "POST", body: JSON.stringify({ password: password || "" }) }),
 
   listUsers: () => request("/api/users"),
   addUser: (username, password, role, email) =>
@@ -42,11 +72,45 @@ export const api = {
   updateUser: (id, patch) => request(`/api/users/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   removeUser: (id) => request(`/api/users/${id}`, { method: "DELETE" }),
 
-  // v2.1: public edition config (brand, colours, terminology, features).
+  // Public config: Owner-managed brand, colours, terminology, features.
   getConfig: () => request("/api/config"),
-  // Logo/asset URLs from the config: "/branding/logo.png" needs the app's
-  // base path prepended on a subpath deploy; absolute URLs pass through.
+  // Owner-only settings edits (Owner Tools → Branding & Terminology / Features).
+  saveSettings: (settings) => request("/api/settings", { method: "PUT", body: JSON.stringify(settings) }),
+  resetSettings: () => request("/api/settings/reset", { method: "POST" }),
+  uploadLogo: (dataUrl) => request("/api/settings/logo", { method: "PUT", body: JSON.stringify({ dataUrl }) }),
+  removeLogo: () => request("/api/settings/logo", { method: "DELETE" }),
+  // Logo URLs from the config ("/api/logo?v=…") need the app's base path
+  // prepended on a subpath deploy; absolute URLs pass through.
   brandUrl: (u) => (/^(https?:)?\/\//.test(u) ? u : withBase(u)),
+
+  // Backup & restore (Owner only)
+  getServerBackupData: (credentials) => request(`/api/backup/server-data${credentials ? "?credentials=1" : ""}`),
+  importServerData: (tabs) => request("/api/backup/server-import", { method: "POST", body: JSON.stringify({ tabs }) }),
+  buildFullBackup: async (workbookBytes) => {
+    const res = await fetch(withBase("/api/backup/full"), { method: "POST", credentials: "include", headers: { "Content-Type": "application/octet-stream" }, body: workbookBytes });
+    if (!res.ok) {
+      let msg = `Backup failed (${res.status})`;
+      try { msg = (await res.json()).error || msg; } catch (e) { /* keep default */ }
+      throw new Error(msg);
+    }
+    return res.blob();
+  },
+  stageFullBackup: (file) => rawJson("POST", "/api/backup/stage", file),
+  applyStagedAttachments: (stageId) => request(`/api/backup/stage/${stageId}/apply-attachments`, { method: "POST" }),
+  discardStagedBackup: (stageId) => request(`/api/backup/stage/${stageId}`, { method: "DELETE" }),
+  listSnapshots: () => request("/api/backup/snapshots"),
+  runSnapshot: () => request("/api/backup/snapshots/run", { method: "POST" }),
+  snapshotUrl: (name) => withBase(`/api/backup/snapshots/${encodeURIComponent(name)}`),
+  listAttachments: () => request("/api/attachments"),
+  replaceAttachment: async (id, file) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch(withBase(`/api/attachments/${id}/file`), { method: "PUT", credentials: "include", body: fd });
+    let body = null;
+    try { body = await res.json(); } catch (e) { body = null; }
+    if (!res.ok) throw new Error((body && body.error) || `Upload failed (${res.status})`);
+    return body;
+  },
 
   getData: () => request("/api/data"),
   saveData: (data) => request("/api/data", { method: "PUT", body: JSON.stringify(data) }),
@@ -57,7 +121,7 @@ export const api = {
   // its own multipart boundary header instead.
   uploadAttachment: async (file) => {
     const fd = new FormData();
-    fd.append("file", file);
+    fd.append("file", await shrinkImage(file));
     const res = await fetch(withBase("/api/attachments"), { method: "POST", credentials: "include", body: fd });
     let body = null;
     try { body = await res.json(); } catch (e) { body = null; }

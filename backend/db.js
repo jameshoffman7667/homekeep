@@ -159,6 +159,32 @@ try {
   console.error("[maintenhance] notification-columns migration failed:", e.message);
 }
 
+// Migration (v2.2): password change / forced change / session invalidation,
+// plus single-use password-reset tokens for the emailed reset link.
+try {
+  const cols = db.prepare("PRAGMA table_info(users)").all().map((c) => c.name);
+  if (!cols.includes("must_change_password")) db.exec("ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0");
+  if (!cols.includes("token_version")) db.exec("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0");
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS password_resets (
+      token_hash TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+} catch (e) {
+  console.error("[maintenhance] v2.2 password columns migration failed:", e.message);
+}
+// The email now doubles as the password-reset address, so it must be
+// unique (case-insensitive). An existing database with duplicate emails
+// can't take the index; in that case skip it (the API still checks).
+try {
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users (lower(email)) WHERE email IS NOT NULL AND email != ''");
+} catch (e) {
+  console.warn("[maintenhance] Could not enforce unique user emails (duplicates already exist) — resolve them in Owner Tools:", e.message);
+}
+
 // Exposed so server.js can put uploaded attachment files under the same
 // mounted-volume root the database itself lives in (DATA_DIR), without
 // duplicating the env-var-vs-default logic above.

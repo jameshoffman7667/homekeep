@@ -12,6 +12,7 @@ import {
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
 import { api } from "./api.js";
+import { shrinkImage } from "./imageShrink.js";
 import { queueItem, getQueuedItems, removeQueuedItem, updateQueuedItem } from "./offlineQueue.js";
 
 /* ============================================================
@@ -216,61 +217,60 @@ const LEVEL_ICONS = {
   "Sub-area": Box,
 };
 
-/* ---- Edition config (v2.1) ----
-   Branding, terminology and feature flags come from the server's public
-   /api/config (see backend/edition.js + branding.config.js) and are applied
-   once, before the first render (see the MaintEnhanceApp wrapper at the
-   bottom). Location levels are STORED under the stable keys in
-   LOCATION_LEVELS above and only DISPLAYED via EDITION.terms.locationLevels,
-   so relabeling an edition never touches saved data. */
-const DEFAULT_EDITION = {
-  edition: "home",
+/* ---- Owner-managed settings (v2.2) ----
+   Branding, terminology and feature toggles come from the server's public
+   /api/config (see backend/settings.js) and are applied before the first
+   render (see the MaintEnhanceApp wrapper at the bottom); the Owner edits
+   them in Owner Tools and the app re-renders. Location levels are STORED
+   under the stable keys in LOCATION_LEVELS above and only DISPLAYED via
+   SETTINGS.terms.locationLevels, so relabeling never touches saved data. */
+const DEFAULT_SETTINGS = {
   brand: {
-    name: "MaintEnhance", shortName: "ME", tagline: "Maintenance Management", logoUrl: "",
+    name: "MaintEnhance", shortName: "ME", tagline: "Maintenance Management", topBarTitle: "", logoUrl: "",
     colors: { primary: "#28415F", primaryDark: "#7FA3CC", accent: "#C85410", accentDark: "#E38C4E" },
   },
   terms: { orgNoun: "household", locationLevels: ["Property", "Structure", "Floor", "Room", "Area", "Sub-area"], siteLevelIndex: 0 },
   features: { homeAssistantAlarms: true },
 };
-let EDITION = DEFAULT_EDITION;
-function applyEdition(cfg) {
-  if (!cfg) { EDITION = DEFAULT_EDITION; return; }
+let SETTINGS = DEFAULT_SETTINGS;
+function applySettings(cfg) {
+  if (!cfg) { SETTINGS = DEFAULT_SETTINGS; return; }
   const levels = cfg.terms && Array.isArray(cfg.terms.locationLevels) && cfg.terms.locationLevels.length === LOCATION_LEVELS.length
-    ? cfg.terms.locationLevels : DEFAULT_EDITION.terms.locationLevels;
-  EDITION = {
-    ...DEFAULT_EDITION, ...cfg,
-    brand: { ...DEFAULT_EDITION.brand, ...(cfg.brand || {}), colors: { ...DEFAULT_EDITION.brand.colors, ...((cfg.brand || {}).colors || {}) } },
-    terms: { ...DEFAULT_EDITION.terms, ...(cfg.terms || {}), locationLevels: levels },
-    features: { ...DEFAULT_EDITION.features, ...(cfg.features || {}) },
+    ? cfg.terms.locationLevels : DEFAULT_SETTINGS.terms.locationLevels;
+  SETTINGS = {
+    ...DEFAULT_SETTINGS, ...cfg,
+    brand: { ...DEFAULT_SETTINGS.brand, ...(cfg.brand || {}), colors: { ...DEFAULT_SETTINGS.brand.colors, ...((cfg.brand || {}).colors || {}) } },
+    terms: { ...DEFAULT_SETTINGS.terms, ...(cfg.terms || {}), locationLevels: levels },
+    features: { ...DEFAULT_SETTINGS.features, ...(cfg.features || {}) },
   };
 }
 function levelLabel(key) {
   const i = LOCATION_LEVELS.indexOf(key);
-  return (i >= 0 && EDITION.terms.locationLevels[i]) || key;
+  return (i >= 0 && SETTINGS.terms.locationLevels[i]) || key;
 }
-// Accepts either a stored key or any edition's label (Excel imports may
+// Accepts either a stored key or any current/previous label (Excel imports may
 // carry either), returning the stored key.
 function levelKeyFromLabel(v) {
   const t = String(v || "").trim().toLowerCase();
   if (!t) return "";
   const byKey = LOCATION_LEVELS.find((k) => k.toLowerCase() === t);
   if (byKey) return byKey;
-  const i = EDITION.terms.locationLevels.findIndex((l) => l.toLowerCase() === t);
+  const i = SETTINGS.terms.locationLevels.findIndex((l) => l.toLowerCase() === t);
   return i >= 0 ? LOCATION_LEVELS[i] : String(v).trim();
 }
 // The level that carries address / year built / climate zone and offers
-// the PM setup wizard — "Property" at home, "Site" in the facilities edition.
-function isSiteLevel(key) { return key === LOCATION_LEVELS[EDITION.terms.siteLevelIndex]; }
-// Swaps the word "household" for this edition's organisation noun.
+// the PM setup wizard — by default the Property; the Owner can pick another level.
+function isSiteLevel(key) { return key === LOCATION_LEVELS[SETTINGS.terms.siteLevelIndex]; }
+// Swaps the word "household" for the Owner's chosen word (e.g. "organization").
 function term(str) {
   if (typeof str !== "string") return str;
-  const n = EDITION.terms.orgNoun || "household";
+  const n = SETTINGS.terms.orgNoun || "household";
   return str.replace(/household/g, n).replace(/Household/g, n.charAt(0).toUpperCase() + n.slice(1));
 }
-function brandSlug() { return EDITION.brand.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "maintenhance"; }
+function brandSlug() { return SETTINGS.brand.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "maintenhance"; }
 const SAFE_COLOR = /^[#a-zA-Z0-9(),.%\s-]+$/;
 function BrandStyle() {
-  const c = EDITION.brand.colors, d = DEFAULT_EDITION.brand.colors;
+  const c = SETTINGS.brand.colors, d = DEFAULT_SETTINGS.brand.colors;
   const ok = (v) => typeof v === "string" && SAFE_COLOR.test(v);
   const light = [], dark = [];
   if (ok(c.primary) && c.primary !== d.primary) light.push(`--hk-navy:${c.primary}`, `--hk-navy-soft:color-mix(in srgb, ${c.primary} 14%, var(--hk-panel))`);
@@ -288,8 +288,8 @@ function BrandStyle() {
   );
 }
 function BrandMark({ size = 26, radius = 3 }) {
-  const url = EDITION.brand.logoUrl;
-  if (url) return <img src={api.brandUrl(url)} alt={EDITION.brand.name} style={{ height: size, width: "auto", maxWidth: size * 4, objectFit: "contain", flexShrink: 0 }} />;
+  const url = SETTINGS.brand.logoUrl;
+  if (url) return <img src={api.brandUrl(url)} alt={SETTINGS.brand.name} style={{ height: size, width: "auto", maxWidth: size * 4, objectFit: "contain", flexShrink: 0 }} />;
   return (
     <div style={{ width: size, height: size, background: C.orange, borderRadius: radius, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
       <Wrench size={Math.round(size * 0.58)} color="#fff" />
@@ -298,7 +298,11 @@ function BrandMark({ size = 26, radius = 3 }) {
 }
 const BOM_LEVELS = ["Component", "Sub-component", "Part"];
 const WO_TYPES = ["PM", "PM Base", "Benchmark", "Corrective", "Unplanned"];
-const WO_STATUSES = ["Open", "In Progress", "Completed", "Verified"];
+const WO_STATUSES = ["Active", "Scheduled", "Completed", "Closed"];
+// Statuses used before v2.2, still accepted when reading older data or Excel files.
+const LEGACY_STATUS_MAP = { Open: "Active", "In Progress": "Scheduled", Verified: "Closed" };
+const isOpenStatus = (st) => st === "Active" || st === "Scheduled";
+const isDoneStatus = (st) => st === "Completed" || st === "Closed";
 const PRIORITIES = ["High", "Medium", "Low"];
 const FAILURE_CODES = ["Wear", "Leak", "Electrical", "Mechanical", "User Error", "Install Defect", "Unknown", "Other"];
 const CLIMATE_ZONES = ["Very Cold", "Cold", "Mixed-Humid", "Hot-Humid", "Hot-Dry", "Marine", "Unknown"];
@@ -398,7 +402,7 @@ const WR_STATUS_COLORS = {
   Declined: C.inkFaint, Merged: C.inkFaint,
 };
 const WO_TYPE_COLORS = { PM: C.navy, "PM Base": C.teal, Benchmark: C.gold, Corrective: C.orange, Unplanned: C.rust };
-const WO_STATUS_COLORS = { Open: C.orange, "In Progress": C.gold, Completed: C.olive, Verified: C.navy, Active: C.teal };
+const WO_STATUS_COLORS = { Active: C.orange, Scheduled: C.gold, Completed: C.olive, Closed: C.navy };
 const PRIORITY_COLORS = { High: C.rust, Medium: C.gold, Low: C.inkSoft };
 const PRIORITY_SOFT = { High: C.rustSoft, Medium: C.goldSoft, Low: C.panelAlt };
 
@@ -549,10 +553,84 @@ function sameDateNextYear(dateISO) {
   d.setFullYear(d.getFullYear() + 1);
   return d.toISOString().slice(0, 10);
 }
-// A PM Base is only allowed one Open/In Progress child at a time —
+// A PM Base is only allowed one Active/Scheduled child at a time —
 // this guards every place a new occurrence could be generated.
 function pmBaseHasActiveChild(d, baseId) {
-  return d.workOrders.some((w) => w.sourcePmBaseId === baseId && (w.status === "Open" || w.status === "In Progress"));
+  return d.workOrders.some((w) => w.sourcePmBaseId === baseId && isOpenStatus(w.status));
+}
+// ---- Scheduling by scheduled date (v2.2) ----
+// A work order is Scheduled exactly when it has a scheduled date: assigning
+// one moves an Active order to Scheduled, clearing it moves it back. Never
+// touches Completed/Closed orders or PM Base templates. The trigger is the
+// scheduled date only — never the required-by date.
+function applyScheduleStatus(w) {
+  if (w.type === "PM Base") return;
+  if (w.status === "Active" && w.scheduledDate) w.status = "Scheduled";
+  else if (w.status === "Scheduled" && !w.scheduledDate) w.status = "Active";
+}
+
+// ---- PM Base standby (v2.2) ----
+// A PM Base on standby generates no new occurrences. Standby is either
+// manual (base.standby) or a yearly window (base.standbyWindow): the base is
+// active from start (month/day) up to, not including, end (month/day) every
+// year and on standby the rest of the year — e.g. weekly lawn mowing active
+// May 1, standby Nov 1. A window may wrap the new year.
+const DEFAULT_STANDBY_WINDOW = { enabled: false, startMonth: 5, startDay: 1, endMonth: 11, endDay: 1 };
+function pmBaseOnStandby(base, dateISO) {
+  if (base.standby) return true;
+  const w = base.standbyWindow;
+  if (w && w.enabled) {
+    const ref = new Date((dateISO || todayISO()) + "T00:00:00");
+    const md = (ref.getMonth() + 1) * 100 + ref.getDate();
+    const start = (Number(w.startMonth) || 1) * 100 + (Number(w.startDay) || 1);
+    const end = (Number(w.endMonth) || 12) * 100 + (Number(w.endDay) || 31);
+    const active = start <= end ? md >= start && md < end : md >= start || md < end;
+    return !active;
+  }
+  return false;
+}
+function pmBaseStandbyLabel(base) {
+  const w = base.standbyWindow;
+  const md = (m, d) => `${MONTH_NAMES[(Number(m) || 1) - 1].slice(0, 3)} ${Number(d) || 1}`;
+  if (base.standby) return "Standby (manual)";
+  if (w && w.enabled) return pmBaseOnStandby(base) ? `Standby · resumes ${md(w.startMonth, w.startDay)}` : `Active ${md(w.startMonth, w.startDay)} – ${md(w.endMonth, w.endDay)}`;
+  return null;
+}
+// First occurrence(s) for a freshly created or just-resumed PM Base.
+function spawnFirstPmInstance(d, base) {
+  const tt = base.triggerType || "calendar";
+  if (tt === "meter") return; // generated once the meter crosses the interval
+  if (tt === "calendar" && base.pmMode === "Fixed") {
+    const sorted = [...(base.fixedDates || [])].sort((a, b) => nextFixedOccurrence(a.month, a.day, todayISO()).localeCompare(nextFixedOccurrence(b.month, b.day, todayISO())));
+    sorted.forEach((fd) => spawnPmInstance(d, base, { afterDateISO: todayISO(), fixedDate: fd }));
+  } else {
+    spawnPmInstance(d, base, { afterDateISO: todayISO(), fixedDate: null });
+  }
+}
+function pmStandbyNeedsSync(d) {
+  return (d.workOrders || []).some((w) => w.type === "PM Base" && pmBaseOnStandby(w) !== !!w.standbyNow);
+}
+// Run after every data change (and once on load, so a calendar window that
+// opened or closed while nobody was using the app is picked up). On
+// reactivation the next occurrence is generated from today — missed
+// occurrences are NOT backfilled; a meter-based base restarts counting from
+// the asset's current reading.
+function syncPmStandby(d) {
+  (d.workOrders || []).filter((w) => w.type === "PM Base").forEach((base) => {
+    const on = pmBaseOnStandby(base);
+    if (on && !base.standbyNow) base.standbyNow = true;
+    else if (!on && base.standbyNow) {
+      base.standbyNow = false;
+      if (pmBaseHasActiveChild(d, base.id)) return;
+      if ((base.triggerType || "calendar") === "meter") {
+        const asset = (d.assets || []).find((a) => a.id === base.assetId);
+        base.meterBaselineValue = asset ? Number(asset.currentMeterValue) || 0 : base.meterBaselineValue || 0;
+      } else {
+        spawnFirstPmInstance(d, base);
+      }
+    }
+  });
+  return d;
 }
 // Fresh, unfilled copy of a PM Base's checklist template — stamped onto
 // each new PM occurrence at generation time. Occurrences don't share
@@ -566,6 +644,7 @@ function freshChecklist(base) {
 }
 function spawnPmInstance(d, base, opts) {
   if (pmBaseHasActiveChild(d, base.id)) return;
+  if (pmBaseOnStandby(base)) return;
   const afterDateISO = opts.afterDateISO;
   const fixedDate = opts.fixedDate;
   const triggerType = base.triggerType || "calendar";
@@ -584,7 +663,7 @@ function spawnPmInstance(d, base, opts) {
   d.counters = d.counters || { wo: 0, wr: 0, part: 0 };
   d.counters.wo += 1;
   d.workOrders.push({
-    id: uid("wo"), number: d.counters.wo, title: base.title, type: "PM", status: "Open",
+    id: uid("wo"), number: d.counters.wo, title: base.title, type: "PM", status: "Active",
     assetId: base.assetId, bomNodeId: base.bomNodeId, locationId: base.locationId,
     description: base.description, sourceRequestId: null, sourceBenchmarkId: null,
     sourcePmBaseId: base.id, sourceFixedDate: fixedDate || null,
@@ -599,6 +678,7 @@ function regeneratePmAfterCompletion(d, completedWO) {
   const base = d.workOrders.find((w) => w.id === completedWO.sourcePmBaseId && w.type === "PM Base");
   if (!base) return;
   if (pmBaseHasActiveChild(d, base.id)) return;
+  if (pmBaseOnStandby(base)) return; // resumes via syncPmStandby when reactivated
   const triggerType = base.triggerType || "calendar";
   if (triggerType === "meter") {
     // Roll the baseline forward to the reading this occurrence was actually
@@ -614,7 +694,7 @@ function regeneratePmAfterCompletion(d, completedWO) {
     d.counters = d.counters || { wo: 0, wr: 0, part: 0 };
     d.counters.wo += 1;
     d.workOrders.push({
-      id: uid("wo"), number: d.counters.wo, title: base.title, type: "PM", status: "Open",
+      id: uid("wo"), number: d.counters.wo, title: base.title, type: "PM", status: "Active",
       assetId: base.assetId, bomNodeId: base.bomNodeId, locationId: base.locationId,
       description: base.description, sourceRequestId: null, sourceBenchmarkId: null,
       sourcePmBaseId: base.id, sourceFixedDate: null,
@@ -630,7 +710,7 @@ function regeneratePmAfterCompletion(d, completedWO) {
     d.counters = d.counters || { wo: 0, wr: 0, part: 0 };
     d.counters.wo += 1;
     d.workOrders.push({
-      id: uid("wo"), number: d.counters.wo, title: base.title, type: "PM", status: "Open",
+      id: uid("wo"), number: d.counters.wo, title: base.title, type: "PM", status: "Active",
       assetId: base.assetId, bomNodeId: base.bomNodeId, locationId: base.locationId,
       description: base.description, sourceRequestId: null, sourceBenchmarkId: null,
       sourcePmBaseId: base.id, sourceFixedDate: completedWO.sourceFixedDate,
@@ -653,6 +733,7 @@ function checkMeterPmTriggers(d) {
     .filter((w) => w.type === "PM Base" && (w.triggerType || "calendar") === "meter")
     .forEach((base) => {
       if (pmBaseHasActiveChild(d, base.id)) return;
+      if (pmBaseOnStandby(base)) return;
       const asset = d.assets.find((a) => a.id === base.assetId);
       if (!asset) return;
       const current = Number(asset.currentMeterValue) || 0;
@@ -794,16 +875,20 @@ function DialogHost({ dialog, onResult }) {
     );
   }
   return (
-    <Modal title="Name it" onClose={() => onResult(null)}>
+    <Modal title={(dialog.opts && dialog.opts.title) || "Name it"} onClose={() => onResult(null)}>
       <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, color: C.ink, marginBottom: 10 }}>{dialog.message}</div>
-      <input
-        style={inputStyle} autoFocus value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => { if (e.key === "Enter") onResult(text); }}
-      />
+      {dialog.opts && dialog.opts.multiline ? (
+        <textarea style={{ ...inputStyle, minHeight: 90 }} autoFocus value={text} onChange={(e) => setText(e.target.value)} />
+      ) : (
+        <input
+          style={inputStyle} autoFocus value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" && !(dialog.opts && dialog.opts.required && !text.trim())) onResult(text); }}
+        />
+      )}
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
         <Btn variant="ghost" onClick={() => onResult(null)}>Cancel</Btn>
-        <Btn variant="primary" onClick={() => onResult(text)}>Save</Btn>
+        <Btn variant="primary" disabled={!!(dialog.opts && dialog.opts.required && !text.trim())} onClick={() => onResult(text)}>{(dialog.opts && dialog.opts.okLabel) || "Save"}</Btn>
       </div>
     </Modal>
   );
@@ -813,10 +898,10 @@ function DialogProvider({ children }) {
   const [dialog, setDialog] = useState(null);
   const resolver = useRef(null);
 
-  const open = (type, message, defaultValue) =>
+  const open = (type, message, defaultValue, opts) =>
     new Promise((resolve) => {
       resolver.current = resolve;
-      setDialog({ type, message, defaultValue });
+      setDialog({ type, message, defaultValue, opts });
     });
 
   const handleResult = (result) => {
@@ -828,7 +913,7 @@ function DialogProvider({ children }) {
   const dialogApi = {
     confirm: (message) => open("confirm", message),
     alertMsg: (message) => open("alert", message),
-    promptMsg: (message, def) => open("prompt", message, def),
+    promptMsg: (message, def, opts) => open("prompt", message, def, opts),
     saveExit: (message) => open("saveExit", message),
   };
 
@@ -948,7 +1033,7 @@ function QrLabelModal({ asset, onClose }) {
       <body>
         <img src="${dataUrl}" />
         <h1>${asset.name}</h1>
-        <p>Scan to open this asset's record in {EDITION.brand.name}</p>
+        <p>Scan to open this asset's record in {SETTINGS.brand.name}</p>
         <script>window.onload = () => { window.print(); };</script>
       </body></html>
     `);
@@ -1031,9 +1116,9 @@ const PAGE_INFO = {
   },
   locations: {
     purpose: "The physical map of the household — every building, floor, room, and area — that everything else in this system is organized around.",
-    get workflow() { const L = EDITION.terms.locationLevels; return `Build the tree top-down: a ${L[0]} contains ${L[1]}s, which contain ${L[2]}s, ${L[3]}s, ${L[4]}s, and ${L[5]}s. A new node defaults to the next level down from wherever you clicked +, though you can change it.`; },
+    get workflow() { const L = SETTINGS.terms.locationLevels; return `Build the tree top-down: a ${L[0]} contains ${L[1]}s, which contain ${L[2]}s, ${L[3]}s, ${L[4]}s, and ${L[5]}s. A new node defaults to the next level down from wherever you clicked +, though you can change it.`; },
     permissions: "Owners and Managers can add, rename, and remove locations. Everyone can view and use the tree to filter other pages.",
-    get features() { const site = EDITION.terms.locationLevels[EDITION.terms.siteLevelIndex]; return ["Expandable/collapsible hierarchy tree with expand-all/collapse-all", "Depth-aware default level when adding a node", "Asset counts per location", "Guards against deleting a location that still has children or assets", `PM setup wizard on a ${site} node — address/year-built/climate zone plus a starter set of recurring PM Bases scaled to that zone`]; },
+    get features() { const site = SETTINGS.terms.locationLevels[SETTINGS.terms.siteLevelIndex]; return ["Expandable/collapsible hierarchy tree with expand-all/collapse-all", "Depth-aware default level when adding a node", "Asset counts per location", "Guards against deleting a location that still has children or assets", `PM setup wizard on a ${site} node — address/year-built/climate zone plus a starter set of recurring PM Bases scaled to that zone`]; },
   },
   assets: {
     purpose: "A registry of everything in the home worth maintaining, and — for the ones worth tracking in detail — the components and parts that make them up.",
@@ -1048,10 +1133,10 @@ const PAGE_INFO = {
     features: ["Required-by date and priority", "Suggested work order type and suggested parts", "Location hierarchy, priority, and status filters", "Search by title or number", "Attach up to 5 photos when submitting, carried onto the work order once converted", "Works offline — a request submitted with no connection is saved on the device and syncs automatically once you're back online"],
   },
   orders: {
-    purpose: "The record of all maintenance work in the household — planned, recurring, and reactive — from the moment it's opened to the moment it's verified done.",
-    workflow: "Work orders move through Open, In Progress, Completed, and Verified. They're created directly, converted from an approved request, or generated automatically from a PM Base template.",
-    permissions: "Owners, Managers, and Executors can create and update work orders. Only Owners and Managers can move a work order to Verified. Owners can delete any; Managers can delete ones they created.",
-    features: ["Kanban board by status, with a 30-day verified archive", "PM Base templates for recurring maintenance", "Parts attachment with location/component-scoped search", "Executor assignment and filter (defaults to yourself if you're an Executor)", "Completion comments for feedback on how the work went", "Location, priority, due-date, and executor filters"],
+    purpose: "The record of all maintenance work in the household — planned, recurring, and reactive — from the moment it's raised to the moment it's closed.",
+    workflow: "Work orders move through Active, Scheduled, Completed, and Closed. A work order becomes Scheduled automatically as soon as it has a scheduled date. They're created directly, converted from an approved request, or generated automatically from a PM Base template.",
+    permissions: "Owners, Managers, and Executors can create and update work orders. Only Owners and Managers can move a work order to Closed. Moving a work order from Scheduled to Completed requires a comment. Owners can delete any; Managers can delete ones they created.",
+    features: ["Kanban board by status, with a 30-day closed archive", "PM Base templates for recurring maintenance", "Parts attachment with location/component-scoped search", "Executor assignment and filter (defaults to yourself if you're an Executor)", "Completion comments for feedback on how the work went", "Location, priority, due-date, and executor filters"],
   },
   schedule: {
     purpose: "A calendar view of when maintenance work is planned to happen, so you can see what's coming up at a glance.",
@@ -1078,22 +1163,22 @@ const PAGE_INFO = {
     features: ["Total logged spend", "Spend by asset category", "Always current, no manual entry"],
   },
   owner: {
-    purpose: "Administrative controls for the household that shouldn't be scattered through the rest of the app — accounts, backups, and record clean-up.",
-    workflow: "Manage who has access and what role they hold, export or import the full household record, and remove a work order or request that was created in error.",
+    purpose: "Administrative controls for the household that shouldn't be scattered through the rest of the app — accounts, branding, backups, and record clean-up.",
+    workflow: "Manage who has access and what role they hold (including temporary passwords), customise the name, logo, colours and location labels, back up or restore the full household record, and remove a work order or request that was created in error.",
     permissions: "Owners only. Managers have elevated rights elsewhere in the app, but not on this page.",
-    features: ["Add/remove household member accounts and set roles", "Export/import the full household to Excel", "Delete a work order or work request by number"],
+    features: ["Add/remove household member accounts, set roles, set temporary passwords and notification emails", "Branding & terminology: name, logo, colours, location labels, top-bar title", "Features: Home Assistant alarms on/off", "Export to Excel or a Full backup (.zip with photos); import selected tabs with a pre-check", "Automatic nightly database snapshots; shrink existing photos", "Delete a work order or work request by number"],
   },
   purchasing: {
     purpose: "A running shopping list built automatically from what open work actually needs, so nothing gets started without the parts on hand.",
-    workflow: "Any part attached to an Open or In Progress work order in a quantity greater than what's currently in stock shows up here, grouped by the work order that needs it.",
+    workflow: "Any part attached to an Active or Scheduled work order in a quantity greater than what's currently in stock shows up here, grouped by the work order that needs it.",
     permissions: "Owners and Managers only.",
-    features: ["Grouped by work order", "Shows quantity needed, on hand, and the shortfall to buy", "Click through to the work order"],
+    features: ["Grouped by work order", "Manually add a part (from the catalogue or free-typed) to the list", "Shows quantity needed, on hand, and the shortfall to buy", "Click through to the work order"],
   },
   alarms: {
     purpose: "One dashboard for everything that needs attention right now, from any source: sensor-triggered alerts pushed in from Home Assistant, where that component is enabled for this deployment (a leak, a smoke/CO alarm, a freezer running warm), a numeric PM checklist reading that came back outside its expected range, or an alarm raised by hand — upstream of Work Requests, since not every alert should become a work item.",
     workflow: "Where enabled, Home Assistant does its own threshold/debounce/duration logic and POSTs to MaintEnhance's webhook only when it decides something's actually wrong; a numeric checklist step raises one automatically the moment a reading falls outside its configured min/max; anyone can also raise one by hand with \"Create alarm.\" Each open alarm can be acknowledged as a false alarm (with a reason, to help tune noisy sensors), turned into a new Work Request, or linked onto an existing Work Order as evidence.",
     permissions: "Owners and Managers only. Where the Home Assistant component is enabled, the webhook API key and sensor-to-asset mappings are also configured here, Owner-only for the key. (Raising an alarm itself — automatically from a checklist, or manually — isn't role-gated, since anyone filling in a checklist needs to be able to trigger one.)",
-    features: ["Open queue sorted by severity and age, plus a resolved/false-alarm history", "\"Create alarm\" for a manual entry, independent of any sensor or checklist", "A numeric PM checklist step outside its expected range raises one automatically (deduped per work order/step)", "Acknowledge as false alarm, create Work Request, or link to an existing Work Order", "Home Assistant webhook, API key, and entity-to-asset/location mapping — a componentized feature a deployment can turn off (v2)", "Source-agnostic design — 'home_assistant', 'pm_checklist', and 'manual' today, room for more push sources later"],
+    features: ["Open queue sorted by severity and age, plus a resolved/false-alarm history", "\"Create alarm\" for a manual entry, independent of any sensor or checklist", "A numeric PM checklist step outside its expected range raises one automatically (deduped per work order/step)", "Acknowledge as false alarm, create Work Request, or link to an existing Work Order", "Home Assistant webhook, API key, and entity-to-asset/location mapping — an Owner-controlled feature (Owner Tools → Features)", "Source-agnostic design — 'home_assistant', 'pm_checklist', and 'manual' today, room for more push sources later"],
   },
 };
 
@@ -1193,9 +1278,9 @@ function Sidebar({ tab, setTab, open, role, counts, onNavigate }) {
       <div style={{ padding: "20px 18px 14px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <BrandMark size={26} />
-          <span style={{ fontFamily: FONT_HEAD, fontWeight: 700, fontSize: EDITION.brand.name.length > 14 ? 14.5 : 17, letterSpacing: "0.01em", lineHeight: 1.15, minWidth: 0 }}>{EDITION.brand.name}</span>
+          <span style={{ fontFamily: FONT_HEAD, fontWeight: 700, fontSize: SETTINGS.brand.name.length > 14 ? 14.5 : 17, letterSpacing: "0.01em", lineHeight: 1.15, minWidth: 0 }}>{SETTINGS.brand.name}</span>
         </div>
-        {EDITION.brand.tagline && <div style={{ fontFamily: FONT_BODY, fontSize: 11, color: "#B7C3CF", marginTop: 4 }}>{EDITION.brand.tagline}</div>}
+        {SETTINGS.brand.tagline && <div style={{ fontFamily: FONT_BODY, fontSize: 11, color: "#B7C3CF", marginTop: 4 }}>{SETTINGS.brand.tagline}</div>}
       </div>
       <div style={{ flex: 1, padding: "6px 10px", overflowY: "auto" }}>
         {items.map((n) => {
@@ -1270,9 +1355,9 @@ function WeekLookahead({ data, goToOrder }) {
 }
 
 function Dashboard({ data, setTab, role, applyFilter, goToOrder, goToRequest }) {
-  const openWO = data.workOrders.filter((w) => w.status === "Open" || w.status === "In Progress");
+  const openWO = data.workOrders.filter((w) => isOpenStatus(w.status));
   const pendingWR = data.workRequests.filter((w) => w.status === "Submitted" || w.status === "Under Review");
-  const nonBaseOpenWO = data.workOrders.filter((w) => w.type !== "PM Base" && w.status !== "Completed" && w.status !== "Verified");
+  const nonBaseOpenWO = data.workOrders.filter((w) => w.type !== "PM Base" && !isDoneStatus(w.status));
   const overdueWO = nonBaseOpenWO.filter((w) => w.requiredByDate && daysUntil(w.requiredByDate) < 0);
   const dueSoonWO = nonBaseOpenWO.filter((w) => {
     const rd = w.requiredByDate ? daysUntil(w.requiredByDate) : null;
@@ -1609,7 +1694,7 @@ function LocationsView({ data, update, role }) {
                 </Field>
               </div>
               <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 12 }}>
-                Used by the PM setup wizard (the wand icon next to a {levelLabel(LOCATION_LEVELS[EDITION.terms.siteLevelIndex])}) to suggest a starter set of recurring maintenance.
+                Used by the PM setup wizard (the wand icon next to a {levelLabel(LOCATION_LEVELS[SETTINGS.terms.siteLevelIndex])}) to suggest a starter set of recurring maintenance.
               </div>
             </>
           )}
@@ -2020,8 +2105,11 @@ function PhotoPicker({ files, onChange, maxFiles = 5 }) {
     if (!urlsRef.current.has(file)) urlsRef.current.set(file, URL.createObjectURL(file));
     return urlsRef.current.get(file);
   };
-  const addFiles = (fileList) => {
-    const incoming = Array.from(fileList || []).filter((f) => f.type.startsWith("image/"));
+  const addFiles = async (fileList) => {
+    const picked = Array.from(fileList || []).filter((f) => f.type.startsWith("image/"));
+    // v2.2: shrink in the browser (long edge ~1600 px, JPEG ~80%) before the
+    // photo is uploaded or queued for offline sync.
+    const incoming = await Promise.all(picked.map(shrinkImage));
     if (incoming.length) onChange([...files, ...incoming].slice(0, maxFiles));
   };
   return (
@@ -2328,11 +2416,49 @@ function PmBaseFields({ form, setForm, data }) {
       )}
 
       <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 12 }}>
-        A PM Base is never scheduled or completed itself — it's a template. Creating it generates the first PM work order copied from it (meter-based PM instead waits until the linked asset's reading crosses the interval). Only one occurrence can be Open or In Progress per PM Base at a time — if multiple fixed dates are configured, only the earliest upcoming one is generated now; the rest follow once the active occurrence is completed.
+        A PM Base is never scheduled or completed itself — it's a template. Creating it generates the first PM work order copied from it (meter-based PM instead waits until the linked asset's reading crosses the interval). Only one occurrence can be Active or Scheduled per PM Base at a time — if multiple fixed dates are configured, only the earliest upcoming one is generated now; the rest follow once the active occurrence is completed.
       </div>
+
+      <StandbyFields form={form} setForm={setForm} />
 
       <ChecklistTemplateEditor steps={form.checklistTemplate || []} setSteps={(steps) => setForm({ ...form, checklistTemplate: steps })} />
     </>
+  );
+}
+
+// PM Base standby controls (v2.2): a manual switch and an optional yearly
+// active window. See pmBaseOnStandby for the exact rules.
+function StandbyFields({ form, setForm }) {
+  const w = { ...DEFAULT_STANDBY_WINDOW, ...(form.standbyWindow || {}) };
+  const setW = (patch) => setForm({ ...form, standbyWindow: { ...w, ...patch } });
+  const monthSelect = (value, onChange) => (
+    <select style={{ ...inputStyle, width: 130 }} value={value} onChange={(e) => onChange(Number(e.target.value))}>
+      {MONTH_NAMES.map((m, idx) => <option key={m} value={idx + 1}>{m}</option>)}
+    </select>
+  );
+  return (
+    <div style={{ border: `1px solid ${C.lineSoft}`, borderRadius: 4, padding: "10px 12px", marginBottom: 12 }}>
+      <div style={{ fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 6 }}>Standby</div>
+      <label style={{ display: "flex", alignItems: "center", gap: 7, fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink, cursor: "pointer", marginBottom: 8 }}>
+        <input type="checkbox" checked={!!form.standby} onChange={(e) => setForm({ ...form, standby: e.target.checked })} />
+        Put this PM Base on standby (no new occurrences are generated)
+      </label>
+      <label style={{ display: "flex", alignItems: "center", gap: 7, fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink, cursor: "pointer", marginBottom: w.enabled ? 8 : 0 }}>
+        <input type="checkbox" checked={!!w.enabled} onChange={(e) => setW({ enabled: e.target.checked })} />
+        Only active during a yearly window (standby the rest of the year)
+      </label>
+      {w.enabled && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkSoft }}>
+          Active from {monthSelect(w.startMonth, (v) => setW({ startMonth: v }))}
+          <input type="number" min="1" max="31" style={{ ...inputStyle, width: 64 }} value={w.startDay} onChange={(e) => setW({ startDay: Number(e.target.value) })} />
+          until {monthSelect(w.endMonth, (v) => setW({ endMonth: v }))}
+          <input type="number" min="1" max="31" style={{ ...inputStyle, width: 64 }} value={w.endDay} onChange={(e) => setW({ endDay: Number(e.target.value) })} />
+        </div>
+      )}
+      <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: 8 }}>
+        Occurrences that are already open are left alone. When standby ends, generation resumes from the next due date — missed occurrences are not backfilled. The yearly window is checked whenever the app is opened or data changes.
+      </div>
+    </div>
   );
 }
 
@@ -2416,16 +2542,21 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
   const openReview = (wr, action) => {
     setReviewForm({
       type: wr.suggestedType && wr.suggestedType !== "Unplanned" ? wr.suggestedType : "Corrective",
-      scheduledDate: todayISO(), requiredByDate: wr.requiredByDate || "", reason: "", mergeInto: "",
+      scheduledDate: "", requiredByDate: wr.requiredByDate || "", reason: "", mergeInto: "",
       pmMode: "Non-fixed", frequencyValue: "3", frequencyUnit: "months", fixedDates: [],
+      standby: false, standbyWindow: { ...DEFAULT_STANDBY_WINDOW },
       triggerType: "calendar", meterIntervalValue: "", seasonalAnchor: "Spring", seasonalOffsetDays: "0",
       assetId: wr.assetId, checklistTemplate: [],
     });
     setModal({ action, wr });
   };
 
-  const doConvert = () => {
+  const doConvert = async () => {
     const wr = modal.wr;
+    if (reviewForm.type !== "PM Base" && !(reviewForm.requiredByDate || wr.requiredByDate)) {
+      await dialog.alertMsg("A required-by date is required for every work order.");
+      return;
+    }
     update((d) => {
       d.counters = d.counters || { wo: 0, wr: 0, part: 0 };
       if (reviewForm.type === "PM Base") {
@@ -2440,6 +2571,8 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
           cost: "", vendorId: null, notes: "", parts: wr.suggestedParts || [], comments: [], photos: wr.photos || [], partsDeducted: false, createdBy: currentUser,
           pmMode: reviewForm.pmMode, triggerType: reviewForm.triggerType || "calendar",
           checklistTemplate: (reviewForm.checklistTemplate || []).map((s) => ({ ...s })),
+          standby: !!reviewForm.standby,
+          standbyWindow: reviewForm.standbyWindow && reviewForm.standbyWindow.enabled ? { ...DEFAULT_STANDBY_WINDOW, ...reviewForm.standbyWindow, enabled: true } : null,
         };
         if (base.triggerType === "meter") {
           base.meterIntervalValue = Number(reviewForm.meterIntervalValue);
@@ -2455,24 +2588,15 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
           base.fixedDates = (reviewForm.fixedDates || []).map((f) => ({ month: Number(f.month), day: Number(f.day) }));
         }
         d.workOrders.push(base);
-        if (base.triggerType === "meter") {
-          // No immediate spawn — generated once the asset's meter reading
-          // crosses the interval (see checkMeterPmTriggers, run after every update()).
-        } else if (base.triggerType === "seasonal") {
-          spawnPmInstance(d, base, { afterDateISO: todayISO(), fixedDate: null });
-        } else if (base.pmMode === "Non-fixed") {
-          spawnPmInstance(d, base, { afterDateISO: todayISO(), fixedDate: null });
-        } else {
-          const sorted = [...base.fixedDates].sort((a, b) => nextFixedOccurrence(a.month, a.day, todayISO()).localeCompare(nextFixedOccurrence(b.month, b.day, todayISO())));
-          sorted.forEach((fd) => spawnPmInstance(d, base, { afterDateISO: todayISO(), fixedDate: fd }));
-        }
+        // Meter-based: no immediate spawn (see checkMeterPmTriggers).
+        spawnFirstPmInstance(d, base);
         const req = d.workRequests.find((r) => r.id === wr.id);
         req.status = "Approved"; req.workOrderId = baseId;
       } else {
         d.counters.wo += 1;
         const woId = uid("wo");
         d.workOrders.push({
-          id: woId, number: d.counters.wo, title: wr.title, type: reviewForm.type, status: "Open",
+          id: woId, number: d.counters.wo, title: wr.title, type: reviewForm.type, status: reviewForm.scheduledDate ? "Scheduled" : "Active",
           assetId: wr.assetId, bomNodeId: wr.bomNodeId, locationId: wr.locationId,
           description: wr.description, sourceRequestId: wr.id, sourceBenchmarkId: null,
           sourcePmBaseId: null, sourceFixedDate: null, priority: wr.priority || "Medium", executorId: "",
@@ -2526,7 +2650,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
     .filter((wr) => priorityFilter === "all" || wr.priority === priorityFilter)
     .filter((wr) => statusFilter !== "pending" || wr.status === "Submitted" || wr.status === "Under Review")
     .filter((wr) => !searchLower || wr.title.toLowerCase().includes(searchLower) || formatWrNum(wr.number).toLowerCase().includes(searchLower));
-  const openWOOptions = data.workOrders.filter((w) => w.status !== "Completed" && w.status !== "Verified" && w.type !== "PM Base");
+  const openWOOptions = data.workOrders.filter((w) => !isDoneStatus(w.status) && w.type !== "PM Base");
 
   return (
     <div>
@@ -2667,8 +2791,8 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
             <PmBaseFields form={reviewForm} setForm={setReviewForm} data={data} />
           ) : (
             <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <Field label="Scheduled date"><input type="date" style={inputStyle} value={reviewForm.scheduledDate} onChange={(e) => setReviewForm({ ...reviewForm, scheduledDate: e.target.value })} /></Field>
-              <Field label="Required by"><input type="date" style={inputStyle} value={reviewForm.requiredByDate} onChange={(e) => setReviewForm({ ...reviewForm, requiredByDate: e.target.value })} /></Field>
+              <Field label="Scheduled date (optional)"><input type="date" style={inputStyle} value={reviewForm.scheduledDate} onChange={(e) => setReviewForm({ ...reviewForm, scheduledDate: e.target.value })} /></Field>
+              <Field label="Required by" required><input type="date" style={inputStyle} value={reviewForm.requiredByDate} onChange={(e) => setReviewForm({ ...reviewForm, requiredByDate: e.target.value })} /></Field>
             </div>
           )}
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
@@ -2739,14 +2863,14 @@ function ArchiveModal({ data, onClose, goToOrder }) {
   const allowedLocs = locFilter ? descendantIds(data.locations, locFilter) : null;
   const searchLower = search.trim().toLowerCase();
   const items = data.workOrders
-    .filter((w) => w.status === "Verified")
+    .filter((w) => w.status === "Closed")
     .filter((w) => !allowedLocs || allowedLocs.has(w.locationId))
     .filter((w) => typeFilter === "all" || w.type === typeFilter)
     .filter((w) => !searchLower || w.title.toLowerCase().includes(searchLower) || formatWoNum(w.number).toLowerCase().includes(searchLower))
     .sort((a, b) => (b.verifiedDate || "").localeCompare(a.verifiedDate || ""));
 
   return (
-    <Modal title="Verified work order archive" onClose={onClose} wide>
+    <Modal title="Closed work order archive" onClose={onClose} wide>
       <input style={{ ...inputStyle, marginBottom: 10 }} placeholder="Search by title or number…" value={search} onChange={(e) => setSearch(e.target.value)} />
       <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
         <select style={inputStyle} value={locFilter} onChange={(e) => setLocFilter(e.target.value)}>
@@ -2761,11 +2885,11 @@ function ArchiveModal({ data, onClose, goToOrder }) {
         </select>
       </div>
       <div className="hk-scroll" style={{ maxHeight: 400, overflowY: "auto" }}>
-        {items.length === 0 && <Empty text="No verified work orders match." />}
+        {items.length === 0 && <Empty text="No closed work orders match." />}
         {items.map((w) => (
           <div key={w.id} onClick={() => { onClose(); goToOrder(w.id); }} className="hk-row" style={{ display: "flex", justifyContent: "space-between", padding: "9px 4px", borderTop: `1px solid ${C.lineSoft}`, cursor: "pointer" }}>
             <span style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink }}>{formatWoNum(w.number)} · {w.title}</span>
-            <span style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint }}>verified {fmtDate(w.verifiedDate)}</span>
+            <span style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint }}>closed {fmtDate(w.verifiedDate)}</span>
           </div>
         ))}
       </div>
@@ -2787,13 +2911,14 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
   const [users, setUsers] = useState([]);
   const blank = {
     title: "", type: "Unplanned", assetId: null, bomNodeId: null, locationId: data.locations[0]?.id || "",
-    description: "", scheduledDate: todayISO(), requiredByDate: "", vendorId: "", benchmarkId: "", executorId: "",
+    description: "", scheduledDate: "", requiredByDate: "", vendorId: "", benchmarkId: "", executorId: "",
     priority: "Medium", pmMode: "Non-fixed", frequencyValue: "3", frequencyUnit: "months", fixedDates: [], parts: [],
     failureCode: "", rootCause: "",
     triggerType: "calendar", meterIntervalValue: "", seasonalAnchor: "Spring", seasonalOffsetDays: "0",
-    checklistTemplate: [],
+    checklistTemplate: [], standby: false, standbyWindow: { ...DEFAULT_STANDBY_WINDOW },
   };
   const [form, setForm] = useState(blank);
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
   const initial = useRef(null);
   const isDirty = modal === "new" && JSON.stringify(form) !== initial.current;
   const [detailEdits, setDetailEdits] = useState({});
@@ -2819,6 +2944,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
 
   const createWO = async () => {
     if (!form.title.trim() || !form.locationId) { await dialog.alertMsg("Title and location are required."); return; }
+    if (form.type !== "PM Base" && !form.requiredByDate) { await dialog.alertMsg("A required-by date is required for every work order."); return; }
     if (form.type === "PM Base") {
       const tt = form.triggerType || "calendar";
       if (tt === "calendar") {
@@ -2840,7 +2966,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
       const id = uid("wo");
       const wo = {
         id, number: d.counters.wo, title: form.title.trim(), type: form.type,
-        status: form.type === "PM Base" ? "Active" : "Open",
+        status: form.type === "PM Base" ? "Active" : (form.scheduledDate ? "Scheduled" : "Active"),
         assetId: form.assetId, bomNodeId: form.bomNodeId, locationId: form.locationId,
         description: form.description, sourceRequestId: null,
         sourceBenchmarkId: form.type === "Corrective" ? (form.benchmarkId || null) : null,
@@ -2858,6 +2984,8 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
       if (form.type === "PM Base") {
         wo.triggerType = form.triggerType || "calendar";
         wo.checklistTemplate = (form.checklistTemplate || []).map((s) => ({ ...s }));
+        wo.standby = !!form.standby;
+        wo.standbyWindow = form.standbyWindow && form.standbyWindow.enabled ? { ...DEFAULT_STANDBY_WINDOW, ...form.standbyWindow, enabled: true } : null;
         if (wo.triggerType === "meter") {
           wo.meterIntervalValue = Number(form.meterIntervalValue);
           const linkedAsset = d.assets.find((a) => a.id === form.assetId);
@@ -2873,17 +3001,10 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
       }
       d.workOrders.push(wo);
       if (form.type === "PM Base") {
-        if (wo.triggerType === "meter") {
-          // No immediate spawn — generated once the linked asset's meter
-          // reading crosses the interval (see checkMeterPmTriggers).
-        } else if (wo.triggerType === "seasonal") {
-          spawnPmInstance(d, wo, { afterDateISO: todayISO(), fixedDate: null });
-        } else if (wo.pmMode === "Non-fixed") {
-          spawnPmInstance(d, wo, { afterDateISO: todayISO(), fixedDate: null });
-        } else {
-          const sorted = [...wo.fixedDates].sort((a, b) => nextFixedOccurrence(a.month, a.day, todayISO()).localeCompare(nextFixedOccurrence(b.month, b.day, todayISO())));
-          sorted.forEach((fd) => spawnPmInstance(d, wo, { afterDateISO: todayISO(), fixedDate: fd }));
-        }
+        // Meter-based: no immediate spawn — generated once the linked asset's
+        // meter reading crosses the interval (see checkMeterPmTriggers). A base
+        // created on standby spawns nothing until standby ends (syncPmStandby).
+        spawnFirstPmInstance(d, wo);
       }
       setOpenId(id);
       return d;
@@ -2897,18 +3018,52 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
     setCommentDraft("");
   }, [openId]); // eslint-disable-line
 
+  // Returns false (after telling the user) when the edits can't be saved.
   const saveDetail = () => {
-    update((d) => { Object.assign(d.workOrders.find((w) => w.id === openWO.id), detailEdits); return d; });
-    detailInitial.current = JSON.stringify(detailEdits);
-  };
-  const setStatus = (status) => {
-    if (status === "Verified" && !isAdmin(role)) return;
+    if (openWO.type !== "PM Base" && !detailEdits.requiredByDate) {
+      dialog.alertMsg("A required-by date is required for every work order.");
+      return false;
+    }
+    // Fields owned by other actions (status buttons, comments, checklist,
+    // standby bookkeeping) are never overwritten from the edit buffer, which
+    // could otherwise be a stale copy taken when the order was opened.
+    const { status, completedDate, verifiedDate, comments, partsDeducted, checklist, standbyNow, ...edits } = detailEdits;
     update((d) => {
       const w = d.workOrders.find((x) => x.id === openWO.id);
-      const wasTerminal = w.status === "Completed" || w.status === "Verified";
+      Object.assign(w, edits);
+      applyScheduleStatus(w);
+      return d;
+    });
+    detailInitial.current = JSON.stringify(detailEdits);
+    return true;
+  };
+  const setStatus = async (status) => {
+    if (status === "Closed" && !isAdmin(role)) return;
+    if (status === openWO.status) return;
+    let comment = null;
+    if (status === "Completed" && openWO.status === "Scheduled") {
+      comment = await dialog.promptMsg("Add a comment to complete this work order — how did it go?", "", { title: "Completion comment", multiline: true, required: true, okLabel: "Complete" });
+      if (comment == null || !String(comment).trim()) return;
+    }
+    if (status === "Scheduled" && !openWO.scheduledDate) {
+      await dialog.alertMsg("Set a scheduled date (and save) to schedule this work order — it moves to Scheduled automatically.");
+      return;
+    }
+    if (status === "Active" && openWO.scheduledDate) {
+      const ok = await dialog.confirm("Moving this work order back to Active clears its scheduled date. Continue?");
+      if (!ok) return;
+    }
+    update((d) => {
+      const w = d.workOrders.find((x) => x.id === openWO.id);
+      const wasTerminal = isDoneStatus(w.status);
       w.status = status;
+      if (status === "Active") w.scheduledDate = "";
+      if (comment) {
+        w.comments = w.comments || [];
+        w.comments.push({ id: uid("cm"), author: currentUser, date: todayISO(), text: String(comment).trim() });
+      }
       if (status === "Completed" && !w.completedDate) w.completedDate = todayISO();
-      if (status === "Verified" && !w.verifiedDate) w.verifiedDate = todayISO();
+      if (status === "Closed" && !w.verifiedDate) w.verifiedDate = todayISO();
       if (status === "Completed" && w.type === "PM" && w.sourcePmBaseId && !wasTerminal) regeneratePmAfterCompletion(d, w);
       if (status === "Completed" && !w.partsDeducted) {
         (w.parts || []).forEach(({ partId, qty }) => {
@@ -2919,6 +3074,38 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
       }
       return d;
     });
+    if (status === "Active") setDetailEdits((e) => ({ ...e, scheduledDate: "" }));
+  };
+  // Bulk auto-schedule (v2.2): sets each selected Active work order's
+  // scheduled date to its required-by date, which moves it to Scheduled.
+  const toggleSelected = (id) => setSelectedIds((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const toggleColumn = (items) => setSelectedIds((prev) => {
+    const n = new Set(prev);
+    const all = items.length > 0 && items.every((w) => n.has(w.id));
+    items.forEach((w) => (all ? n.delete(w.id) : n.add(w.id)));
+    return n;
+  });
+  const autoSchedule = async () => {
+    const picked = data.workOrders.filter((w) => selectedIds.has(w.id) && w.type !== "PM Base");
+    const eligible = picked.filter((w) => w.status === "Active" && w.requiredByDate);
+    const noDate = picked.filter((w) => w.status === "Active" && !w.requiredByDate);
+    const notActive = picked.filter((w) => w.status !== "Active");
+    if (picked.length === 0) { await dialog.alertMsg("Tick the work orders you want to schedule first."); return; }
+    if (eligible.length === 0) {
+      await dialog.alertMsg("Nothing to schedule: only Active work orders with a required-by date can be auto-scheduled." + (notActive.length ? ` ${notActive.length} selected ${notActive.length === 1 ? "is" : "are"} not Active.` : ""));
+      return;
+    }
+    const extra = [];
+    if (noDate.length) extra.push(`${noDate.length} Active without a required-by date will be skipped`);
+    if (notActive.length) extra.push(`${notActive.length} not Active will be left alone`);
+    const ok = await dialog.confirm(`Schedule ${eligible.length} work order${eligible.length === 1 ? "" : "s"} on their required-by dates?${extra.length ? " (" + extra.join("; ") + ".)" : ""}`);
+    if (!ok) return;
+    const ids = new Set(eligible.map((w) => w.id));
+    update((d) => {
+      d.workOrders.forEach((w) => { if (ids.has(w.id)) { w.scheduledDate = w.requiredByDate; applyScheduleStatus(w); } });
+      return d;
+    });
+    setSelectedIds(new Set());
   };
   const addComment = () => {
     if (!commentDraft.trim()) return;
@@ -3008,7 +3195,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
     if (typeFilter !== "all" && w.type !== typeFilter) return false;
     if (executorFilter && w.executorId !== executorFilter) return false;
     if (dueFilter !== "all") {
-      const notDone = w.status !== "Completed" && w.status !== "Verified";
+      const notDone = !isDoneStatus(w.status);
       if (!notDone) return false;
       const rd = w.requiredByDate ? daysUntil(w.requiredByDate) : null;
       if (dueFilter === "overdue" && !(rd !== null && rd < 0)) return false;
@@ -3031,7 +3218,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
     status,
     items: boardOrders.filter((w) => {
       if (w.status !== status) return false;
-      if (status === "Verified") return w.verifiedDate && daysUntil(w.verifiedDate) >= -VERIFIED_ARCHIVE_DAYS;
+      if (status === "Closed") return w.verifiedDate && daysUntil(w.verifiedDate) >= -VERIFIED_ARCHIVE_DAYS;
       return true;
     }),
   }));
@@ -3040,7 +3227,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
     <div>
       <SectionHeader
         title="Work Orders"
-        subtitle="The record of all maintenance work, from open to verified."
+        subtitle="The record of all maintenance work, from active to closed."
         info={PAGE_INFO.orders}
         action={canWrite(role) && <Btn variant="primary" onClick={openNew}><Plus size={15} /> New work order</Btn>}
       />
@@ -3069,17 +3256,25 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
               <option value="">All executors</option>
               {assignableUsers.map((u) => <option key={u.id} value={u.id}>{u.username}{u.id === currentUserId ? " (me)" : ""}</option>)}
             </select>
+            {isAdmin(role) && (
+              <Btn small variant={selectedIds.size ? "primary" : "ghost"} onClick={autoSchedule} title="Sets each selected Active work order's scheduled date to its required-by date">
+                <Calendar size={13} /> Auto schedule{selectedIds.size ? ` (${selectedIds.size})` : ""}
+              </Btn>
+            )}
           </div>
 
           <div className="hk-grid-4 hk-kanban" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
             {columns.map((col) => (
               <div key={col.status}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                  {isAdmin(role) && col.items.length > 0 && (
+                    <input type="checkbox" title="Select all in this column" checked={col.items.every((w) => selectedIds.has(w.id))} onChange={() => toggleColumn(col.items)} style={{ cursor: "pointer", margin: 0 }} />
+                  )}
                   <span style={{ width: 8, height: 8, borderRadius: 8, background: WO_STATUS_COLORS[col.status] }} />
                   <span style={{ fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink }}>{col.status}</span>
                   <span style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint }}>({col.items.length})</span>
-                  {col.status === "Verified" && (
-                    <span onClick={() => setShowArchive(true)} className="hk-link" title="View all verified work orders" style={{ display: "flex", alignItems: "center", gap: 3, marginLeft: "auto", cursor: "pointer", color: C.navy }}>
+                  {col.status === "Closed" && (
+                    <span onClick={() => setShowArchive(true)} className="hk-link" title="View all closed work orders" style={{ display: "flex", alignItems: "center", gap: 3, marginLeft: "auto", cursor: "pointer", color: C.navy }}>
                       <Archive size={12} />
                     </span>
                   )}
@@ -3087,10 +3282,14 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   {col.items.map((w) => {
                     const du = w.requiredByDate ? daysUntil(w.requiredByDate) : null;
-                    const notDone = w.status !== "Completed" && w.status !== "Verified";
+                    const notDone = !isDoneStatus(w.status);
                     return (
-                      <Panel key={w.id} style={{ padding: "10px 12px", cursor: "pointer" }}>
-                        <div onClick={() => setOpenId(w.id)}>
+                      <Panel key={w.id} style={{ padding: "10px 12px", cursor: "pointer", position: "relative" }}>
+                        {isAdmin(role) && (
+                          <input type="checkbox" title="Select for auto schedule" checked={selectedIds.has(w.id)} onChange={() => toggleSelected(w.id)} onClick={(e) => e.stopPropagation()}
+                            style={{ position: "absolute", top: 8, right: 8, cursor: "pointer", margin: 0 }} />
+                        )}
+                        <div onClick={() => setOpenId(w.id)} style={{ paddingRight: isAdmin(role) ? 20 : 0 }}>
                           <div style={{ fontFamily: FONT_BODY, fontSize: 13, fontWeight: 700, color: C.ink }}>{formatWoNum(w.number)} · {w.title}</div>
                           <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: 3 }}>{locationPath(data.locations, w.locationId)}</div>
                           <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -3099,6 +3298,11 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                             {notDone && du !== null && du < 0 && <Tag text="Overdue" color={C.rust} soft={C.rustSoft} />}
                             {notDone && du !== null && du >= 0 && du <= 7 && <Tag text={`Due ${du}d`} color={C.gold} soft={C.goldSoft} />}
                           </div>
+                          {(w.scheduledDate || w.requiredByDate) && (
+                            <div style={{ fontFamily: FONT_BODY, fontSize: 11, color: C.inkFaint, marginTop: 5 }}>
+                              {w.scheduledDate ? `Scheduled ${fmtDate(w.scheduledDate)}` : ""}{w.scheduledDate && w.requiredByDate ? " · " : ""}{w.requiredByDate ? `Required ${fmtDate(w.requiredByDate)}` : ""}
+                            </div>
+                          )}
                         </div>
                       </Panel>
                     );
@@ -3115,7 +3319,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 10 }}>
                 {pmBases.map((b) => {
                   const linked = data.workOrders.filter((w) => w.sourcePmBaseId === b.id);
-                  const openLinked = linked.filter((w) => w.status !== "Completed" && w.status !== "Verified");
+                  const openLinked = linked.filter((w) => !isDoneStatus(w.status));
                   return (
                     <Panel key={b.id} style={{ padding: "10px 12px", cursor: "pointer" }}>
                       <div onClick={() => setOpenId(b.id)}>
@@ -3125,6 +3329,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                           <Tag text="PM Base" color={WO_TYPE_COLORS["PM Base"]} soft={C.tealSoft} />
                           <Tag text={pmBaseScheduleLabel(b, data)} color={C.inkSoft} soft={C.panelAlt} />
                           <Tag text={`${openLinked.length} open`} color={C.navy} soft={C.navySoft} />
+                          {pmBaseStandbyLabel(b) && <Tag text={pmBaseStandbyLabel(b)} color={pmBaseOnStandby(b) ? C.orange : C.olive} soft={pmBaseOnStandby(b) ? C.orangeSoft : C.oliveSoft} />}
                           {(b.checklistTemplate || []).length > 0 && <Tag text={`${b.checklistTemplate.length}-step checklist`} color={C.gold} soft={C.goldSoft} />}
                         </div>
                       </div>
@@ -3186,11 +3391,11 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
               </select>
             </Field>
             {form.type !== "PM Base" && (
-              <Field label="Scheduled date"><input type="date" style={inputStyle} value={form.scheduledDate} onChange={(e) => setForm({ ...form, scheduledDate: e.target.value })} /></Field>
+              <Field label="Scheduled date (optional — setting one schedules it)"><input type="date" style={inputStyle} value={form.scheduledDate} onChange={(e) => setForm({ ...form, scheduledDate: e.target.value })} /></Field>
             )}
           </div>
           {form.type !== "PM Base" && (
-            <Field label="Required by"><input type="date" style={inputStyle} value={form.requiredByDate} onChange={(e) => setForm({ ...form, requiredByDate: e.target.value })} /></Field>
+            <Field label="Required by" required><input type="date" style={inputStyle} value={form.requiredByDate} onChange={(e) => setForm({ ...form, requiredByDate: e.target.value })} /></Field>
           )}
           <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <Field label="Vendor">
@@ -3257,7 +3462,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                   <PmBaseFields form={detailEdits} setForm={setDetailEdits} data={data} />
                   <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 16 }}>
                     <Btn small onClick={saveDetail}>Save changes</Btn>
-                    <Btn small variant="primary" onClick={() => { saveDetail(); setOpenId(null); }}>Save & Close</Btn>
+                    <Btn small variant="primary" onClick={() => { if (saveDetail()) setOpenId(null); }}>Save & Close</Btn>
                   </div>
                 </>
               ) : (
@@ -3272,6 +3477,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                     : openWO.pmMode === "Fixed"
                     ? `Fixed schedule — runs every year on: ${(openWO.fixedDates || []).map((f) => `${MONTH_NAMES[f.month - 1]} ${f.day}`).join(", ")}`
                     : `Repeats every ${openWO.frequencyValue} ${openWO.frequencyUnit}, counted forward from each completion date.`}
+                  {pmBaseStandbyLabel(openWO) && <div style={{ marginTop: 8, color: C.inkSoft }}>{pmBaseStandbyLabel(openWO)}</div>}
                   {openWO.description && <div style={{ marginTop: 8, fontStyle: "italic", color: C.inkSoft }}>{openWO.description}</div>}
                 </div>
               )}
@@ -3282,8 +3488,8 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
               {isAdmin(role) ? (
                 <>
                   <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                    <Field label="Scheduled date"><input type="date" style={inputStyle} value={detailEdits.scheduledDate || ""} onChange={(e) => setDetailEdits({ ...detailEdits, scheduledDate: e.target.value })} /></Field>
-                    <Field label="Required by"><input type="date" style={inputStyle} value={detailEdits.requiredByDate || ""} onChange={(e) => setDetailEdits({ ...detailEdits, requiredByDate: e.target.value })} /></Field>
+                    <Field label="Scheduled date (setting one schedules it)"><input type="date" style={inputStyle} value={detailEdits.scheduledDate || ""} onChange={(e) => setDetailEdits({ ...detailEdits, scheduledDate: e.target.value })} /></Field>
+                    <Field label="Required by" required><input type="date" style={inputStyle} value={detailEdits.requiredByDate || ""} onChange={(e) => setDetailEdits({ ...detailEdits, requiredByDate: e.target.value })} /></Field>
                   </div>
                   <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <Field label="Cost ($)"><input style={inputStyle} value={detailEdits.cost || ""} onChange={(e) => setDetailEdits({ ...detailEdits, cost: e.target.value })} /></Field>
@@ -3388,8 +3594,8 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                   {WO_STATUSES.map((s) => (
                     <Btn
                       key={s} small variant={openWO.status === s ? "primary" : "ghost"}
-                      disabled={s === "Verified" && !isAdmin(role)}
-                      title={s === "Verified" && !isAdmin(role) ? "Only Owners and Managers can verify a work order" : undefined}
+                      disabled={s === "Closed" && !isAdmin(role)}
+                      title={s === "Closed" && !isAdmin(role) ? "Only Owners and Managers can close a work order" : undefined}
                       onClick={() => setStatus(s)}
                     >
                       {s}
@@ -3399,12 +3605,12 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                 {isAdmin(role) && (
                   <div style={{ display: "flex", gap: 6 }}>
                     <Btn small onClick={saveDetail}>Save changes</Btn>
-                    <Btn small variant="primary" onClick={() => { saveDetail(); setOpenId(null); }}>Save & Close</Btn>
+                    <Btn small variant="primary" onClick={() => { if (saveDetail()) setOpenId(null); }}>Save & Close</Btn>
                   </div>
                 )}
               </div>
 
-              {(openWO.status === "Completed" || openWO.status === "Verified") && (
+              {(isDoneStatus(openWO.status) || (openWO.comments || []).length > 0) && (
                 <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${C.lineSoft}` }}>
                   <div style={{ fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 8 }}>Comments</div>
                   {(openWO.comments || []).length === 0 && <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint, marginBottom: 8 }}>No comments yet.</div>}
@@ -3810,6 +4016,13 @@ const SHEET_SPECS = [
       checklistTemplate: (w.checklistTemplate && w.checklistTemplate.length) ? JSON.stringify(w.checklistTemplate) : "",
       checklist: (w.checklist && w.checklist.length) ? JSON.stringify(w.checklist) : "",
       photos: (w.photos || []).join(","),
+      // v2.2: previously missing from the export, so a restore lost every
+      // comment and reset the parts-deducted flag (risking double deduction).
+      comments: (w.comments && w.comments.length) ? JSON.stringify(w.comments) : "",
+      partsDeducted: w.partsDeducted ? "yes" : "",
+      standby: w.standby ? "yes" : "",
+      standbyWindow: w.standbyWindow && w.standbyWindow.enabled ? JSON.stringify(w.standbyWindow) : "",
+      standbyNow: w.standbyNow ? "yes" : "",
     }),
     fromRow: (r) => {
       const fixedDates = String(r.fixedDates || "").split(",").map((s) => s.trim()).filter(Boolean).map((tok) => {
@@ -3818,7 +4031,7 @@ const SHEET_SPECS = [
       });
       const sourceFixedDate = (r.sourceFixedDateMonth && r.sourceFixedDateDay) ? { month: Number(r.sourceFixedDateMonth), day: Number(r.sourceFixedDateDay) } : null;
       return {
-        id: r.id, number: r.number ? Number(r.number) : undefined, title: String(r.title || ""), type: String(r.type || "Unplanned"), status: String(r.status || "Open"),
+        id: r.id, number: r.number ? Number(r.number) : undefined, title: String(r.title || ""), type: String(r.type || "Unplanned"), status: LEGACY_STATUS_MAP[String(r.status || "").trim()] || String(r.status || "").trim() || "Active",
         assetId: r.assetId ? String(r.assetId) : null, bomNodeId: r.bomNodeId ? String(r.bomNodeId) : null, locationId: r.locationId ? String(r.locationId) : "",
         description: String(r.description || ""),
         sourceRequestId: r.sourceRequestId ? String(r.sourceRequestId) : null,
@@ -3843,6 +4056,11 @@ const SHEET_SPECS = [
         checklistTemplate: (() => { try { return r.checklistTemplate ? JSON.parse(r.checklistTemplate) : undefined; } catch { return undefined; } })(),
         checklist: (() => { try { return r.checklist ? JSON.parse(r.checklist) : undefined; } catch { return undefined; } })(),
         photos: String(r.photos || "").split(",").map((s) => s.trim()).filter(Boolean),
+        comments: (() => { try { const c = r.comments ? JSON.parse(r.comments) : []; return Array.isArray(c) ? c : []; } catch { return []; } })(),
+        partsDeducted: String(r.partsDeducted || "").toLowerCase() === "yes",
+        standby: String(r.standby || "").toLowerCase() === "yes",
+        standbyWindow: (() => { try { return r.standbyWindow ? JSON.parse(r.standbyWindow) : null; } catch { return null; } })(),
+        standbyNow: String(r.standbyNow || "").toLowerCase() === "yes",
       };
     },
   },
@@ -3883,79 +4101,751 @@ const SHEET_SPECS = [
       };
     },
   },
+  {
+    // v2.2: parts added by hand on the Purchasing screen.
+    key: "purchaseList", sheetName: "Purchase List", idPrefix: "pl",
+    toRow: (p) => ({ id: p.id, partId: p.partId || "", name: p.name || "", qty: p.qty || "", note: p.note || "", addedBy: p.addedBy || "", date: p.date || "" }),
+    fromRow: (r) => ({ id: r.id, partId: r.partId ? String(r.partId) : null, name: String(r.name || ""), qty: Number(r.qty) || 1, note: String(r.note || ""), addedBy: String(r.addedBy || ""), date: String(r.date || "") }),
+  },
 ];
+
+/* ---- Backup / restore helpers (v2.2) ---- */
+const DATA_TAB_KEYS = SHEET_SPECS.map((sp) => sp.key);
+// Required columns per sheet: a file missing one of these can't be imported.
+const REQUIRED_COLUMNS = {
+  locations: ["name"], assets: ["name"], bomNodes: ["name", "assetId"], pmTemplates: ["title"], workRequests: ["title"],
+  workOrders: ["title", "type", "status"], benchmarks: ["title"], vendors: ["name"], inventory: ["name"], pmWizardCatalog: ["title"], purchaseList: ["name"],
+};
+const DATE_COLUMNS = {
+  assets: ["purchaseDate", "warrantyEnd", "meterUpdatedDate"], bomNodes: ["installDate"], pmTemplates: ["nextDue"],
+  workRequests: ["dateSubmitted", "requiredByDate"], workOrders: ["scheduledDate", "requiredByDate", "completedDate", "verifiedDate"], purchaseList: ["date"],
+};
+const NUMBER_COLUMNS = {
+  assets: ["currentMeterValue"], inventory: ["qty", "reorderAt", "partNumber"], workOrders: ["number", "frequencyValue", "meterIntervalValue", "meterBaselineValue", "seasonalOffsetDays"],
+  workRequests: ["number"], pmWizardCatalog: ["frequencyValue"], purchaseList: ["qty"],
+};
+const WR_STATUSES = ["Submitted", "Under Review", "Approved", "Declined", "Merged"];
+const SERVER_TABS = [
+  { key: "users", sheetName: "Users", label: "Users" },
+  { key: "alarms", sheetName: "Alarms", label: "Alarms" },
+  { key: "alarmMappings", sheetName: "Alarm Mappings", label: "Alarm Mappings" },
+  { key: "alarmSettings", sheetName: "Alarm Settings", label: "Alarm Settings" },
+  { key: "settings", sheetName: "Settings", label: "Settings" },
+];
+const ALL_TABS = [
+  ...SHEET_SPECS.map((sp) => ({ key: sp.key, sheetName: sp.sheetName, label: sp.sheetName, kind: "data" })),
+  ...SERVER_TABS.map((t) => ({ ...t, kind: "server" })),
+];
+const yn = (v) => String(v == null ? "" : v).trim().toLowerCase();
+const isYes = (v) => ["yes", "y", "true", "1"].includes(yn(v));
+
+// Excel can turn a typed date into a serial number; accept that and convert back.
+function excelSerialToISO(n) {
+  const p = XLSX.SSF.parse_date_code(n);
+  if (!p) return null;
+  return `${String(p.y).padStart(4, "0")}-${String(p.m).padStart(2, "0")}-${String(p.d).padStart(2, "0")}`;
+}
+function validISODate(v) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  const d = new Date(v + "T00:00:00Z");
+  return !isNaN(d) && d.toISOString().slice(0, 10) === v;
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+function csvCell(v) { const t = String(v == null ? "" : v); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; }
+
+// ---- Settings sheet <-> settings object ----
+const SETTINGS_COLOR_KEYS = ["primary", "primaryDark", "accent", "accentDark"];
+const LOGO_CHUNK = 30000;
+function settingsToRows(cfg, logoDataUrl) {
+  const rows = [
+    ["brand.name", cfg.brand.name], ["brand.shortName", cfg.brand.shortName], ["brand.tagline", cfg.brand.tagline], ["brand.topBarTitle", cfg.brand.topBarTitle || ""],
+    ...SETTINGS_COLOR_KEYS.map((k) => [`color.${k}`, cfg.brand.colors[k]]),
+    ["terms.orgNoun", cfg.terms.orgNoun],
+    ...cfg.terms.locationLevels.map((l, i) => [`terms.level${i + 1}`, l]),
+    ["terms.siteLevel", cfg.terms.siteLevelIndex + 1],
+    ["features.homeAssistantAlarms", cfg.features.homeAssistantAlarms ? "yes" : "no"],
+  ];
+  const m = /^data:([^;]+);base64,(.*)$/s.exec(logoDataUrl || "");
+  if (m) {
+    rows.push(["logo.mime", m[1]]);
+    for (let i = 0, n = 1; i < m[2].length; i += LOGO_CHUNK, n++) rows.push([`logo.chunk${String(n).padStart(3, "0")}`, m[2].slice(i, i + LOGO_CHUNK)]);
+  }
+  return rows.map(([key, value]) => ({ key, value }));
+}
+// Returns { values, logoDataUrl, errors[] } — errors are plain strings with the row.
+function rowsToSettings(rows) {
+  const map = {}; const rowOf = {};
+  rows.forEach((r, i) => { const k = String(r.key || "").trim(); if (k) { map[k] = r.value; rowOf[k] = i + 2; } });
+  const errors = [];
+  const text = (k, label, min, max) => {
+    if (!(k in map)) return undefined;
+    const v = String(map[k] == null ? "" : map[k]).trim();
+    if (v.length < min) errors.push({ row: rowOf[k], column: "value", problem: `${label} is required` });
+    else if (v.length > max) errors.push({ row: rowOf[k], column: "value", problem: `${label} must be ${max} characters or fewer` });
+    return v;
+  };
+  const brand = { name: text("brand.name", "Name", 1, 40), shortName: text("brand.shortName", "Short name", 0, 12), tagline: text("brand.tagline", "Tagline", 0, 60), topBarTitle: text("brand.topBarTitle", "Top-bar title", 0, 40), colors: {} };
+  SETTINGS_COLOR_KEYS.forEach((c) => {
+    const k = `color.${c}`;
+    if (!(k in map)) return;
+    const v = String(map[k]).trim();
+    if (/^#[0-9a-fA-F]{6}$/.test(v)) brand.colors[c] = v;
+    else errors.push({ row: rowOf[k], column: "value", problem: `Colour "${c}" must be a hex value like #28415F` });
+  });
+  const terms = { orgNoun: text("terms.orgNoun", "Household/organization word", 1, 20) };
+  const levels = [];
+  for (let i = 1; i <= 6; i++) {
+    const k = `terms.level${i}`;
+    if (!(k in map)) { levels.length = 0; break; }
+    const v = String(map[k] == null ? "" : map[k]).trim();
+    if (!v) errors.push({ row: rowOf[k], column: "value", problem: `Location level ${i} label is required` });
+    else if (v.length > 15) errors.push({ row: rowOf[k], column: "value", problem: `Location level ${i} label must be 15 characters or fewer` });
+    levels.push(v);
+  }
+  if (levels.length === 6) {
+    const seen = new Set();
+    levels.forEach((l, i) => { const t = l.toLowerCase(); if (l && seen.has(t)) errors.push({ row: rowOf[`terms.level${i + 1}`], column: "value", problem: `Location level labels must be different from each other ("${l}" is used twice)` }); seen.add(t); });
+    terms.locationLevels = levels;
+  }
+  if ("terms.siteLevel" in map) {
+    const n = Number(map["terms.siteLevel"]);
+    if (Number.isInteger(n) && n >= 1 && n <= 6) terms.siteLevelIndex = n - 1;
+    else errors.push({ row: rowOf["terms.siteLevel"], column: "value", problem: "Site level must be a number from 1 to 6" });
+  }
+  const features = {};
+  if ("features.homeAssistantAlarms" in map) features.homeAssistantAlarms = isYes(map["features.homeAssistantAlarms"]);
+  let logoDataUrl;
+  const chunkKeys = Object.keys(map).filter((k) => /^logo\.chunk\d+$/.test(k)).sort();
+  if (chunkKeys.length && map["logo.mime"]) {
+    logoDataUrl = `data:${String(map["logo.mime"]).trim()};base64,${chunkKeys.map((k) => String(map[k])).join("")}`;
+    if (!/^data:image\/(png|jpeg|svg\+xml|webp);base64,[A-Za-z0-9+/=]+$/.test(logoDataUrl)) { errors.push({ row: rowOf["logo.mime"], column: "value", problem: "The embedded logo isn't a valid PNG, JPG, SVG or WebP image" }); logoDataUrl = undefined; }
+    else if (logoDataUrl.length * 0.75 > 512 * 1024) { errors.push({ row: rowOf["logo.mime"], column: "value", problem: "The embedded logo is larger than 512 KB" }); logoDataUrl = undefined; }
+  }
+  return { values: { brand, terms, features }, logoDataUrl, errors };
+}
+
+// Reads one sheet into { rows, headers }.
+function readSheet(wb, sheetName) {
+  const ws = wb.Sheets[sheetName];
+  if (!ws) return null;
+  const headers = ((XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" })[0]) || []).map((h) => String(h).trim());
+  const rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
+  return { rows, headers };
+}
+
+// Validates one data sheet. Returns { records, errors[], warnings[] } where each
+// issue is { sheet, row, column, problem }.
+function checkDataSheet(spec, sheet) {
+  const errors = [], warnings = [];
+  const E = (row, column, problem) => errors.push({ sheet: spec.sheetName, row, column, problem });
+  const W = (row, column, problem) => warnings.push({ sheet: spec.sheetName, row, column, problem });
+  let expected = [];
+  try { expected = Object.keys(spec.toRow({ id: "x" })); } catch (e) { expected = []; }
+  const have = new Set(sheet.headers);
+  const required = REQUIRED_COLUMNS[spec.key] || [];
+  expected.forEach((col) => {
+    if (have.has(col)) return;
+    if (required.includes(col)) E(1, col, `Required column "${col}" is missing or was renamed`);
+    else if (col !== "id") W(1, col, `Column "${col}" is missing — those values will be blank`);
+  });
+  if (!have.has("id")) W(1, "id", 'No "id" column — every row will be added as new');
+  if (errors.length) return { records: [], errors, warnings };
+
+  const dateCols = DATE_COLUMNS[spec.key] || [], numCols = NUMBER_COLUMNS[spec.key] || [];
+  const seenIds = new Map(), seenNums = new Map();
+  const records = [];
+  sheet.rows.forEach((raw, i) => {
+    const row = i + 2;
+    const r = { ...raw };
+    // normalise dates / numbers
+    dateCols.forEach((c) => {
+      let v = r[c];
+      if (typeof v === "number") { const iso = excelSerialToISO(v); if (iso) v = iso; }
+      v = String(v == null ? "" : v).trim();
+      if (v && !validISODate(v)) E(row, c, `"${v}" isn't a valid date (use YYYY-MM-DD)`);
+      r[c] = v;
+    });
+    numCols.forEach((c) => {
+      const v = r[c];
+      if (v !== "" && v != null && !Number.isFinite(Number(v))) E(row, c, `"${v}" isn't a number`);
+    });
+    const idv = String(r.id == null ? "" : r.id).trim();
+    if (idv) {
+      if (seenIds.has(idv)) E(row, "id", `Duplicate id "${idv}" (also on row ${seenIds.get(idv)})`);
+      else seenIds.set(idv, row);
+    } else if (have.has("id")) W(row, "id", "No id — this row will be added as a new record");
+    const numCol = spec.key === "inventory" ? "partNumber" : "number";
+    if (numCols.includes(numCol) && r[numCol] !== "" && r[numCol] != null) {
+      const nk = String(Number(r[numCol]));
+      if (seenNums.has(nk)) E(row, numCol, `Duplicate ${numCol} ${nk} (also on row ${seenNums.get(nk)})`);
+      else seenNums.set(nk, row);
+    }
+    required.forEach((c) => { if (!String(r[c] == null ? "" : r[c]).trim() && c !== "type" && c !== "status") E(row, c, `"${c}" is required`); });
+
+    switch (spec.key) {
+      case "locations": {
+        const lv = String(r.level || "").trim();
+        if (!lv) W(row, "level", 'No level — will default to "Room"');
+        else if (!LOCATION_LEVELS.includes(levelKeyFromLabel(lv))) E(row, "level", `"${lv}" isn't one of: ${SETTINGS.terms.locationLevels.join(", ")}`);
+        break;
+      }
+      case "bomNodes": {
+        if (r.level && !BOM_LEVELS.includes(String(r.level))) E(row, "level", `"${r.level}" isn't one of: ${BOM_LEVELS.join(", ")}`);
+        break;
+      }
+      case "workRequests": {
+        if (r.status && !WR_STATUSES.includes(String(r.status))) E(row, "status", `"${r.status}" isn't one of: ${WR_STATUSES.join(", ")}`);
+        if (r.priority && !PRIORITIES.includes(String(r.priority))) E(row, "priority", `"${r.priority}" isn't one of: ${PRIORITIES.join(", ")}`);
+        if (r.suggestedType && !["PM", "PM Base", "Benchmark", "Corrective", "Unplanned"].includes(String(r.suggestedType))) E(row, "suggestedType", `"${r.suggestedType}" isn't a work order type`);
+        break;
+      }
+      case "workOrders": {
+        const type = String(r.type || "").trim();
+        if (!WO_TYPES.includes(type)) E(row, "type", `"${type}" isn't one of: ${WO_TYPES.join(", ")}`);
+        let st = String(r.status || "").trim();
+        if (LEGACY_STATUS_MAP[st] && type !== "PM Base") { W(row, "status", `Old status "${st}" will be imported as "${LEGACY_STATUS_MAP[st]}"`); st = LEGACY_STATUS_MAP[st]; r.status = st; }
+        if (type === "PM Base") { if (!st) r.status = "Active"; else if (st !== "Active") E(row, "status", `PM Base status must be Active (got "${st}")`); }
+        else if (!WO_STATUSES.includes(st)) E(row, "status", `"${st}" isn't one of: ${WO_STATUSES.join(", ")}`);
+        if (r.priority && !PRIORITIES.includes(String(r.priority))) E(row, "priority", `"${r.priority}" isn't one of: ${PRIORITIES.join(", ")}`);
+        if (type !== "PM Base" && !String(r.requiredByDate || "").trim()) E(row, "requiredByDate", "A required-by date is required on every work order");
+        if (type !== "PM Base" && st === "Scheduled" && !String(r.scheduledDate || "").trim()) W(row, "scheduledDate", "Status is Scheduled but there is no scheduled date");
+        if (r.triggerType && !["calendar", "meter", "seasonal"].includes(String(r.triggerType))) E(row, "triggerType", `"${r.triggerType}" isn't calendar, meter or seasonal`);
+        if (r.frequencyUnit && !FREQUENCY_UNITS.includes(String(r.frequencyUnit))) E(row, "frequencyUnit", `"${r.frequencyUnit}" isn't one of: ${FREQUENCY_UNITS.join(", ")}`);
+        if (r.pmMode && !["Fixed", "Non-fixed"].includes(String(r.pmMode))) E(row, "pmMode", `"${r.pmMode}" isn't Fixed or Non-fixed`);
+        ["comments", "standbyWindow", "checklist", "checklistTemplate"].forEach((c) => { if (r[c]) { try { JSON.parse(r[c]); } catch (e) { E(row, c, "Not valid JSON — leave it as exported"); } } });
+        break;
+      }
+      case "pmWizardCatalog": {
+        if (r.frequencyUnit && !FREQUENCY_UNITS.includes(String(r.frequencyUnit))) E(row, "frequencyUnit", `"${r.frequencyUnit}" isn't one of: ${FREQUENCY_UNITS.join(", ")}`);
+        break;
+      }
+      default: break;
+    }
+    if (!errors.some((e) => e.row === row)) {
+      const withId = { ...r, id: idv || uid(spec.idPrefix) };
+      let rec = null;
+      try { rec = spec.fromRow(withId); } catch (e) { E(row, "", "Couldn't read this row: " + e.message); }
+      if (rec) {
+        if (spec.key === "workOrders" && rec.type !== "PM Base" && LEGACY_STATUS_MAP[rec.status]) rec.status = LEGACY_STATUS_MAP[rec.status];
+        rec.__blankId = !idv;
+        records.push(rec);
+      }
+    }
+  });
+  return { records, errors, warnings };
+}
+
+// Reference checks over a whole data object. Returns [{sheet,row,column,problem,key}].
+function checkReferences(d) {
+  const out = [];
+  const ids = (list) => new Set((list || []).map((x) => x.id));
+  const locs = ids(d.locations), assets = ids(d.assets), boms = ids(d.bomNodes), vendors = ids(d.vendors), parts = ids(d.inventory), wos = ids(d.workOrders);
+  const add = (sheet, i, column, problem) => out.push({ sheet, row: i + 2, column, problem, key: `${sheet}|${i}|${column}|${problem}` });
+  const chk = (list, sheet, col, set, label, allowBlank = true) => (list || []).forEach((x, i) => {
+    const v = x[col];
+    if (v == null || v === "") { if (!allowBlank) add(sheet, i, col, `${label} is required`); return; }
+    if (!set.has(v)) add(sheet, i, col, `${label} "${v}" doesn't exist`);
+  });
+  chk(d.locations, "Locations", "parentId", locs, "Parent location");
+  chk(d.assets, "Assets", "locationId", locs, "Location");
+  chk(d.bomNodes, "BOM Nodes", "assetId", assets, "Asset", false);
+  chk(d.bomNodes, "BOM Nodes", "parentId", boms, "Parent BOM node");
+  chk(d.pmTemplates, "PM Templates", "assetId", assets, "Asset");
+  chk(d.workRequests, "Work Requests", "locationId", locs, "Location");
+  chk(d.workRequests, "Work Requests", "assetId", assets, "Asset");
+  chk(d.workOrders, "Work Orders", "locationId", locs, "Location");
+  chk(d.workOrders, "Work Orders", "assetId", assets, "Asset");
+  chk(d.workOrders, "Work Orders", "bomNodeId", boms, "BOM node");
+  chk(d.workOrders, "Work Orders", "vendorId", vendors, "Vendor");
+  chk(d.workOrders, "Work Orders", "sourcePmBaseId", wos, "Source PM Base");
+  chk(d.benchmarks, "Benchmarks", "vendorId", vendors, "Vendor");
+  chk(d.inventory, "Parts", "assetId", assets, "Asset");
+  chk(d.inventory, "Parts", "bomNodeId", boms, "BOM node");
+  chk(d.purchaseList, "Purchase List", "partId", parts, "Part");
+  (d.workOrders || []).forEach((w, i) => (w.parts || []).forEach((p) => { if (!parts.has(p.partId)) add("Work Orders", i, "parts", `Part "${p.partId}" doesn't exist`); }));
+  (d.workRequests || []).forEach((w, i) => (w.suggestedParts || []).forEach((p) => { if (!parts.has(p.partId)) add("Work Requests", i, "suggestedParts", `Part "${p.partId}" doesn't exist`); }));
+  // cycles in parent chains
+  const cycles = (list, sheet, label) => (list || []).forEach((x, i) => {
+    const byId = new Map(list.map((y) => [y.id, y]));
+    let cur = x, hops = 0;
+    while (cur && cur.parentId && hops++ < list.length + 1) cur = byId.get(cur.parentId);
+    if (hops > list.length) add(sheet, i, "parentId", `${label} hierarchy loops back on itself`);
+  });
+  cycles(d.locations, "Locations", "Location");
+  cycles(d.bomNodes, "BOM Nodes", "BOM node");
+  return out;
+}
+
+// Builds the resulting data object from the current data and the selected tabs.
+function buildImportResult(current, picks) {
+  const next = structuredClone(current);
+  const summary = {};
+  for (const [key, { mode, records }] of Object.entries(picks)) {
+    const spec = SHEET_SPECS.find((sp) => sp.key === key);
+    if (!spec) continue;
+    const existing = next[key] || [];
+    const clean = records.map((r) => { const { __blankId, ...rec } = r; return rec; });
+    if (mode === "replace") {
+      summary[key] = { added: clean.length, updated: 0, removed: existing.length };
+      next[key] = clean;
+    } else {
+      let added = 0, updated = 0;
+      const numField = key === "inventory" ? "partNumber" : "number";
+      const list = [...existing];
+      records.forEach((r) => {
+        const { __blankId, ...rec } = r;
+        let idx = __blankId ? -1 : list.findIndex((x) => x.id === rec.id);
+        if (idx < 0 && __blankId && rec[numField] != null && rec[numField] !== "") idx = list.findIndex((x) => x[numField] === rec[numField]);
+        if (idx >= 0) { rec.id = list[idx].id; list[idx] = rec; updated++; } else { list.push(rec); added++; }
+      });
+      summary[key] = { added, updated, removed: 0 };
+      next[key] = list;
+    }
+  }
+  // numbers for new rows + counters (never lower than before, so numbers aren't reused)
+  let maxWo = 0, maxWr = 0, maxPart = 0;
+  (next.workOrders || []).forEach((w) => { if (w.number) maxWo = Math.max(maxWo, w.number); });
+  (next.workRequests || []).forEach((w) => { if (w.number) maxWr = Math.max(maxWr, w.number); });
+  (next.inventory || []).forEach((p) => { if (p.partNumber) maxPart = Math.max(maxPart, p.partNumber); });
+  const c0 = next.counters || {};
+  maxWo = Math.max(maxWo, c0.wo || 0); maxWr = Math.max(maxWr, c0.wr || 0); maxPart = Math.max(maxPart, c0.part || 0);
+  (next.workOrders || []).forEach((w) => { if (!w.number) w.number = ++maxWo; });
+  (next.workRequests || []).forEach((w) => { if (!w.number) w.number = ++maxWr; });
+  (next.inventory || []).forEach((p) => { if (!p.partNumber) p.partNumber = ++maxPart; });
+  next.counters = { wo: maxWo, wr: maxWr, part: maxPart };
+  // duplicate numbers across the merged result
+  const dupIssues = [];
+  [["workOrders", "Work Orders", "number"], ["workRequests", "Work Requests", "number"], ["inventory", "Parts", "partNumber"]].forEach(([k, sheet, col]) => {
+    const seen = new Map();
+    (next[k] || []).forEach((x, i) => { if (seen.has(x[col])) dupIssues.push({ sheet, row: i + 2, column: col, problem: `${col} ${x[col]} is already used by another record in the result`, key: `${sheet}|${i}|dup` }); else seen.set(x[col], i); });
+  });
+  return { next, summary, dupIssues };
+}
+
+// Parses + validates a workbook. Returns { tabs: [...], issues } — nothing is applied.
+function analyzeWorkbook(wb, current) {
+  const tabs = [];
+  const errors = [], warnings = [];
+  const push = (list, items) => items.forEach((it) => list.push(it));
+  for (const t of ALL_TABS) {
+    const sheet = readSheet(wb, t.sheetName);
+    if (!sheet) continue;
+    if (t.kind === "data") {
+      const spec = SHEET_SPECS.find((sp) => sp.key === t.key);
+      const res = checkDataSheet(spec, sheet);
+      tabs.push({ ...t, count: sheet.rows.length, records: res.records, errors: res.errors.length });
+      push(errors, res.errors); push(warnings, res.warnings);
+    } else if (t.key === "users") {
+      const rows = sheet.rows.map((r) => ({
+        username: String(r.username || "").trim(), role: String(r.role || "").trim(), email: String(r.email || "").trim(),
+        notifyPmOverdue: r.notifyPmOverdue === "" ? true : isYes(r.notifyPmOverdue), notifyWarrantyExpiring: r.notifyWarrantyExpiring === "" ? true : isYes(r.notifyWarrantyExpiring),
+        notifyWorkRequestUnreviewed: r.notifyWorkRequestUnreviewed === "" ? true : isYes(r.notifyWorkRequestUnreviewed),
+        mustChangePassword: isYes(r.mustChangePassword), passwordHash: String(r.passwordHash || "").trim() || undefined,
+      }));
+      const errs = [];
+      ["username", "role"].forEach((c) => { if (!sheet.headers.includes(c)) errs.push({ sheet: t.sheetName, row: 1, column: c, problem: `Required column "${c}" is missing or was renamed` }); });
+      if (!errs.length) {
+        const seen = new Set(), seenEmail = new Set();
+        rows.forEach((r, i) => {
+          const row = i + 2;
+          if (!r.username) errs.push({ sheet: t.sheetName, row, column: "username", problem: "Username is required" });
+          else if (seen.has(r.username.toLowerCase())) errs.push({ sheet: t.sheetName, row, column: "username", problem: `Duplicate username "${r.username}"` });
+          seen.add(r.username.toLowerCase());
+          if (!ROLES.includes(r.role)) errs.push({ sheet: t.sheetName, row, column: "role", problem: `"${r.role}" isn't one of: ${ROLES.join(", ")}` });
+          if (r.email) {
+            if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(r.email)) errs.push({ sheet: t.sheetName, row, column: "email", problem: `"${r.email}" isn't a valid email address` });
+            if (seenEmail.has(r.email.toLowerCase())) errs.push({ sheet: t.sheetName, row, column: "email", problem: `Email "${r.email}" is used by more than one user` });
+            seenEmail.add(r.email.toLowerCase());
+          }
+          if (r.passwordHash && !/^\$2[aby]\$\d\d\$[./A-Za-z0-9]{53}$/.test(r.passwordHash)) errs.push({ sheet: t.sheetName, row, column: "passwordHash", problem: "Password hash isn't valid — leave it as exported" });
+          if (!r.passwordHash) warnings.push({ sheet: t.sheetName, row, column: "passwordHash", problem: `${r.username || "User"} has no password in this file: a new account can't sign in until the Owner sets a temporary password (or they use the emailed reset link)` });
+        });
+      }
+      tabs.push({ ...t, count: rows.length, rows, errors: errs.length });
+      push(errors, errs);
+    } else if (t.key === "alarms") {
+      const errs = [];
+      ["id", "triggeredAt"].forEach((c) => { if (!sheet.headers.includes(c)) errs.push({ sheet: t.sheetName, row: 1, column: c, problem: `Required column "${c}" is missing or was renamed` }); });
+      const rows = sheet.rows.map((r) => ({ id: String(r.id || "").trim(), source: String(r.source || "manual"), sourceEntityId: String(r.sourceEntityId || ""), friendlyName: String(r.friendlyName || ""), assetId: String(r.assetId || ""), locationId: String(r.locationId || ""), message: String(r.message || ""), severity: String(r.severity || "warning"), status: String(r.status || "open"), resolutionType: String(r.resolutionType || ""), resolutionRef: String(r.resolutionRef || ""), resolutionReason: String(r.resolutionReason || ""), rawPayload: String(r.rawPayload || ""), triggeredAt: String(r.triggeredAt || "").trim(), resolvedAt: String(r.resolvedAt || "") }));
+      if (!errs.length) rows.forEach((r, i) => { if (!r.id) errs.push({ sheet: t.sheetName, row: i + 2, column: "id", problem: "Alarm id is required" }); if (!r.triggeredAt) errs.push({ sheet: t.sheetName, row: i + 2, column: "triggeredAt", problem: "Triggered-at is required" }); });
+      tabs.push({ ...t, count: rows.length, rows, errors: errs.length });
+      push(errors, errs);
+    } else if (t.key === "alarmMappings") {
+      const errs = [];
+      if (!sheet.headers.includes("entityId")) errs.push({ sheet: t.sheetName, row: 1, column: "entityId", problem: 'Required column "entityId" is missing or was renamed' });
+      const rows = sheet.rows.map((r) => ({ entityId: String(r.entityId || "").trim(), assetId: String(r.assetId || ""), locationId: String(r.locationId || ""), label: String(r.label || "") }));
+      if (!errs.length) rows.forEach((r, i) => { if (!r.entityId) errs.push({ sheet: t.sheetName, row: i + 2, column: "entityId", problem: "Entity id is required" }); });
+      tabs.push({ ...t, count: rows.length, rows, errors: errs.length });
+      push(errors, errs);
+    } else if (t.key === "alarmSettings") {
+      const hit = sheet.rows.find((r) => String(r.key).trim() === "webhookKey");
+      tabs.push({ ...t, count: hit ? 1 : 0, webhookKey: hit ? String(hit.value || "").trim() : "", errors: 0 });
+    } else if (t.key === "settings") {
+      const res = rowsToSettings(sheet.rows);
+      const errs = res.errors.map((e) => ({ sheet: t.sheetName, ...e }));
+      tabs.push({ ...t, count: sheet.rows.length, parsed: res, errors: errs.length });
+      push(errors, errs);
+    }
+  }
+  return { tabs, errors, warnings };
+}
+
+// Applies reference/duplicate checks for the chosen picks. Returns only issues the import would CAUSE.
+function checkImportResult(current, picks) {
+  const baseline = new Set(checkReferences(current).map((x) => x.key));
+  const { next, summary, dupIssues } = buildImportResult(current, picks);
+  const issues = [...checkReferences(next).filter((x) => !baseline.has(x.key)), ...dupIssues];
+  return { next, summary, issues };
+}
+
+function ImportModal({ data, update, onClose, initialFile }) {
+  const dialog = useDialog();
+  const [step, setStep] = useState("loading"); // loading | review | done
+  const [analysis, setAnalysis] = useState(null);
+  const [picked, setPicked] = useState({}); // key -> { on, mode }
+  const [stageId, setStageId] = useState(null);
+  const [attachInfo, setAttachInfo] = useState(null);
+  const [fatal, setFatal] = useState("");
+  const [applying, setApplying] = useState(false);
+  const [result, setResult] = useState(null);
+  const [applyErrors, setApplyErrors] = useState([]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        let buf;
+        if (/\.zip$/i.test(initialFile.name)) {
+          const staged = await api.stageFullBackup(initialFile);
+          setStageId(staged.stageId);
+          setAttachInfo({ count: staged.attachmentCount, missing: staged.attachmentsMissingFromZip, createdAt: staged.createdAt });
+          const bin = atob(staged.workbookBase64);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          buf = bytes.buffer;
+        } else {
+          buf = await initialFile.arrayBuffer();
+        }
+        const wb = XLSX.read(buf, { type: "array" });
+        const a = analyzeWorkbook(wb, data);
+        setAnalysis(a);
+        const init = {};
+        a.tabs.forEach((t) => { init[t.key] = { on: t.kind === "data" || t.key === "users" ? true : true, mode: "merge" }; });
+        setPicked(init);
+        setStep("review");
+      } catch (err) {
+        console.error(err);
+        setFatal(err.message && /zip|backup|manifest|workbook/i.test(err.message) ? err.message : "Couldn't read that file. Make sure it's an export from this app (sheet names and headers intact).");
+        setStep("review");
+      }
+    })();
+    return () => { /* staged zip is discarded server-side when unused */ };
+  }, []); // eslint-disable-line
+
+  const selectedTabs = analysis ? analysis.tabs.filter((t) => picked[t.key] && picked[t.key].on) : [];
+  const dataPicks = {};
+  selectedTabs.filter((t) => t.kind === "data").forEach((t) => { dataPicks[t.key] = { mode: picked[t.key].mode, records: t.records }; });
+  const refCheck = useMemo(() => (analysis ? checkImportResult(data, dataPicks) : null), [analysis, picked]); // eslint-disable-line
+  const selectedSheets = new Set(selectedTabs.map((t) => t.sheetName));
+  const tabErrors = analysis ? analysis.errors.filter((e) => selectedSheets.has(e.sheet)) : [];
+  const allErrors = analysis ? [...tabErrors, ...(refCheck ? refCheck.issues : [])] : [];
+  const warnings = analysis ? analysis.warnings.filter((e) => selectedSheets.has(e.sheet)) : [];
+  // Replace mode on a server tab (users) deletes other accounts — flag it as a warning too.
+  const replaceTabs = selectedTabs.filter((t) => picked[t.key].mode === "replace");
+  const hasErrors = allErrors.length > 0;
+
+  const downloadLog = () => {
+    const lines = ["type,sheet,row,column,problem", ...allErrors.map((e) => ["error", e.sheet, e.row, e.column, e.problem].map(csvCell).join(",")), ...warnings.map((e) => ["warning", e.sheet, e.row, e.column, e.problem].map(csvCell).join(","))];
+    downloadBlob(new Blob([lines.join("\n")], { type: "text/csv" }), `${brandSlug()}-import-log-${todayISO()}.csv`);
+  };
+
+  const apply = async () => {
+    if (hasErrors || selectedTabs.length === 0) return;
+    const names = selectedTabs.map((t) => `${t.label} (${picked[t.key].mode === "replace" ? "replace" : "update and add"})`).join(", ");
+    if (replaceTabs.length) {
+      const ok = await dialog.confirm(`Replace tab(s): ${replaceTabs.map((t) => t.label).join(", ")}? Existing rows in those tabs that aren't in the file will be DELETED. Everything else stays as it is.`);
+      if (!ok) return;
+    }
+    const ok2 = await dialog.confirm(`Apply the import to: ${names}?${warnings.length ? ` There are ${warnings.length} warning(s) — review them first if you haven't.` : ""}`);
+    if (!ok2) return;
+    setApplying(true); setApplyErrors([]);
+    try {
+      const serverTabs = {};
+      selectedTabs.filter((t) => t.kind === "server").forEach((t) => {
+        const mode = picked[t.key].mode;
+        if (t.key === "settings") serverTabs.settings = { values: t.parsed.values, logoDataUrl: t.parsed.logoDataUrl };
+        else if (t.key === "alarmSettings") { if (t.webhookKey) serverTabs.alarmSettings = { webhookKey: t.webhookKey }; }
+        else serverTabs[t.key] = { mode, rows: t.rows };
+      });
+      let serverReport = null;
+      if (Object.keys(serverTabs).length) {
+        const r = await api.importServerData(serverTabs);
+        serverReport = r.report;
+      }
+      let attachReport = null;
+      if (Object.keys(dataPicks).length) update(() => refCheck.next);
+      if (stageId) attachReport = await api.applyStagedAttachments(stageId);
+      setResult({ summary: refCheck ? refCheck.summary : {}, serverReport, attachReport });
+      setStageId(null);
+      setStep("done");
+    } catch (err) {
+      setApplyErrors(err.errors && err.errors.length ? err.errors : [err.message || "The import failed"]);
+    } finally { setApplying(false); }
+  };
+
+  const close = () => { if (stageId) api.discardStagedBackup(stageId).catch(() => {}); onClose(); };
+  const bad = { color: C.rust }, small = { fontFamily: FONT_BODY, fontSize: 12 };
+  const modeOptions = (t) => (
+    <select style={{ ...inputStyle, width: "auto", padding: "4px 6px", fontSize: 12 }} value={picked[t.key].mode} disabled={t.key === "settings" || t.key === "alarmSettings"} onChange={(e) => setPicked({ ...picked, [t.key]: { ...picked[t.key], mode: e.target.value } })}>
+      <option value="merge">Update and add</option>
+      <option value="replace">Replace tab</option>
+    </select>
+  );
+
+  return (
+    <Modal title="Import from Excel" onClose={close} wide>
+      {step === "loading" && <div style={{ ...small, color: C.inkSoft, display: "flex", alignItems: "center", gap: 8 }}><Loader2 className="animate-spin" size={14} /> Reading and checking the file…</div>}
+      {step === "review" && fatal && (
+        <>
+          <div style={{ ...small, ...bad, marginBottom: 14 }}>{fatal}</div>
+          <div style={{ display: "flex", justifyContent: "flex-end" }}><Btn onClick={close}>Close</Btn></div>
+        </>
+      )}
+      {step === "review" && !fatal && analysis && (
+        <>
+          <div style={{ ...small, color: C.inkSoft, marginBottom: 10 }}>
+            Nothing has been changed yet. Tick the tabs to import — tabs you leave unticked (or that aren't in the file) are not touched. "Update and add" matches rows on id (or number) and keeps rows that aren't in the file; "Replace tab" makes the tab match the file exactly.
+            {attachInfo && <> This is a full backup from {attachInfo.createdAt ? new Date(attachInfo.createdAt).toLocaleString() : "an earlier date"} with {attachInfo.count} photo(s); photos are restored after the data import{attachInfo.missing ? ` (${attachInfo.missing} listed photo(s) are missing from the zip)` : ""}.</>}
+          </div>
+          {analysis.tabs.length === 0 && <div style={{ ...small, ...bad, marginBottom: 12 }}>None of this app's sheets were found in the file.</div>}
+          <div style={{ border: `1px solid ${C.lineSoft}`, borderRadius: 4, marginBottom: 12 }}>
+            {analysis.tabs.map((t) => (
+              <div key={t.key} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 10px", borderTop: `1px solid ${C.lineSoft}`, flexWrap: "wrap" }}>
+                <input type="checkbox" checked={!!(picked[t.key] && picked[t.key].on)} onChange={(e) => setPicked({ ...picked, [t.key]: { ...picked[t.key], on: e.target.checked } })} />
+                <span style={{ ...small, fontWeight: 600, color: C.ink, minWidth: 130 }}>{t.label}</span>
+                <span style={{ ...small, color: C.inkFaint, minWidth: 70 }}>{t.count} row{t.count === 1 ? "" : "s"}</span>
+                {t.errors > 0 && <span style={{ ...small, ...bad, fontWeight: 600 }}>{t.errors} error{t.errors === 1 ? "" : "s"}</span>}
+                <span style={{ marginLeft: "auto" }}>{picked[t.key] && picked[t.key].on && modeOptions(t)}</span>
+              </div>
+            ))}
+          </div>
+          {ALL_TABS.filter((t) => !analysis.tabs.find((x) => x.key === t.key)).length > 0 && (
+            <div style={{ ...small, color: C.inkFaint, marginBottom: 12 }}>Not in this file (left untouched): {ALL_TABS.filter((t) => !analysis.tabs.find((x) => x.key === t.key)).map((t) => t.label).join(", ")}</div>
+          )}
+
+          {hasErrors && (
+            <div style={{ border: `1px solid ${C.rust}`, borderRadius: 4, padding: 10, marginBottom: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
+                <span style={{ ...small, ...bad, fontWeight: 700 }}>{allErrors.length} error{allErrors.length === 1 ? "" : "s"} — nothing will be imported until these are fixed (or those tabs are unticked)</span>
+                <Btn small variant="ghost" onClick={downloadLog}><Download size={12} /> Download log</Btn>
+              </div>
+              <div className="hk-scroll" style={{ maxHeight: 220, overflowY: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", ...small }}>
+                  <thead><tr style={{ textAlign: "left", color: C.inkFaint }}><th style={{ padding: "2px 6px" }}>Sheet</th><th style={{ padding: "2px 6px" }}>Row</th><th style={{ padding: "2px 6px" }}>Column</th><th style={{ padding: "2px 6px" }}>Problem</th></tr></thead>
+                  <tbody>
+                    {allErrors.slice(0, 500).map((e, i) => (
+                      <tr key={i} style={{ borderTop: `1px solid ${C.lineSoft}`, color: C.ink }}><td style={{ padding: "3px 6px" }}>{e.sheet}</td><td style={{ padding: "3px 6px" }}>{e.row}</td><td style={{ padding: "3px 6px" }}>{e.column}</td><td style={{ padding: "3px 6px" }}>{e.problem}</td></tr>
+                    ))}
+                  </tbody>
+                </table>
+                {allErrors.length > 500 && <div style={{ ...small, color: C.inkFaint, padding: 6 }}>…and {allErrors.length - 500} more — download the log for the full list.</div>}
+              </div>
+            </div>
+          )}
+          {!hasErrors && warnings.length > 0 && (
+            <div style={{ border: `1px solid ${C.gold}`, borderRadius: 4, padding: 10, marginBottom: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
+                <span style={{ ...small, fontWeight: 700, color: C.ink }}>{warnings.length} warning{warnings.length === 1 ? "" : "s"} — the import can go ahead, but please review</span>
+                <Btn small variant="ghost" onClick={downloadLog}><Download size={12} /> Download log</Btn>
+              </div>
+              <div className="hk-scroll" style={{ maxHeight: 140, overflowY: "auto", ...small, color: C.inkSoft }}>
+                {warnings.slice(0, 200).map((e, i) => <div key={i}>{e.sheet} · row {e.row}{e.column ? ` · ${e.column}` : ""}: {e.problem}</div>)}
+                {warnings.length > 200 && <div>…and {warnings.length - 200} more in the log.</div>}
+              </div>
+            </div>
+          )}
+          {!hasErrors && refCheck && selectedTabs.some((t) => t.kind === "data") && (
+            <div style={{ ...small, color: C.inkSoft, marginBottom: 12 }}>
+              {Object.entries(refCheck.summary).map(([k, v]) => `${SHEET_SPECS.find((sp) => sp.key === k).sheetName}: ${v.added} added, ${v.updated} updated${v.removed ? `, ${v.removed} replaced/removed` : ""}`).join(" · ")}
+            </div>
+          )}
+          {applyErrors.length > 0 && (
+            <div style={{ border: `1px solid ${C.rust}`, borderRadius: 4, padding: 10, marginBottom: 12, ...small, ...bad }}>
+              Nothing was changed — the server rejected the import:
+              {applyErrors.map((e, i) => <div key={i}>• {e}</div>)}
+            </div>
+          )}
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <Btn variant="ghost" onClick={close}>Cancel</Btn>
+            <Btn variant="primary" onClick={apply} disabled={hasErrors || selectedTabs.length === 0 || applying}>{applying ? "Importing…" : "Import selected tabs"}</Btn>
+          </div>
+        </>
+      )}
+      {step === "done" && result && (
+        <>
+          <div style={{ ...small, color: C.ink, marginBottom: 8, fontWeight: 600 }}>Import complete.</div>
+          <div style={{ ...small, color: C.inkSoft, marginBottom: 14 }}>
+            {Object.entries(result.summary).map(([k, v]) => <div key={k}>{SHEET_SPECS.find((sp) => sp.key === k).sheetName}: {v.added} added, {v.updated} updated{v.removed ? `, ${v.removed} previous row(s) replaced` : ""}</div>)}
+            {result.serverReport && result.serverReport.users && <div>Users: {result.serverReport.users.created} added, {result.serverReport.users.updated} updated{result.serverReport.users.skipped ? `, ${result.serverReport.users.skipped} skipped (your own account is never overwritten)` : ""}{result.serverReport.users.noPassword ? `. ${result.serverReport.users.noPassword} new user(s) have no password yet — set a temporary one with the key icon under Members.` : ""}</div>}
+            {result.serverReport && result.serverReport.alarms && <div>Alarms: {result.serverReport.alarms.count} imported</div>}
+            {result.serverReport && result.serverReport.alarmMappings && <div>Alarm Mappings: {result.serverReport.alarmMappings.count} imported</div>}
+            {result.serverReport && result.serverReport.alarmSettings && <div>Alarm webhook key restored</div>}
+            {result.serverReport && result.serverReport.settings && <div>Settings and logo applied — reload the page to see every label update.</div>}
+            {result.attachReport && <div>Photos: {result.attachReport.restored} restored, {result.attachReport.skipped} already present{result.attachReport.failed ? `, ${result.attachReport.failed} failed` : ""}</div>}
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end" }}><Btn variant="primary" onClick={onClose}>Done</Btn></div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+function fmtBytes(n) {
+  if (!n && n !== 0) return "";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
 
 function BackupTools({ data, update }) {
   const dialog = useDialog();
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState("");
+  const [creds, setCreds] = useState(false);
+  const [importFile, setImportFile] = useState(null);
+  const [snaps, setSnaps] = useState(null);
+  const [shrinkMsg, setShrinkMsg] = useState("");
   const fileRef = useRef(null);
 
-  const doExport = () => {
+  const loadSnaps = () => api.listSnapshots().then(setSnaps).catch(() => setSnaps({ snapshots: [], keep: 0, enabled: false }));
+  useEffect(() => { loadSnaps(); }, []); // eslint-disable-line
+
+  // Builds the workbook: every data tab plus the server-held tabs (users, alarms,
+  // alarm mappings/settings, Owner settings + logo, attachment index).
+  const buildWorkbook = async () => {
+    const server = await api.getServerBackupData(creds);
     const wb = XLSX.utils.book_new();
     const readme = XLSX.utils.aoa_to_sheet([
-      [`${EDITION.brand.name} backup`], ["Exported " + new Date().toLocaleString()], [""],
+      [`${SETTINGS.brand.name} backup`], ["Exported " + new Date().toLocaleString()], [""],
       ["Each tab is one data type. Edit rows in Excel and re-import this file to apply changes."],
+      ["On import you choose which tabs to apply; tabs you don't tick (or that are missing from the file) are never touched."],
       ["To ADD a new row: leave its 'id' column blank — the app assigns one on import."],
       ["To edit an existing row: keep its 'id' (and 'number'/'partNumber', where present) unchanged."],
       ["Don't rename the sheet tabs or column headers — import matches on those."],
+      ["Users / Alarms / Alarm Mappings / Settings carry the settings and accounts kept outside the main data."],
+      [creds ? "This file INCLUDES login credentials (password hashes and the alarm webhook key). Keep it private." : "Login credentials (password hashes, alarm webhook key) are not included in this file."],
+      ["Photos are not in this workbook — use the Full backup (.zip) to include them."],
     ]);
     XLSX.utils.book_append_sheet(wb, readme, "Read me");
     SHEET_SPECS.forEach((spec) => {
       const rows = (data[spec.key] || []).map(spec.toRow);
-      const ws = XLSX.utils.json_to_sheet(rows);
-      XLSX.utils.book_append_sheet(wb, ws, spec.sheetName);
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows.length ? rows : [], rows.length ? undefined : { header: Object.keys(spec.toRow({ id: "" })) }), spec.sheetName);
     });
-    XLSX.writeFile(wb, `${brandSlug()}-backup-${todayISO()}.xlsx`);
+    const userRows = server.users.map((u) => ({ username: u.username, role: u.role, email: u.email, notifyPmOverdue: u.notifyPmOverdue ? "yes" : "no", notifyWarrantyExpiring: u.notifyWarrantyExpiring ? "yes" : "no", notifyWorkRequestUnreviewed: u.notifyWorkRequestUnreviewed ? "yes" : "no", mustChangePassword: u.mustChangePassword ? "yes" : "", ...(creds ? { passwordHash: u.passwordHash } : {}) }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(userRows), "Users");
+    const alarmRows = server.alarms.map((a) => ({ id: a.id, source: a.source, sourceEntityId: a.source_entity_id || "", friendlyName: a.friendly_name || "", assetId: a.asset_id || "", locationId: a.location_id || "", message: a.message || "", severity: a.severity, status: a.status, resolutionType: a.resolution_type || "", resolutionRef: a.resolution_ref || "", resolutionReason: a.resolution_reason || "", rawPayload: a.raw_payload || "", triggeredAt: a.triggered_at, resolvedAt: a.resolved_at || "" }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(alarmRows.length ? alarmRows : [], alarmRows.length ? undefined : { header: ["id", "source", "triggeredAt"] }), "Alarms");
+    const mapRows = server.alarmMappings.map((m) => ({ entityId: m.entity_id, assetId: m.asset_id || "", locationId: m.location_id || "", label: m.label || "" }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(mapRows.length ? mapRows : [], mapRows.length ? undefined : { header: ["entityId", "assetId", "locationId", "label"] }), "Alarm Mappings");
+    if (server.alarmSettings) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([{ key: "webhookKey", value: server.alarmSettings.webhookKey }]), "Alarm Settings");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(settingsToRows(server.settings, server.logoDataUrl)), "Settings");
+    const attRows = server.attachments.map((a) => ({ id: a.id, filename: a.filename, mimeType: a.mime_type || "", size: a.size || "", uploadedBy: a.uploaded_by || "", createdAt: a.created_at }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(attRows.length ? attRows : [], attRows.length ? undefined : { header: ["id", "filename", "mimeType", "size", "uploadedBy", "createdAt"] }), "Attachments");
+    return wb;
   };
 
-  const doImport = async (file) => {
-    setBusy(true);
+  const doExport = async () => {
+    setBusy("export");
     try {
-      const buf = await file.arrayBuffer();
-      const wb = XLSX.read(buf, { type: "array" });
-      const next = { locations: [], assets: [], bomNodes: [], pmTemplates: [], workRequests: [], workOrders: [], benchmarks: [], vendors: [], inventory: [], counters: { wo: 0, wr: 0, part: 0 } };
-      for (const spec of SHEET_SPECS) {
-        const ws = wb.Sheets[spec.sheetName];
-        if (!ws) continue;
-        const rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
-        next[spec.key] = rows.map((r) => {
-          const withId = { ...r, id: r.id && String(r.id).trim() ? String(r.id).trim() : uid(spec.idPrefix) };
-          return spec.fromRow(withId);
-        });
+      const wb = await buildWorkbook();
+      XLSX.writeFile(wb, `${brandSlug()}-backup-${todayISO()}.xlsx`);
+    } catch (err) { await dialog.alertMsg("Couldn't build the export: " + err.message); }
+    finally { setBusy(""); }
+  };
+  const doFullBackup = async () => {
+    setBusy("full");
+    try {
+      const wb = await buildWorkbook();
+      const bytes = XLSX.write(wb, { type: "array", bookType: "xlsx" });
+      const blob = await api.buildFullBackup(new Uint8Array(bytes));
+      downloadBlob(blob, `${brandSlug()}-full-backup-${todayISO()}.zip`);
+    } catch (err) { await dialog.alertMsg("Couldn't build the full backup: " + err.message); }
+    finally { setBusy(""); }
+  };
+  const runSnapshot = async () => {
+    setBusy("snap");
+    try { await api.runSnapshot(); await loadSnaps(); } catch (err) { await dialog.alertMsg(err.message); }
+    finally { setBusy(""); }
+  };
+  // One-time shrink of photos uploaded before v2.2: download each, shrink in the
+  // browser, and replace it in place (same id) only when the result is smaller.
+  const shrinkExisting = async () => {
+    const ok = await dialog.confirm("Shrink all existing photos to about 1600 px on the long edge (JPEG)? Each photo is only replaced if the result is smaller. This can't be undone, and may take a while.");
+    if (!ok) return;
+    setBusy("shrink"); setShrinkMsg("Working…");
+    try {
+      const list = await api.listAttachments();
+      let done = 0, saved = 0, skipped = 0;
+      for (const att of list) {
+        setShrinkMsg(`Checking ${done + 1} of ${list.length}…`);
+        try {
+          const blob = await (await fetch(api.attachmentUrl(att.id), { credentials: "include" })).blob();
+          const file = new File([blob], att.filename || "photo", { type: att.mimeType || blob.type });
+          const small = await shrinkImage(file);
+          if (small === file || small.size >= att.size) { skipped++; }
+          else { const r = await api.replaceAttachment(att.id, small); if (r.replaced) saved += att.size - small.size; else skipped++; }
+        } catch (e) { skipped++; }
+        done++;
       }
-      let maxWo = 0, maxWr = 0, maxPart = 0;
-      next.workOrders.forEach((w) => { if (w.number) maxWo = Math.max(maxWo, w.number); });
-      next.workRequests.forEach((w) => { if (w.number) maxWr = Math.max(maxWr, w.number); });
-      next.inventory.forEach((p) => { if (p.partNumber) maxPart = Math.max(maxPart, p.partNumber); });
-      next.workOrders.forEach((w) => { if (!w.number) w.number = ++maxWo; });
-      next.workRequests.forEach((w) => { if (!w.number) w.number = ++maxWr; });
-      next.inventory.forEach((p) => { if (!p.partNumber) p.partNumber = ++maxPart; });
-      next.counters = { wo: maxWo, wr: maxWr, part: maxPart };
-
-      const ok = await dialog.confirm(`This will replace ALL current ${EDITION.brand.name} data with the contents of this file. Continue?`);
-      if (!ok) return;
-      update(() => next);
-      await dialog.alertMsg("Import complete.");
-    } catch (err) {
-      console.error(err);
-      await dialog.alertMsg("Couldn't read that file. Make sure it's an unmodified export from this app (sheet names and headers intact).");
-    } finally {
-      setBusy(false);
-      if (fileRef.current) fileRef.current.value = "";
-    }
+      setShrinkMsg(`Done: ${done} photo(s) checked, ${fmtBytes(saved)} saved, ${skipped} left as they were.`);
+    } catch (err) { setShrinkMsg("Couldn't finish: " + err.message); }
+    finally { setBusy(""); }
   };
 
+  const sub = { fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink, margin: "16px 0 6px" };
+  const note = { fontFamily: FONT_BODY, fontSize: 12, color: C.inkSoft };
   return (
     <Panel style={{ padding: 18 }}>
       <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 4 }}>Backup & bulk edit</div>
-      <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkSoft, marginBottom: 14 }}>
-        Export everything to an Excel file — edit it (including bulk changes across many rows) and re-import to apply the changes, or just keep it as a backup.
+      <div style={{ ...note, marginBottom: 14 }}>
+        Export everything to an Excel file — edit it (including bulk changes across many rows) and re-import to apply the changes, or just keep it as a backup. The file also carries members, alarms, alarm mappings, and your branding settings and logo. On import you choose which tabs to apply, and the file is checked first — if anything is wrong you get an error log and nothing changes.
       </div>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-        <Btn onClick={doExport}><FileDown size={14} /> Export to Excel</Btn>
-        <Btn variant="ghost" disabled={busy} onClick={() => fileRef.current?.click()}><FileUp size={14} /> {busy ? "Importing…" : "Import from Excel"}</Btn>
-        <input ref={fileRef} type="file" accept=".xlsx" style={{ display: "none" }} onChange={(e) => { const f = e.target.files && e.target.files[0]; if (f) doImport(f); }} />
+        <Btn onClick={doExport} disabled={!!busy}><FileDown size={14} /> {busy === "export" ? "Building…" : "Export to Excel"}</Btn>
+        <Btn onClick={doFullBackup} disabled={!!busy}><Archive size={14} /> {busy === "full" ? "Building…" : "Full backup (.zip, with photos)"}</Btn>
+        <Btn variant="ghost" disabled={!!busy} onClick={() => fileRef.current?.click()}><FileUp size={14} /> Import from Excel or backup…</Btn>
+        <input ref={fileRef} type="file" accept=".xlsx,.zip" style={{ display: "none" }} onChange={(e) => { const f = e.target.files && e.target.files[0]; if (f) setImportFile(f); e.target.value = ""; }} />
       </div>
+      <label style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 12, ...note, cursor: "pointer" }}>
+        <input type="checkbox" checked={creds} onChange={(e) => setCreds(e.target.checked)} />
+        Include login credentials (password hashes and the alarm webhook key) in exports
+      </label>
+      {creds && <div style={{ ...note, color: C.rust, marginTop: 4 }}>The file will contain password hashes and the webhook key — store it somewhere private. Left off, restored accounts that don't exist yet will need a temporary password from you.</div>}
+
+      <div style={sub}>Automatic database snapshots</div>
+      <div style={{ ...note, marginBottom: 8 }}>
+        {snaps && snaps.enabled === false ? "Disabled on this server (BACKUP_SNAPSHOTS=false)." : `A consistent copy of the database is saved to the data volume about once a day; the latest ${snaps ? snaps.keep : 7} are kept. This protects against a bad import or edit, but it lives on the same disk — keep your own off-device copy of the Full backup too.`}
+      </div>
+      {snaps && snaps.snapshots.slice(0, 5).map((sn) => (
+        <div key={sn.name} style={{ display: "flex", justifyContent: "space-between", ...note, padding: "3px 0" }}>
+          <span>{new Date(sn.createdAt).toLocaleString()} · {fmtBytes(sn.size)}</span>
+          <a href={api.snapshotUrl(sn.name)} style={{ color: C.navy }}>Download</a>
+        </div>
+      ))}
+      <div style={{ marginTop: 8 }}><Btn small variant="ghost" onClick={runSnapshot} disabled={!!busy}>{busy === "snap" ? "Saving…" : "Take a snapshot now"}</Btn></div>
+
+      <div style={sub}>Photos</div>
+      <div style={{ ...note, marginBottom: 8 }}>New photos are shrunk automatically (about 1600 px, JPEG) before upload. Shrink photos uploaded earlier once:</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <Btn small variant="ghost" onClick={shrinkExisting} disabled={!!busy}>{busy === "shrink" ? "Shrinking…" : "Shrink existing photos"}</Btn>
+        {shrinkMsg && <span style={note}>{shrinkMsg}</span>}
+      </div>
+      {importFile && <ImportModal data={data} update={update} initialFile={importFile} onClose={() => setImportFile(null)} />}
     </Panel>
   );
 }
@@ -3971,14 +4861,17 @@ function MemberNotifyModal({ user, onClose, onSaved }) {
     notifyWorkRequestUnreviewed: user.notifyWorkRequestUnreviewed,
   });
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
   const save = async () => {
-    setBusy(true);
+    setBusy(true); setError("");
     try { await api.updateUser(user.id, form); onSaved(); onClose(); }
+    catch (err) { setError(err.message || "Couldn't save"); }
     finally { setBusy(false); }
   };
   return (
     <Modal title={`Notifications — ${user.username}`} onClose={onClose}>
-      <Field label="Notification email"><input type="email" style={inputStyle} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="name@example.com" /></Field>
+      <Field label="Email (notifications and password reset)"><input type="email" style={inputStyle} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="name@example.com" /></Field>
+      {error && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.rust, marginBottom: 10 }}>{error}</div>}
       <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginBottom: 10 }}>
         Requires SMTP to be configured on the server (see .env.example) — with no email set here, or none of the toggles below on, this member gets no digest.
       </div>
@@ -4000,19 +4893,65 @@ function MemberNotifyModal({ user, onClose, onSaved }) {
   );
 }
 
+// Owner sets a temporary password for a member (typed, or generated and shown
+// once). The member must replace it at their next sign-in.
+function ResetPasswordModal({ user, onClose, onDone }) {
+  const [password, setPassword] = useState("");
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const run = async () => {
+    if (password && password.length < MIN_PASSWORD) { setError(`A typed temporary password must be at least ${MIN_PASSWORD} characters (or leave it blank to generate one).`); return; }
+    setBusy(true); setError("");
+    try { const r = await api.ownerResetPassword(user.id, password); setResult(r.temporaryPassword); onDone(); }
+    catch (err) { setError(err.message || "Couldn't reset the password"); }
+    finally { setBusy(false); }
+  };
+  const copy = async () => { try { await navigator.clipboard.writeText(result); setCopied(true); } catch (e) { /* clipboard blocked */ } };
+  return (
+    <Modal title={`Reset password — ${user.username}`} onClose={onClose}>
+      {!result ? (
+        <>
+          <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkSoft, marginBottom: 12 }}>
+            Sets a temporary password for {user.username}. They will be asked to choose their own the next time they sign in, and any devices they're signed in on are signed out now.
+          </div>
+          <Field label="Temporary password (leave blank to generate one)"><input style={inputStyle} value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="off" /></Field>
+          {error && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.rust, marginBottom: 10 }}>{error}</div>}
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+            <Btn variant="primary" onClick={run} disabled={busy}>Reset password</Btn>
+          </div>
+        </>
+      ) : (
+        <>
+          <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkSoft, marginBottom: 10 }}>Give {user.username} this temporary password. It is shown only now.</div>
+          <div style={{ fontFamily: "monospace", fontSize: 18, letterSpacing: "0.04em", color: C.ink, background: C.panelAlt, border: `1px solid ${C.line}`, borderRadius: 4, padding: "10px 12px", marginBottom: 12, userSelect: "all" }}>{result}</div>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <Btn variant="ghost" onClick={copy}><Copy size={13} /> {copied ? "Copied" : "Copy"}</Btn>
+            <Btn variant="primary" onClick={onClose}>Done</Btn>
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
 function MemberManagementInline({ currentUser }) {
   const dialog = useDialog();
   const [users, setUsers] = useState(null);
   const [form, setForm] = useState({ username: "", password: "", role: "Executor", email: "" });
   const [error, setError] = useState("");
   const [notifyUser, setNotifyUser] = useState(null);
+  const [resetUser, setResetUser] = useState(null);
 
   const load = () => api.listUsers().then(setUsers).catch(() => setUsers([]));
   useEffect(() => { load(); }, []); // eslint-disable-line
 
   const add = async () => {
     setError("");
-    if (!form.username.trim() || !form.password) { setError("Username and password are required."); return; }
+    if (!form.username.trim() || !form.password) { setError("Username and a temporary password are required."); return; }
+    if (form.password.length < MIN_PASSWORD) { setError(`The temporary password must be at least ${MIN_PASSWORD} characters.`); return; }
     try {
       await api.addUser(form.username.trim(), form.password, form.role, form.email.trim());
       setForm({ username: "", password: "", role: "Executor", email: "" });
@@ -4037,10 +4976,12 @@ function MemberManagementInline({ currentUser }) {
             <span style={{ fontFamily: FONT_BODY, fontSize: 13.5, fontWeight: 600, color: C.ink }}>{u.username}</span>
             {u.id === currentUser.id && <span style={{ fontFamily: FONT_BODY, fontSize: 11, color: C.inkFaint }}> (you)</span>}
             {u.email && <div style={{ fontFamily: FONT_BODY, fontSize: 11, color: C.inkFaint }}>{u.email}</div>}
+            {u.mustChangePassword && <div style={{ fontFamily: FONT_BODY, fontSize: 11, color: C.orange, fontWeight: 600 }}>Temporary password — must change at next sign-in</div>}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <Tag text={u.role} color={u.role === "Owner" ? C.navy : u.role === "Manager" ? C.teal : u.role === "Guest" ? C.inkFaint : C.olive} soft={u.role === "Owner" ? C.navySoft : u.role === "Manager" ? C.tealSoft : u.role === "Guest" ? C.panelAlt : C.oliveSoft} />
-            <button onClick={() => setNotifyUser(u)} title="Notification settings" style={{ background: "none", border: "none", cursor: "pointer", color: C.inkSoft }}><Bell size={14} /></button>
+            {u.id !== currentUser.id && <button onClick={() => setResetUser(u)} title="Reset password" style={{ background: "none", border: "none", cursor: "pointer", color: C.inkSoft }}><Key size={14} /></button>}
+            <button onClick={() => setNotifyUser(u)} title="Email & notification settings" style={{ background: "none", border: "none", cursor: "pointer", color: C.inkSoft }}><Bell size={14} /></button>
             {u.id !== currentUser.id && <button onClick={() => remove(u)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rust }}><Trash2 size={14} /></button>}
           </div>
         </div>
@@ -4048,15 +4989,16 @@ function MemberManagementInline({ currentUser }) {
       <div style={{ fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink, margin: "16px 0 8px" }}>Add a member</div>
       <div className="hk-grid-3" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
         <Field label="Username" required><input style={inputStyle} value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></Field>
-        <Field label="Password" required><input type="password" style={inputStyle} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></Field>
+        <Field label="Temporary password" required><input type="password" style={inputStyle} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} autoComplete="new-password" /></Field>
         <Field label="Role">
           <select style={inputStyle} value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
             {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
           </select>
         </Field>
       </div>
-      <Field label="Notification email (optional)"><input type="email" style={inputStyle} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="name@example.com" /></Field>
+      <Field label="Email (optional — notifications and self-service password reset)"><input type="email" style={inputStyle} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="name@example.com" /></Field>
       <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 10 }}>
+        The password you set here is temporary: the member must choose their own the first time they sign in. At least {MIN_PASSWORD} characters.<br />
         Owner: full access. Manager: same rights as Owner, but can only delete records they created, and can't reach this page. Executor: does the work — submits requests, updates work orders. Guest: read-only.
         Notification preferences (which digests they receive) can be set after adding them, via the bell icon.
       </div>
@@ -4065,6 +5007,7 @@ function MemberManagementInline({ currentUser }) {
         <Btn variant="primary" onClick={add}><UserPlus size={14} /> Add member</Btn>
       </div>
       {notifyUser && <MemberNotifyModal user={notifyUser} onClose={() => setNotifyUser(null)} onSaved={load} />}
+      {resetUser && <ResetPasswordModal user={resetUser} onClose={() => setResetUser(null)} onDone={load} />}
     </Panel>
   );
 }
@@ -4150,9 +5093,54 @@ function DeleteWorkRequestTool({ data, update }) {
   );
 }
 
-function PurchasingView({ data, goToOrder }) {
+// Manually add something to buy (v2.2): an existing catalogue part, or a
+// free-typed item that isn't in the catalogue at all.
+function AddPurchaseModal({ data, update, currentUser, onClose }) {
+  const [partId, setPartId] = useState("");
+  const [name, setName] = useState("");
+  const [qty, setQty] = useState("1");
+  const [note, setNote] = useState("");
+  const [error, setError] = useState("");
+  const part = partId ? data.inventory.find((p) => p.id === partId) : null;
+  const save = () => {
+    const q = Number(qty);
+    if (!part && !name.trim()) { setError("Pick a part from the catalogue or type the name of what to buy."); return; }
+    if (!Number.isFinite(q) || q <= 0) { setError("Enter a quantity greater than zero."); return; }
+    update((d) => {
+      d.purchaseList = d.purchaseList || [];
+      d.purchaseList.push({ id: uid("pl"), partId: part ? part.id : null, name: part ? part.name : name.trim(), qty: q, note: note.trim(), addedBy: currentUser, date: todayISO() });
+      return d;
+    });
+    onClose();
+  };
+  return (
+    <Modal title="Add a part to buy" onClose={onClose}>
+      <Field label="Part from the catalogue">
+        <select style={inputStyle} value={partId} onChange={(e) => { setPartId(e.target.value); setError(""); }}>
+          <option value="">— not in the catalogue —</option>
+          {data.inventory.map((p) => <option key={p.id} value={p.id}>{formatPartNum(p.partNumber)} · {p.name}</option>)}
+        </select>
+      </Field>
+      {!part && <Field label="Or describe the part" required><input style={inputStyle} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. 20x25x1 furnace filter" autoFocus /></Field>}
+      <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 10 }}>
+        <Field label="Quantity to buy" required><input type="number" min="1" style={inputStyle} value={qty} onChange={(e) => setQty(e.target.value)} /></Field>
+        <Field label="Note (store, link, size…)"><input style={inputStyle} value={note} onChange={(e) => setNote(e.target.value)} /></Field>
+      </div>
+      {error && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.rust, marginBottom: 10 }}>{error}</div>}
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+        <Btn variant="primary" onClick={save}>Add to list</Btn>
+      </div>
+    </Modal>
+  );
+}
+
+function PurchasingView({ data, update, currentUser, goToOrder }) {
+  const dialog = useDialog();
+  const [adding, setAdding] = useState(false);
+  const manual = data.purchaseList || [];
   const groups = data.workOrders
-    .filter((w) => (w.status === "Open" || w.status === "In Progress") && w.type !== "PM Base")
+    .filter((w) => isOpenStatus(w.status) && w.type !== "PM Base")
     .map((w) => {
       const shortages = (w.parts || []).map(({ partId, qty }) => {
         const part = data.inventory.find((p) => p.id === partId);
@@ -4166,16 +5154,39 @@ function PurchasingView({ data, goToOrder }) {
     .filter((g) => g.shortages.length > 0);
 
   const totalItems = groups.reduce((s, g) => s + g.shortages.length, 0);
+  const removeManual = async (item) => {
+    const ok = await dialog.confirm(`Remove "${item.name}" from the list?`);
+    if (!ok) return;
+    update((d) => { d.purchaseList = (d.purchaseList || []).filter((x) => x.id !== item.id); return d; });
+  };
 
   return (
     <div>
       <SectionHeader
         title="Purchasing"
-        subtitle="Parts needed for open work that aren't fully stocked."
+        subtitle="Parts needed for open work that aren't fully stocked, plus anything you add by hand."
         info={PAGE_INFO.purchasing}
+        action={<Btn variant="primary" onClick={() => setAdding(true)}><Plus size={15} /> Add part</Btn>}
       />
+      {manual.length > 0 && (
+        <Panel style={{ padding: 16, marginBottom: 14 }}>
+          <div style={{ fontFamily: FONT_HEAD, fontSize: 13.5, fontWeight: 600, color: C.ink, marginBottom: 8 }}>Added by hand ({manual.length})</div>
+          {manual.map((item) => {
+            const part = item.partId ? data.inventory.find((p) => p.id === item.partId) : null;
+            return (
+              <div key={item.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "7px 0", borderTop: `1px solid ${C.lineSoft}` }}>
+                <div>
+                  <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink }}>{part ? `${formatPartNum(part.partNumber)} · ${part.name}` : item.name} × {item.qty}</div>
+                  {(item.note || item.addedBy) && <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint }}>{[item.note, item.addedBy ? `added by ${item.addedBy}` : "", item.date ? fmtDate(item.date) : ""].filter(Boolean).join(" · ")}</div>}
+                </div>
+                <button onClick={() => removeManual(item)} title="Remove from list" style={{ background: "none", border: "none", cursor: "pointer", color: C.rust }}><Trash2 size={14} /></button>
+              </div>
+            );
+          })}
+        </Panel>
+      )}
       {groups.length === 0 ? (
-        <Empty text="Nothing to buy — every part needed for open work is in stock." />
+        manual.length === 0 && <Empty text="Nothing to buy — every part needed for open work is in stock. Use Add part to note something to pick up." />
       ) : (
         <>
           <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkFaint, marginBottom: 14 }}>
@@ -4199,6 +5210,7 @@ function PurchasingView({ data, goToOrder }) {
           </div>
         </>
       )}
+      {adding && <AddPurchaseModal data={data} update={update} currentUser={currentUser} onClose={() => setAdding(false)} />}
     </div>
   );
 }
@@ -4207,12 +5219,10 @@ const ALARM_SEVERITY_LABELS = { critical: "Critical", warning: "Warning", info: 
 const ALARM_SOURCE_LABELS = { home_assistant: "Home Assistant", manual: "Manual", pm_checklist: "PM checklist" };
 
 function AlarmsView({ data, update, role, currentUser, onAlarmsChanged, features }) {
-  // v2: the Home Assistant webhook integration is a componentized
-  // feature (see backend/features.js) — a deployment can turn it off
-  // entirely via FEATURE_HA_ALARMS. The rest of this dashboard (manual
-  // alarms, PM-checklist-triggered alarms) stays on regardless.
-  // `features` is undefined for a moment while the session is loading
-  // (api.me() hasn't resolved yet), so default to on rather than
+  // The Home Assistant webhook integration is an Owner-controlled feature
+  // (Owner Tools → Features, see backend/features.js). The rest of this
+  // dashboard (manual alarms, PM-checklist-triggered alarms) stays on
+  // regardless. Default to on if `features` isn't known yet rather than
   // flashing the setup UI and then yanking it away.
   const haAlarmsEnabled = !features || features.homeAssistantAlarms !== false;
   const dialog = useDialog();
@@ -4250,7 +5260,7 @@ function AlarmsView({ data, update, role, currentUser, onAlarmsChanged, features
     .sort((a, b) => (b.resolvedAt || b.triggeredAt || "").localeCompare(a.resolvedAt || a.triggeredAt || ""));
   const shown = tab === "open" ? openAlarms : historyAlarms;
 
-  const openWOOptions = data.workOrders.filter((w) => w.status !== "Completed" && w.status !== "Verified" && w.type !== "PM Base");
+  const openWOOptions = data.workOrders.filter((w) => !isDoneStatus(w.status) && w.type !== "PM Base");
 
   const openAction = (action, alarm) => {
     setActionForm({
@@ -4649,7 +5659,7 @@ function PmWizardCatalogEditor({ data, update }) {
         <div>
           <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink }}>PM Wizard starter catalogue</div>
           <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint, marginTop: 2 }}>
-            The suggested maintenance list the PM setup wizard offers when it's run on a {levelLabel(LOCATION_LEVELS[EDITION.terms.siteLevelIndex])}. Editing this doesn't change any PM Base already created.
+            The suggested maintenance list the PM setup wizard offers when it's run on a {levelLabel(LOCATION_LEVELS[SETTINGS.terms.siteLevelIndex])}. Editing this doesn't change any PM Base already created.
           </div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
@@ -4710,12 +5720,210 @@ function PmWizardCatalogEditor({ data, update }) {
   );
 }
 
+function hexLuminance(hex) {
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex || "");
+  if (!m) return null;
+  let h = m[1];
+  if (h.length === 3) h = h.split("").map((c) => c + c).join("");
+  const ch = [0, 2, 4].map((i) => {
+    const v = parseInt(h.slice(i, i + 2), 16) / 255;
+    return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
+}
+function contrastRatio(a, b) {
+  const la = hexLuminance(a), lb = hexLuminance(b);
+  if (la == null || lb == null) return null;
+  const hi = Math.max(la, lb), lo = Math.min(la, lb);
+  return (hi + 0.05) / (lo + 0.05);
+}
+const LOGO_TYPES = ["image/png", "image/jpeg", "image/svg+xml", "image/webp"];
+const LOGO_MAX = 512 * 1024;
+
+function BrandingCard() {
+  const dialog = useDialog();
+  const { onConfigChanged } = useContext(SettingsContext);
+  const fromSettings = () => ({
+    name: SETTINGS.brand.name, shortName: SETTINGS.brand.shortName, tagline: SETTINGS.brand.tagline,
+    topBarTitle: SETTINGS.brand.topBarTitle, colors: { ...SETTINGS.brand.colors },
+    levels: [...SETTINGS.terms.locationLevels], siteLevelIndex: SETTINGS.terms.siteLevelIndex, orgNoun: SETTINGS.terms.orgNoun,
+  });
+  const [f, setF] = useState(fromSettings);
+  const [busy, setBusy] = useState("");
+  const [msg, setMsg] = useState("");
+  const [errs, setErrs] = useState([]);
+  const logoRef = useRef(null);
+  const set = (k, v) => { setF((p) => ({ ...p, [k]: v })); setMsg(""); };
+  const setColor = (k, v) => { setF((p) => ({ ...p, colors: { ...p.colors, [k]: v } })); setMsg(""); };
+  const setLevel = (i, v) => { setF((p) => ({ ...p, levels: p.levels.map((l, j) => (j === i ? v : l)) })); setMsg(""); };
+
+  const trimmed = f.levels.map((l) => l.trim());
+  const dupes = trimmed.some((l, i) => l && trimmed.findIndex((x) => x.toLowerCase() === l.toLowerCase()) !== i);
+  const warnings = [];
+  const cLight = contrastRatio(f.colors.primary, "#ffffff"), cAcc = contrastRatio(f.colors.accent, "#ffffff");
+  const cPd = contrastRatio(f.colors.primaryDark, "#14181d"), cAd = contrastRatio(f.colors.accentDark, "#14181d");
+  if (cLight != null && cLight < 4.5) warnings.push("Primary colour is light: white text on it may be hard to read.");
+  if (cAcc != null && cAcc < 3) warnings.push("Accent colour is light: white button text on it may be hard to read.");
+  if (cPd != null && cPd < 4.5) warnings.push("Dark-mode primary colour is dark: it may be hard to read on a dark background.");
+  if (cAd != null && cAd < 4.5) warnings.push("Dark-mode accent colour is dark: it may be hard to read on a dark background.");
+
+  const save = async () => {
+    setErrs([]); setMsg("");
+    if (!f.name.trim()) { setErrs(["The name is required."]); return; }
+    if (trimmed.some((l) => !l || l.length > 15)) { setErrs(["Each location label is required and can be at most 15 characters."]); return; }
+    if (dupes) { setErrs(["Location labels must be different from each other."]); return; }
+    setBusy("save");
+    try {
+      const resp = await api.saveSettings({
+        brand: { name: f.name.trim(), shortName: f.shortName.trim(), tagline: f.tagline.trim(), topBarTitle: f.topBarTitle.trim(), colors: f.colors },
+        terms: { orgNoun: f.orgNoun.trim(), locationLevels: trimmed, siteLevelIndex: Number(f.siteLevelIndex) },
+        features: { homeAssistantAlarms: SETTINGS.features.homeAssistantAlarms },
+      });
+      onConfigChanged(resp);
+      setMsg("Saved.");
+    } catch (e) { setErrs(e.errors && e.errors.length ? e.errors : [e.message]); }
+    finally { setBusy(""); }
+  };
+  const pickLogo = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    if (!LOGO_TYPES.includes(file.type)) { await dialog.alertMsg("The logo must be a PNG, JPG, SVG or WebP image."); return; }
+    if (file.size > LOGO_MAX) { await dialog.alertMsg("The logo must be 512 KB or smaller."); return; }
+    setBusy("logo");
+    try {
+      const dataUrl = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
+      onConfigChanged(await api.uploadLogo(dataUrl));
+      setMsg("Logo updated.");
+    } catch (err) { await dialog.alertMsg(err.message); }
+    finally { setBusy(""); }
+  };
+  const removeLogo = async () => {
+    setBusy("logo");
+    try { onConfigChanged(await api.removeLogo()); setMsg("Logo removed."); } catch (err) { await dialog.alertMsg(err.message); }
+    finally { setBusy(""); }
+  };
+  const reset = async () => {
+    const ok = await dialog.confirm("Reset the name, logo, colours, location labels and wording back to the original defaults? Your data isn't affected.");
+    if (!ok) return;
+    setBusy("reset");
+    try {
+      const resp = await api.resetSettings();
+      onConfigChanged(resp);
+      applySettings(resp);
+      setF(fromSettings());
+      setMsg("Reset to defaults.");
+    } catch (err) { await dialog.alertMsg(err.message); }
+    finally { setBusy(""); }
+  };
+
+  const note = { fontFamily: FONT_BODY, fontSize: 12, color: C.inkSoft };
+  const sub = { fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink, margin: "16px 0 8px" };
+  const grid = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 };
+  const colorField = (k, label) => (
+    <Field label={label}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <input type="color" value={/^#[0-9a-f]{6}$/i.test(f.colors[k]) ? f.colors[k] : "#000000"} onChange={(e) => setColor(k, e.target.value)} style={{ width: 40, height: 32, padding: 0, border: `1px solid ${C.line}`, background: "none" }} />
+        <input style={inputStyle} value={f.colors[k]} onChange={(e) => setColor(k, e.target.value)} maxLength={9} />
+      </div>
+    </Field>
+  );
+  return (
+    <Panel style={{ padding: 18 }}>
+      <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 4 }}>Branding & terminology</div>
+      <div style={{ ...note, marginBottom: 12 }}>Make the app your own: name, logo, colours, and the words used for locations. Changes apply to everyone straight away and are included in the Excel backup.</div>
+
+      <div style={grid}>
+        <Field label="Name" required><input style={inputStyle} value={f.name} maxLength={40} onChange={(e) => set("name", e.target.value)} /></Field>
+        <Field label="Short name"><input style={inputStyle} value={f.shortName} maxLength={12} onChange={(e) => set("shortName", e.target.value)} /></Field>
+        <Field label="Tagline"><input style={inputStyle} value={f.tagline} maxLength={60} onChange={(e) => set("tagline", e.target.value)} /></Field>
+        <Field label="Top-bar title (optional)"><input style={inputStyle} value={f.topBarTitle} maxLength={40} placeholder="Shown in the top bar when filled" onChange={(e) => set("topBarTitle", e.target.value)} /></Field>
+      </div>
+
+      <div style={sub}>Logo</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+        <div style={{ padding: 10, border: `1px solid ${C.line}`, borderRadius: 3, background: C.bg }}><BrandMark size={40} radius={5} /></div>
+        <Btn small variant="ghost" onClick={() => logoRef.current?.click()} disabled={!!busy}>{busy === "logo" ? "Working…" : "Upload logo…"}</Btn>
+        {SETTINGS.brand.logoUrl && <Btn small variant="ghost" onClick={removeLogo} disabled={!!busy}>Use the built-in logo</Btn>}
+        <input ref={logoRef} type="file" accept="image/png,image/jpeg,image/svg+xml,image/webp" style={{ display: "none" }} onChange={pickLogo} />
+        <span style={note}>PNG, JPG, SVG or WebP, up to 512 KB.</span>
+      </div>
+
+      <div style={sub}>Colours</div>
+      <div style={grid}>
+        {colorField("primary", "Primary (light mode)")}
+        {colorField("accent", "Accent (light mode)")}
+        {colorField("primaryDark", "Primary (dark mode)")}
+        {colorField("accentDark", "Accent (dark mode)")}
+      </div>
+      {warnings.map((w, i) => <div key={i} style={{ ...note, color: C.rust, marginTop: 4 }}>⚠ {w}</div>)}
+
+      <div style={sub}>Location labels</div>
+      <div style={{ ...note, marginBottom: 8 }}>Rename the six location levels, top to bottom. Existing records follow automatically. Each label is required, up to 15 characters, and must be different.</div>
+      <div style={grid}>
+        {f.levels.map((l, i) => (
+          <Field key={i} label={`Level ${i + 1}`}><input style={inputStyle} value={l} maxLength={15} onChange={(e) => setLevel(i, e.target.value)} /></Field>
+        ))}
+      </div>
+      <div style={grid}>
+        <Field label="Site level (carries address, year built, climate zone and the PM setup wizard)">
+          <select style={inputStyle} value={f.siteLevelIndex} onChange={(e) => set("siteLevelIndex", Number(e.target.value))}>
+            {f.levels.map((l, i) => <option key={i} value={i}>{l.trim() || `Level ${i + 1}`}</option>)}
+          </select>
+        </Field>
+        <Field label="Word for “household” (e.g. organization)"><input style={inputStyle} value={f.orgNoun} maxLength={20} onChange={(e) => set("orgNoun", e.target.value)} /></Field>
+      </div>
+
+      {errs.length > 0 && <div style={{ ...note, color: C.rust, marginTop: 4 }}>{errs.map((e, i) => <div key={i}>{e}</div>)}</div>}
+      <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 12, flexWrap: "wrap" }}>
+        <Btn variant="primary" onClick={save} disabled={!!busy}>{busy === "save" ? "Saving…" : "Save branding"}</Btn>
+        <Btn variant="ghost" onClick={reset} disabled={!!busy}>Reset to defaults</Btn>
+        {msg && <span style={{ ...note, color: C.olive }}>{msg}</span>}
+      </div>
+    </Panel>
+  );
+}
+
+function FeaturesCard() {
+  const dialog = useDialog();
+  const { onConfigChanged } = useContext(SettingsContext);
+  const [busy, setBusy] = useState(false);
+  const toggleHa = async (on) => {
+    setBusy(true);
+    try {
+      const resp = await api.saveSettings({
+        brand: { name: SETTINGS.brand.name, shortName: SETTINGS.brand.shortName, tagline: SETTINGS.brand.tagline, topBarTitle: SETTINGS.brand.topBarTitle, colors: SETTINGS.brand.colors },
+        terms: { orgNoun: SETTINGS.terms.orgNoun, locationLevels: SETTINGS.terms.locationLevels, siteLevelIndex: SETTINGS.terms.siteLevelIndex },
+        features: { homeAssistantAlarms: on },
+      });
+      onConfigChanged(resp);
+    } catch (e) { await dialog.alertMsg(e.message); }
+    finally { setBusy(false); }
+  };
+  const note = { fontFamily: FONT_BODY, fontSize: 12, color: C.inkSoft };
+  return (
+    <Panel style={{ padding: 18 }}>
+      <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 4 }}>Features</div>
+      <div style={{ ...note, marginBottom: 12 }}>Turn optional parts of the app on or off. Takes effect immediately.</div>
+      <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer", fontFamily: FONT_BODY, fontSize: 13.5, color: C.ink }}>
+        <input type="checkbox" disabled={busy} checked={!!SETTINGS.features.homeAssistantAlarms} onChange={(e) => toggleHa(e.target.checked)} style={{ marginTop: 3 }} />
+        <span>Home Assistant alarms<div style={note}>Receive alarms from Home Assistant by webhook, map them to assets and locations, and show the Alarms page. Turning it off hides the page and refuses incoming alarms; existing alarm history is kept.</div></span>
+      </label>
+      <div style={{ ...note, marginTop: 14 }}>
+        Emailed password reset: {SETTINGS.passwordResetEmail ? "available (mail server and APP_URL are configured)." : "not available. Set SMTP_HOST and APP_URL in the Docker environment to enable the “Forgot password?” link."}
+      </div>
+    </Panel>
+  );
+}
+
 function OwnerToolsView({ data, update, currentUser }) {
   return (
     <div>
-      <SectionHeader title="Owner Tools" subtitle="Administrative controls: accounts, backups, and record clean-up." info={PAGE_INFO.owner} />
+      <SectionHeader title="Owner Tools" subtitle="Administrative controls: accounts, branding, backups, and record clean-up." info={PAGE_INFO.owner} />
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <MemberManagementInline currentUser={currentUser} />
+        <BrandingCard />
+        <FeaturesCard />
         <BackupTools data={data} update={update} />
         <PmWizardCatalogEditor data={data} update={update} />
         <DeleteWorkOrderTool data={data} update={update} />
@@ -4728,21 +5936,66 @@ function OwnerToolsView({ data, update, currentUser }) {
 /* ============================================================
    AUTH
 ============================================================ */
+function AuthCard({ children, subtitle }) {
+  return (
+    <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: FONT_BODY, padding: 16 }}>
+      <GlobalStyle />
+      <Panel style={{ padding: 30, width: 380, maxWidth: "100%" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+          <BrandMark size={28} radius={4} />
+          <span style={{ fontFamily: FONT_HEAD, fontWeight: 700, fontSize: 19, color: C.ink }}>{SETTINGS.brand.name}</span>
+        </div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkFaint, marginBottom: 20 }}>{subtitle}</div>
+        {children}
+      </Panel>
+    </div>
+  );
+}
+const MIN_PASSWORD = 8;
+// Shared "new password + confirm" validation. Returns an error string or "".
+function newPasswordProblem(pw, confirmPw) {
+  if (!pw || pw.length < MIN_PASSWORD) return `The new password must be at least ${MIN_PASSWORD} characters.`;
+  if (pw !== confirmPw) return "The two new passwords don't match.";
+  return "";
+}
+
 function AuthScreen({ onAuthed }) {
-  const [mode, setMode] = useState(null);
+  const resetToken = useRef(typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("reset") : null);
+  const [mode, setMode] = useState(null); // setup | login | forgot | forgotSent | reset | resetDone
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPw, setConfirmPw] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const canReset = !!SETTINGS.passwordResetEmail;
 
-  useEffect(() => { api.setupStatus().then((r) => setMode(r.needsSetup ? "setup" : "login")).catch(() => setMode("login")); }, []);
+  useEffect(() => {
+    if (resetToken.current) { setMode("reset"); return; }
+    api.setupStatus().then((r) => setMode(r.needsSetup ? "setup" : "login")).catch(() => setMode("login"));
+  }, []);
+  const go = (m) => { setError(""); setPassword(""); setConfirmPw(""); setMode(m); };
 
   const submit = async (e) => {
     e.preventDefault();
     setError(""); setBusy(true);
     try {
-      const user = mode === "setup" ? await api.setup(username, password) : await api.login(username, password);
-      onAuthed(user);
+      if (mode === "setup") {
+        if (password.length < MIN_PASSWORD) { setError(`The password must be at least ${MIN_PASSWORD} characters.`); return; }
+        onAuthed(await api.setup(username, password));
+      } else if (mode === "login") {
+        onAuthed(await api.login(username, password));
+      } else if (mode === "forgot") {
+        await api.forgotPassword(username);
+        setMode("forgotSent");
+      } else if (mode === "reset") {
+        const problem = newPasswordProblem(password, confirmPw);
+        if (problem) { setError(problem); return; }
+        await api.resetPassword(resetToken.current, password);
+        try { window.history.replaceState(null, "", window.location.pathname); } catch (err) { /* ignore */ }
+        resetToken.current = null;
+        setPassword(""); setConfirmPw("");
+        setMode("resetDone");
+      }
     } catch (err) {
       setError(err.message || "Something went wrong");
     } finally { setBusy(false); }
@@ -4752,32 +6005,167 @@ function AuthScreen({ onAuthed }) {
     return <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: C.bg }}><Loader2 className="animate-spin" size={20} color={C.inkSoft} /></div>;
   }
 
+  const linkStyle = { background: "none", border: "none", padding: 0, color: C.navy, cursor: "pointer", fontFamily: FONT_BODY, fontSize: 12.5, textDecoration: "underline" };
+  const subtitle = {
+    setup: term("Create the first Owner account to set up your household."),
+    login: term("Sign in to your household."),
+    forgot: "Reset your password",
+    forgotSent: "Check your email",
+    reset: "Choose a new password",
+    resetDone: "Password updated",
+  }[mode];
+
   return (
-    <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: FONT_BODY, padding: 16 }}>
-      <GlobalStyle />
-      <Panel style={{ padding: 30, width: 380, maxWidth: "100%" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-          <BrandMark size={28} radius={4} />
-          <span style={{ fontFamily: FONT_HEAD, fontWeight: 700, fontSize: 19, color: C.ink }}>{EDITION.brand.name}</span>
-        </div>
-        <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkFaint, marginBottom: 20 }}>
-          {mode === "setup" ? term("Create the first Owner account to set up your household.") : term("Sign in to your household.")}
-        </div>
+    <AuthCard subtitle={subtitle}>
+      {mode === "forgotSent" && (
+        <>
+          <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.ink, marginBottom: 16 }}>If an account matches, a reset link has been emailed. It works once and expires in one hour.</div>
+          <Btn variant="primary" onClick={() => go("login")}>Back to sign in</Btn>
+        </>
+      )}
+      {mode === "resetDone" && (
+        <>
+          <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.ink, marginBottom: 16 }}>Your password has been changed. Sign in with the new password.</div>
+          <Btn variant="primary" onClick={() => go("login")}>Sign in</Btn>
+        </>
+      )}
+      {mode !== "forgotSent" && mode !== "resetDone" && (
         <form onSubmit={submit}>
-          <Field label="Username" required><input style={inputStyle} value={username} onChange={(e) => setUsername(e.target.value)} autoFocus required /></Field>
-          <Field label="Password" required><input type="password" style={inputStyle} value={password} onChange={(e) => setPassword(e.target.value)} required minLength={mode === "setup" ? 6 : undefined} /></Field>
-          {mode === "setup" && <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 12 }}>At least 6 characters. You can add member accounts later from Owner Tools.</div>}
+          {mode !== "reset" && (
+            <Field label={mode === "forgot" ? "Username or email" : "Username"} required><input style={inputStyle} value={username} onChange={(e) => setUsername(e.target.value)} autoFocus required /></Field>
+          )}
+          {mode !== "forgot" && (
+            <Field label={mode === "reset" ? "New password" : "Password"} required>
+              <input type="password" style={inputStyle} value={password} onChange={(e) => setPassword(e.target.value)} required autoFocus={mode === "reset"} autoComplete={mode === "login" ? "current-password" : "new-password"} />
+            </Field>
+          )}
+          {mode === "reset" && (
+            <Field label="Confirm new password" required><input type="password" style={inputStyle} value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} required autoComplete="new-password" /></Field>
+          )}
+          {(mode === "setup" || mode === "reset") && <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 12 }}>At least {MIN_PASSWORD} characters.{mode === "setup" ? " You can add member accounts later from Owner Tools." : ""}</div>}
           {error && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.rust, marginBottom: 12 }}>{error}</div>}
-          <Btn type="submit" variant="primary" disabled={busy}>{busy ? "…" : mode === "setup" ? "Create account & continue" : "Sign in"}</Btn>
+          <Btn type="submit" variant="primary" disabled={busy}>{busy ? "…" : { setup: "Create account & continue", login: "Sign in", forgot: "Email me a reset link", reset: "Set new password" }[mode]}</Btn>
+          {mode === "login" && canReset && (
+            <div style={{ marginTop: 14 }}><button type="button" style={linkStyle} onClick={() => go("forgot")}>Forgot your password?</button></div>
+          )}
+          {(mode === "forgot" || mode === "reset") && (
+            <div style={{ marginTop: 14 }}><button type="button" style={linkStyle} onClick={() => { try { window.history.replaceState(null, "", window.location.pathname); } catch (err) { /* ignore */ } resetToken.current = null; go("login"); }}>Back to sign in</button></div>
+          )}
         </form>
-      </Panel>
-    </div>
+      )}
+    </AuthCard>
+  );
+}
+
+// Shown (instead of the app) while an account's password is a temporary one
+// set by the Owner. Nothing else is reachable until it is replaced.
+function ForcedPasswordChange({ user, onDone, onLogout }) {
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirmPw, setConfirmPw] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async (e) => {
+    e.preventDefault();
+    const problem = newPasswordProblem(next, confirmPw);
+    if (problem) { setError(problem); return; }
+    setError(""); setBusy(true);
+    try {
+      const r = await api.changePassword(current, next);
+      onDone(r.user ? { ...user, ...r.user } : { ...user, mustChangePassword: false });
+    } catch (err) { setError(err.message || "Couldn't change the password"); }
+    finally { setBusy(false); }
+  };
+  return (
+    <AuthCard subtitle={`Hi ${user.username} — choose a new password`}>
+      <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkSoft, marginBottom: 14 }}>
+        Your password was set or reset by the Owner, so it's temporary. Enter it below, then choose a password of your own to continue.
+      </div>
+      <form onSubmit={submit}>
+        <Field label="Temporary password" required><input type="password" style={inputStyle} value={current} onChange={(e) => setCurrent(e.target.value)} autoFocus required autoComplete="current-password" /></Field>
+        <Field label="New password" required><input type="password" style={inputStyle} value={next} onChange={(e) => setNext(e.target.value)} required autoComplete="new-password" /></Field>
+        <Field label="Confirm new password" required><input type="password" style={inputStyle} value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} required autoComplete="new-password" /></Field>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 12 }}>At least {MIN_PASSWORD} characters, and different from the temporary one.</div>
+        {error && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.rust, marginBottom: 12 }}>{error}</div>}
+        <div style={{ display: "flex", gap: 8 }}>
+          <Btn type="submit" variant="primary" disabled={busy}>{busy ? "…" : "Set new password"}</Btn>
+          <Btn type="button" variant="ghost" onClick={onLogout}>Sign out</Btn>
+        </div>
+      </form>
+    </AuthCard>
+  );
+}
+
+// "My account": own email (also the password-reset address) and password.
+function AccountModal({ user, onClose, onUserChanged }) {
+  const [email, setEmail] = useState(user.email || "");
+  const [emailMsg, setEmailMsg] = useState("");
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirmPw, setConfirmPw] = useState("");
+  const [pwMsg, setPwMsg] = useState({ text: "", bad: false });
+  const [busy, setBusy] = useState(false);
+
+  const saveEmail = async () => {
+    setBusy(true); setEmailMsg("");
+    try { await api.updateProfile(email.trim()); onUserChanged({ ...user, email: email.trim() }); setEmailMsg("Saved."); }
+    catch (err) { setEmailMsg(err.message || "Couldn't save"); }
+    finally { setBusy(false); }
+  };
+  const changePw = async () => {
+    const problem = newPasswordProblem(next, confirmPw);
+    if (problem) { setPwMsg({ text: problem, bad: true }); return; }
+    setBusy(true); setPwMsg({ text: "", bad: false });
+    try {
+      await api.changePassword(current, next);
+      setCurrent(""); setNext(""); setConfirmPw("");
+      setPwMsg({ text: "Password changed. Your other signed-in devices were signed out.", bad: false });
+    } catch (err) { setPwMsg({ text: err.message || "Couldn't change the password", bad: true }); }
+    finally { setBusy(false); }
+  };
+  const sub = { fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink, margin: "4px 0 8px" };
+  return (
+    <Modal title={`My account — ${user.username}`} onClose={onClose}>
+      <div style={sub}>Email</div>
+      <Field label="Email address (used for notifications and to reset your password)">
+        <input type="email" style={inputStyle} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@example.com" />
+      </Field>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
+        <Btn small onClick={saveEmail} disabled={busy}>Save email</Btn>
+        {emailMsg && <span style={{ fontFamily: FONT_BODY, fontSize: 12, color: emailMsg === "Saved." ? C.olive : C.rust }}>{emailMsg}</span>}
+      </div>
+      <div style={{ borderTop: `1px solid ${C.lineSoft}`, paddingTop: 14 }}>
+        <div style={sub}>Change password</div>
+        <Field label="Current password"><input type="password" style={inputStyle} value={current} onChange={(e) => setCurrent(e.target.value)} autoComplete="current-password" /></Field>
+        <Field label="New password"><input type="password" style={inputStyle} value={next} onChange={(e) => setNext(e.target.value)} autoComplete="new-password" /></Field>
+        <Field label="Confirm new password"><input type="password" style={inputStyle} value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} autoComplete="new-password" /></Field>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 10 }}>At least {MIN_PASSWORD} characters, different from the current one.</div>
+        {pwMsg.text && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: pwMsg.bad ? C.rust : C.olive, marginBottom: 10 }}>{pwMsg.text}</div>}
+        <Btn small variant="primary" onClick={changePw} disabled={busy || !current || !next}>Change password</Btn>
+      </div>
+    </Modal>
   );
 }
 
 /* ============================================================
    APP SHELL
 ============================================================ */
+// Lets Owner Tools push a changed config (branding, labels, toggles) back up to
+// the bootstrap wrapper, which re-applies it and re-renders the whole app.
+const SettingsContext = createContext({ onConfigChanged: () => {} });
+
+// Maps pre-v2.2 statuses and fills collections added since the saved data was
+// written. The server migrates stored data once; this also covers older
+// tabs/devices and restored files.
+function normalizeData(d) {
+  if (!d) return d;
+  (d.workOrders || []).forEach((w) => {
+    if (w.type !== "PM Base" && LEGACY_STATUS_MAP[w.status]) w.status = LEGACY_STATUS_MAP[w.status];
+  });
+  if (!Array.isArray(d.purchaseList)) d.purchaseList = [];
+  return d;
+}
+
 function MaintEnhanceAppInner() {
   const [user, setUser] = useState(null);
   const [data, setDataRaw] = useState(null);
@@ -4825,7 +6213,26 @@ function MaintEnhanceAppInner() {
   const themeLabel = theme === "auto" ? "Theme: matching your device" : theme === "light" ? "Theme: light" : "Theme: dark";
 
   useEffect(() => { api.me().then(setUser).catch(() => setUser(false)); }, []);
-  useEffect(() => { if (!user) return; api.getData().then(setDataRaw).catch(() => setDataRaw(null)); }, [user]);
+  // A forced password change can start mid-session (the server answers 403
+  // PASSWORD_CHANGE_REQUIRED after an Owner reset) — show the change screen.
+  useEffect(() => {
+    const onForced = () => setUser((u) => (u ? { ...u, mustChangePassword: true } : u));
+    window.addEventListener("me-password-change-required", onForced);
+    return () => window.removeEventListener("me-password-change-required", onForced);
+  }, []);
+  useEffect(() => {
+    if (!user || user.mustChangePassword) return;
+    api.getData().then((d) => setDataRaw(normalizeData(d))).catch(() => setDataRaw(null));
+  }, [user && user.id, user && user.mustChangePassword]); // eslint-disable-line
+  // Once data is loaded, pick up PM Base standby windows that opened or
+  // closed while the app wasn't being used.
+  const standbyChecked = useRef(false);
+  useEffect(() => {
+    if (!data || standbyChecked.current) return;
+    standbyChecked.current = true;
+    if (pmStandbyNeedsSync(data)) update((d) => d);
+  }, [data]); // eslint-disable-line
+  const [showAccount, setShowAccount] = useState(false);
 
   const persist = (next) => {
     clearTimeout(saveTimer.current);
@@ -4837,12 +6244,12 @@ function MaintEnhanceAppInner() {
       // between login and the first /api/data response — nothing else in
       // the app calls update() before data has loaded.
       if (!prev) return prev;
-      const next = checkMeterPmTriggers(fn(structuredClone(prev)));
+      const next = checkMeterPmTriggers(syncPmStandby(fn(structuredClone(prev))));
       persist(next);
       return next;
     });
   };
-  const logout = async () => { await api.logout().catch(() => {}); setUser(false); setDataRaw(null); };
+  const logout = async () => { await api.logout().catch(() => {}); setUser(false); setDataRaw(null); standbyChecked.current = false; };
 
   /* -----------------------------------------------------------
      v1.6 — offline work-request queue & sync. A request submitted
@@ -4974,10 +6381,11 @@ function MaintEnhanceAppInner() {
 
   if (user === null) return <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: C.bg }}><GlobalStyle /><Loader2 className="animate-spin" size={20} color={C.inkSoft} /></div>;
   if (!user) return <AuthScreen onAuthed={setUser} />;
+  if (user.mustChangePassword) return <ForcedPasswordChange user={user} onDone={setUser} onLogout={logout} />;
   if (!data) {
     return (
       <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: C.bg, fontFamily: FONT_BODY, color: C.inkSoft }}>
-        <GlobalStyle /><Loader2 className="animate-spin" size={18} style={{ marginRight: 8 }} /> Loading {EDITION.brand.name}…
+        <GlobalStyle /><Loader2 className="animate-spin" size={18} style={{ marginRight: 8 }} /> Loading {SETTINGS.brand.name}…
       </div>
     );
   }
@@ -4985,7 +6393,7 @@ function MaintEnhanceAppInner() {
   const role = user.role;
   const counts = {
     requests: data.workRequests.filter((w) => w.status === "Submitted" || w.status === "Under Review").length,
-    orders: data.workOrders.filter((w) => w.status === "Open" || w.status === "In Progress").length,
+    orders: data.workOrders.filter((w) => isOpenStatus(w.status)).length,
     alarms: openAlarmCount,
   };
 
@@ -4999,8 +6407,8 @@ function MaintEnhanceAppInner() {
     vendors: <VendorsView data={data} update={update} role={role} currentUser={user.username} />,
     parts: <PartsView data={data} update={update} role={role} currentUser={user.username} />,
     budget: <BudgetView data={data} />,
-    purchasing: isAdmin(role) ? <PurchasingView data={data} goToOrder={goToOrder} /> : <Dashboard data={data} setTab={setTab} role={role} applyFilter={applyFilter} goToOrder={goToOrder} goToRequest={goToRequest} />,
-    alarms: isAdmin(role) ? <AlarmsView data={data} update={update} role={role} currentUser={user.username} onAlarmsChanged={refreshAlarmCount} features={user.features} /> : <Dashboard data={data} setTab={setTab} role={role} applyFilter={applyFilter} goToOrder={goToOrder} goToRequest={goToRequest} />,
+    purchasing: isAdmin(role) ? <PurchasingView data={data} update={update} currentUser={user.username} goToOrder={goToOrder} /> : <Dashboard data={data} setTab={setTab} role={role} applyFilter={applyFilter} goToOrder={goToOrder} goToRequest={goToRequest} />,
+    alarms: isAdmin(role) ? <AlarmsView data={data} update={update} role={role} currentUser={user.username} onAlarmsChanged={refreshAlarmCount} features={SETTINGS.features} /> : <Dashboard data={data} setTab={setTab} role={role} applyFilter={applyFilter} goToOrder={goToOrder} goToRequest={goToRequest} />,
     owner: role === "Owner" ? <OwnerToolsView data={data} update={update} currentUser={user} /> : <Dashboard data={data} setTab={setTab} role={role} applyFilter={applyFilter} goToOrder={goToOrder} goToRequest={goToRequest} />,
   };
 
@@ -5012,9 +6420,14 @@ function MaintEnhanceAppInner() {
         {sidebarOpen && <div className="hk-sidebar-backdrop" onClick={() => setSidebarOpen(false)} />}
         <div className="hk-main-shell" style={{ marginLeft: sidebarOpen ? 216 : 0, transition: "margin .15s ease" }}>
           <div className="hk-topbar" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 24px", borderBottom: `1px solid ${C.line}`, background: C.panel, position: "sticky", top: 0, zIndex: 20 }}>
-            <button onClick={() => setSidebarOpen((o) => !o)} className="hk-tap" style={{ background: "none", border: "none", cursor: "pointer", color: C.ink }}>
-              {sidebarOpen ? <ChevronLeft size={18} /> : <Menu size={18} />}
-            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+              <button onClick={() => setSidebarOpen((o) => !o)} className="hk-tap" style={{ background: "none", border: "none", cursor: "pointer", color: C.ink }}>
+                {sidebarOpen ? <ChevronLeft size={18} /> : <Menu size={18} />}
+              </button>
+              {SETTINGS.brand.topBarTitle && (
+                <span style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{SETTINGS.brand.topBarTitle}</span>
+              )}
+            </div>
             <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
               {installPrompt && (
                 <Btn small variant="ghost" onClick={doInstall}><Download size={13} /> Install app</Btn>
@@ -5043,38 +6456,48 @@ function MaintEnhanceAppInner() {
                   <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, fontWeight: 700, color: C.ink, lineHeight: 1.2 }}>{user.username}</div>
                   <div style={{ fontFamily: FONT_BODY, fontSize: 10.5, color: C.inkFaint, lineHeight: 1.2 }}>{role}</div>
                 </div>
+                <button onClick={() => setShowAccount(true)} title="My account — email and password" className="hk-tap" style={{ background: "none", border: `1px solid ${C.line}`, borderRadius: 3, cursor: "pointer", color: C.inkSoft, padding: 6 }}><Key size={14} /></button>
                 <button onClick={logout} title="Log out" className="hk-tap" style={{ background: "none", border: `1px solid ${C.line}`, borderRadius: 3, cursor: "pointer", color: C.inkSoft, padding: 6 }}><LogOut size={14} /></button>
               </div>
             </div>
           </div>
           <div className="hk-page-pad" style={{ padding: 24, maxWidth: 1280 }}>{views[tab]}</div>
         </div>
+        {showAccount && <AccountModal user={user} onClose={() => setShowAccount(false)} onUserChanged={setUser} />}
       </div>
     </DialogProvider>
   );
 }
 
 /* ============================================================
-   EDITION BOOTSTRAP (v2.1)
-   Fetches the public edition config (brand, colours, terminology,
-   feature flags) and applies it before the app renders, so the login
-   screen and every label are correct from the first paint.
+   SETTINGS BOOTSTRAP (v2.2)
+   Fetches the public config (Owner-managed brand, colours, terminology,
+   feature toggles) and applies it before the app renders, so the login
+   screen and every label are correct from the first paint. Owner Tools
+   calls onConfigChanged after saving, which re-applies and re-renders.
 ============================================================ */
 export default function MaintEnhanceApp() {
   const [ready, setReady] = useState(false);
+  const [version, setVersion] = useState(0);
   useEffect(() => {
     let alive = true;
-    api.getConfig().then(applyEdition).catch(() => applyEdition(null)).finally(() => { if (alive) setReady(true); });
+    api.getConfig().then(applySettings).catch(() => applySettings(null)).finally(() => { if (alive) setReady(true); });
     return () => { alive = false; };
   }, []);
   useEffect(() => {
     if (!ready) return;
-    document.title = EDITION.brand.name;
+    document.title = SETTINGS.brand.name;
     const meta = document.querySelector('meta[name="theme-color"]');
-    if (meta && /^#[0-9a-fA-F]{3,8}$/.test(EDITION.brand.colors.primary)) meta.setAttribute("content", EDITION.brand.colors.primary);
-  }, [ready]);
+    if (meta && /^#[0-9a-fA-F]{3,8}$/.test(SETTINGS.brand.colors.primary)) meta.setAttribute("content", SETTINGS.brand.colors.primary);
+  }, [ready, version]);
+  const ctx = useMemo(() => ({ onConfigChanged: (cfg) => { applySettings(cfg); setVersion((v) => v + 1); } }), []);
   if (!ready) {
     return <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: C.bg }}><GlobalStyle /><Loader2 className="animate-spin" size={20} color={C.inkSoft} /></div>;
   }
-  return (<><BrandStyle /><MaintEnhanceAppInner /></>);
+  return (
+    <SettingsContext.Provider value={ctx}>
+      <BrandStyle />
+      <MaintEnhanceAppInner />
+    </SettingsContext.Provider>
+  );
 }

@@ -8,13 +8,10 @@
 > names throughout this file. That's expected for now — only the product
 > name shown to users has changed.
 
-> **v2 componentization note:** MaintEnhance now supports turning select
-> features off per deployment via env vars, so different "editions" (the
-> stock Home edition, a client/facility edition) can ship from the same
-> codebase without a code branch. So far this covers the Home Assistant
-> alarm integration (`FEATURE_HA_ALARMS`, see `.env.example`) — see
-> "Componentization / feature flags" in Section 12 for details and the
-> reasoning behind it.
+> **v2.2 note:** branding, location labels and optional features (such as
+> Home Assistant alarms) are now set by the Owner inside the app (Owner
+> Tools). The earlier "editions" and the `EDITION`/`BRAND_*`/`FEATURE_*`
+> environment variables were removed.
 
 A standalone, single-container build of the MaintEnhance household CMMS: a
 Node/Express + SQLite backend with real multi-user accounts, serving a
@@ -57,26 +54,21 @@ nothing else needed), always just work, whether the image comes from
 Docker Hub or one you built yourself. See "Prebuilding the image"
 below if you'd rather build than wait on Docker Hub.
 
-## Editions, branding & terminology (v2.1)
+## Branding, terminology & features (v2.2)
 
-One image serves every deployment. Set `EDITION=home` (default) or
-`EDITION=facilities`, then optionally override branding and wording with env
-vars (see `.env.example`): `BRAND_NAME`, `BRAND_SHORT_NAME`, `BRAND_TAGLINE`,
-`BRAND_LOGO_URL`, `BRAND_COLOR_*`, `ORG_NOUN`, `LOCATION_LEVEL_LABELS` (exactly
-six), `SITE_LEVEL_INDEX`. You can also drop a `branding.config.js` into the data
-volume (deep-merged over `backend/branding.config.js`). Precedence: shipped
-file < data-volume file < env vars.
+The app starts in its original configuration. After you sign in as Owner,
+**Owner Tools** has two cards:
 
-- Location labels are display-only; stored data uses stable keys, so you can
-  relabel later safely.
-- Logo: put it in the data volume under `branding/` and set
-  `BRAND_LOGO_URL=/branding/<file>`. The sidebar is dark, so use a light or
-  transparent logo.
-- `SEED_CATALOG_FILE` (or `pm-wizard-catalog.json` in the data volume) seeds the
-  PM wizard catalogue on first run only.
-- `/manifest.json` is now generated dynamically (name, theme colour). PWA
-  icons remain the default set.
-- Example facilities setup kit: `editions/facilities/`.
+- **Branding & terminology:** name, short name, tagline, an optional top-bar
+  title, logo (PNG/JPG/SVG/WebP up to 512 KB), four colours (with a contrast
+  warning), the six location-level labels (each required, up to 15
+  characters, all different), which level is the "site" level, and the word
+  used instead of "household". "Reset to defaults" restores the originals.
+- **Features:** Home Assistant alarms on/off.
+
+Location labels are display-only (stored data uses stable keys), so they can be
+changed at any time. All of this is included in the Excel backup (Settings sheet).
+Secrets stay in the Docker environment (`JWT_SECRET`, `SMTP_*`).
 
 ## 1. Prerequisites
 
@@ -263,8 +255,17 @@ entirely.
 Once signed in as Owner, go to the **Owner Tools** page (visible only
 to the Owner role) to create accounts for other household members —
 Owner, Manager, Executor, or Guest. Each person signs in with their own
-username/password. Owner Tools is also where you export/import the
-full household to Excel and delete a work order or request by number.
+username/password. Owner Tools is also where you customise branding, back up and
+restore (Excel or a Full backup .zip with photos), and delete a work order
+or request by number.
+
+**Passwords (v2.2):** everyone can change their own password and email from
+the key icon next to their name. As Owner, use the key button on a member to
+set a temporary password (typed or generated; shown once). Accounts you create,
+and any account you reset, must choose a new password at next sign-in. If
+`SMTP_HOST` and `APP_URL` are both set, the sign-in screen offers "Forgot
+password?", which emails a one-hour reset link to the address on the account
+(each email can belong to one account only).
 
 **Optional email notifications:** set the `SMTP_*` variables in your
 `.env` file (see `.env.example`) to enable a once-a-day digest email
@@ -360,11 +361,22 @@ folder name — run `docker volume ls` to check.)
 To restore, reverse the tar command into a fresh volume before starting
 the container.
 
-MaintEnhance also has its own in-app backup, independent of the above: as
-an Owner, use **Owner Tools → Backup & bulk edit** to export the whole
-household to an Excel file, or re-import one. Note that this only
-carries attachment *ids*, not the photo files themselves (see v1.6
-above) — the volume-level backup is what covers the actual images.
+MaintEnhance also has its own in-app backup (v2.2), independent of the above.
+As an Owner, **Owner Tools → Backup & bulk edit** offers:
+
+- **Export to Excel:** all data plus members, alarms, alarm mappings, branding
+  settings and logo, and an attachments index. Password hashes and the webhook
+  key are left out unless you tick "Include login credentials".
+- **Full backup (.zip):** the workbook plus every photo. Restore it with
+  "Import from Excel or backup".
+- **Import:** you pick which tabs to apply ("Update and add", or "Replace
+  tab" with a confirmation). The file is checked first; any errors are shown
+  (and downloadable) and nothing is applied.
+- **Automatic snapshots:** a database copy about once a day in `backups/` in
+  the data volume (`BACKUP_KEEP`, `BACKUP_SNAPSHOTS`). Same disk, so also keep
+  a Full backup somewhere else.
+- New photos are shrunk in the browser (about 1600 px, JPEG); a one-time button
+  shrinks existing ones.
 
 ## 10. Updating
 
@@ -391,18 +403,18 @@ The database volume is untouched by any of the above.
   for a first local test.
 - Passwords are hashed with bcrypt; sessions are signed JWTs stored in
   an `httpOnly` cookie.
-- There's no rate-limiting on the login endpoint. For an internet-facing
-  deployment, put it behind a reverse proxy that offers basic
-  protection (Cloudflare, Nginx Proxy Manager, Traefik with a
-  rate-limit middleware) or add one directly, such as
-  `express-rate-limit`.
+- Sign-in is throttled (8 failed attempts per 15 minutes per address and
+  username) and password-reset requests are limited too; limits are held in
+  memory and reset on restart. For an internet-facing deployment, still
+  consider a reverse proxy with its own protection.
+- Changing or resetting a password signs that account out everywhere else.
 - This app is scoped to a single household (per the functional spec) —
   every account shares the same asset/location/work-order data. It's
   not designed for multiple unrelated households on one instance.
 
 ## 12. Known simplifications vs. the full functional spec
 
-- **Editions (v2.1):** PWA home-screen icons can't be branded yet; long names need `BRAND_SHORT_NAME`; only the location hierarchy wording and the word "household" are configurable — other UI copy is shared across editions.
+- **Branding (v2.2):** PWA home-screen icons can't be branded yet; only the location hierarchy wording and the word "household" are configurable — other UI copy is fixed.
 
 - **Notifications** are in-app indicators plus an opt-in daily email
   digest (v1.2, requires SMTP configuration — see Section 6) — no push
@@ -465,22 +477,4 @@ The database volume is untouched by any of the above.
   building a Meter- or Seasonal-triggered starter entry isn't
   supported from the editor; create those by hand from Work Orders
   after running the wizard, same as before.
-- **Componentization / feature flags (v2).** The Home Assistant alarm
-  integration is now the first componentized feature — see the new
-  "Componentized features" callout above Section 1, and `FEATURE_HA_ALARMS`
-  in `.env.example`/`docker-compose.yml`. It's an env var read once at
-  startup, not an in-app Owner setting, and it's deliberately narrow for
-  now: only the webhook/API-key/entity-mapping piece is gated. Manual and
-  PM-checklist-triggered alarms (the rest of the Alarm Dashboard, v1.8)
-  stay on regardless — they aren't Home-Assistant-specific, so there was
-  no reason to make them optional. Turning the flag off makes the webhook
-  route, the webhook-key endpoints, and the sensor-mapping endpoints all
-  404 (indistinguishable from not existing), and hides the corresponding
-  "Webhook & sensor setup" UI. Toggling it doesn't delete anything —
-  historical Home-Assistant-sourced alarms and saved mappings stay in the
-  database and reappear if you turn it back on. This is meant to be the
-  pattern future componentized features follow, not a one-off.
-
-These are reasonable next additions if you want to keep building on
-this — the backend's REST API (`/api/*` in `server.js`) is a
-straightforward place to extend.
+- **Optional features (v2.2).** The Home Assistant alarm integration is switched on or off by the Owner in Owner Tools → Features (no restart needed). Only the webhook/API-key/mapping piece is gated; manual and checklist-raised alarms stay on.

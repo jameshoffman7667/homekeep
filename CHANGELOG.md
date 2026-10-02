@@ -19,6 +19,13 @@ the Git commit's summary line) and a **Commit extended description**
 
 ---
 
+## v2.2
+
+**Commit short description:** `v2.2: Workflow, settings, backup, passwords`
+
+**Commit extended description:**
+v2.2 renames work order statuses to Active / Scheduled / Completed / Closed (migrated once at start-up), auto-schedules on a scheduled date, adds bulk Auto schedule, requires a comment on Scheduled to Completed, and makes the required-by date mandatory (PM Base exempt). PM Bases get standby, manual or a yearly date range, with no backfill. Purchasing can add parts by hand. "Editions" and their env vars are removed: the Owner sets name, logo, colours, location labels, top-bar title and the Home Assistant toggle in Owner Tools. Backups are complete (comments, parts-deducted fix, users, alarms, settings, attachments index) with per-tab import, a pre-check error log, a Full backup .zip, nightly snapshots and in-browser photo shrinking. Passwords: change password, Owner temporary passwords with forced change, emailed reset (SMTP + APP_URL), session invalidation and login throttling. New env: APP_URL, BACKUP_KEEP, BACKUP_SNAPSHOTS. Not build-tested in the authoring sandbox.
+
 ## v2.1
 
 **Commit short description:** `v2.1: Edition config, branding & terminology`

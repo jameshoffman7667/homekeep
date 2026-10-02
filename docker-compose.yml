@@ -32,27 +32,17 @@ services:
       - SMTP_FROM=${SMTP_FROM:-}
       - NOTIFY_WARRANTY_WINDOW_DAYS=${NOTIFY_WARRANTY_WINDOW_DAYS:-30}
       - NOTIFY_UNREVIEWED_WINDOW_DAYS=${NOTIFY_UNREVIEWED_WINDOW_DAYS:-3}
-      # Componentized features (v2) — see .env.example and
-      # backend/features.js. Set FEATURE_HA_ALARMS=false in a fork's own
-      # .env (or Portainer stack env) to ship that edition without the
-      # Home Assistant alarm integration.
-      # Blank = follow the edition's default (on for "home", off for "facilities").
-      - FEATURE_HA_ALARMS=${FEATURE_HA_ALARMS:-}
-      # Edition / branding / terminology (v2.1) — see .env.example and
-      # backend/branding.config.js. All optional; blank = edition default.
-      - EDITION=${EDITION:-home}
-      - BRAND_NAME=${BRAND_NAME:-}
-      - BRAND_SHORT_NAME=${BRAND_SHORT_NAME:-}
-      - BRAND_TAGLINE=${BRAND_TAGLINE:-}
-      - BRAND_LOGO_URL=${BRAND_LOGO_URL:-}
-      - BRAND_COLOR_PRIMARY=${BRAND_COLOR_PRIMARY:-}
-      - BRAND_COLOR_PRIMARY_DARK=${BRAND_COLOR_PRIMARY_DARK:-}
-      - BRAND_COLOR_ACCENT=${BRAND_COLOR_ACCENT:-}
-      - BRAND_COLOR_ACCENT_DARK=${BRAND_COLOR_ACCENT_DARK:-}
-      - ORG_NOUN=${ORG_NOUN:-}
-      - LOCATION_LEVEL_LABELS=${LOCATION_LEVEL_LABELS:-}
-      - SITE_LEVEL_INDEX=${SITE_LEVEL_INDEX:-}
-      - SEED_CATALOG_FILE=${SEED_CATALOG_FILE:-}
+      # Public address people use to reach the app (no trailing slash), e.g.
+      # https://maint.example.com. Needed for the emailed password-reset
+      # link; with SMTP_HOST also set, "Forgot password?" appears on the
+      # sign-in screen.
+      - APP_URL=${APP_URL:-}
+      # Automatic nightly database snapshots in the data volume. Keep the
+      # newest BACKUP_KEEP (default 7); set BACKUP_SNAPSHOTS=false to turn off.
+      - BACKUP_KEEP=${BACKUP_KEEP:-7}
+      - BACKUP_SNAPSHOTS=${BACKUP_SNAPSHOTS:-true}
+      # Name, logo, colours, location labels and feature toggles are set
+      # in the app by the Owner (Owner Tools), not here.
     volumes:
       - homekeep_data:/data
     ports:

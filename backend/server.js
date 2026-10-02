@@ -6,48 +6,20 @@ const multer = require("multer");
 const { randomUUID } = require("crypto");
 const db = require("./db");
 const SEED = require("./seed");
-const { hashPassword, verifyPassword, signToken, requireAuth, requireOwner } = require("./auth");
-const { startNotificationScheduler } = require("./notify");
+const { hashPassword, verifyPassword, signToken, requireAuth, requireOwner, makeLimiter, MIN_PASSWORD_LENGTH } = require("./auth");
+const { startNotificationScheduler, mailEnabled, sendMail } = require("./notify");
 const { FEATURES } = require("./features");
-const { EDITION, publicConfig } = require("./edition");
+const settings = require("./settings");
+const { runMigrations } = require("./migrate");
+const backup = require("./backup");
+const crypto = require("crypto");
 
 const app = express();
 const PORT = process.env.PORT || 8040;
 
-// v2.1: first-run seed = the empty base shape, plus (optionally) an
-// edition's starter PM Wizard catalogue loaded as data — from the file
-// named by SEED_CATALOG_FILE, or DATA_DIR/pm-wizard-catalog.json if that
-// exists. Only ever applied when a deployment is first set up; after
-// that the catalogue is edited in-app or replaced via the Excel import.
+// First-run seed = the empty base shape (see seed.js).
 function buildSeed() {
-  const seed = JSON.parse(JSON.stringify(SEED));
-  const configured = process.env.SEED_CATALOG_FILE && process.env.SEED_CATALOG_FILE.trim();
-  const file = configured
-    ? path.resolve(db.DATA_DIR, configured)
-    : path.join(db.DATA_DIR, "pm-wizard-catalog.json");
-  if (!fs.existsSync(file)) {
-    if (configured) console.error("[maintenhance] SEED_CATALOG_FILE not found:", file);
-    return seed;
-  }
-  try {
-    const raw = JSON.parse(fs.readFileSync(file, "utf8"));
-    const list = Array.isArray(raw) ? raw : raw.entries;
-    const clean = (list || [])
-      .filter((i) => i && String(i.title || "").trim())
-      .map((i, n) => ({
-        id: i.id ? String(i.id) : `wc_seed${n + 1}`,
-        title: String(i.title).trim(),
-        description: String(i.description || ""),
-        frequencyValue: Number(i.frequencyValue) || 12,
-        frequencyUnit: ["days", "weeks", "months", "years"].includes(i.frequencyUnit) ? i.frequencyUnit : "months",
-        zones: i.zones === "all" || !Array.isArray(i.zones) ? "all" : i.zones.map(String),
-      }));
-    seed.pmWizardCatalog = clean;
-    console.log(`[maintenhance] Seeded ${clean.length} PM Wizard catalogue entries from ${file}`);
-  } catch (e) {
-    console.error("[maintenhance] Couldn't read the seed catalogue file:", e.message);
-  }
-  return seed;
+  return JSON.parse(JSON.stringify(SEED));
 }
 
 // Photo/document attachments (v1.6) — stored on disk under the same
@@ -70,7 +42,8 @@ const attachmentUpload = multer({
   },
 });
 
-app.use(express.json({ limit: "2mb" }));
+// 25 MB: a restored workbook or a long work-order history can exceed the old 2 MB cap.
+app.use(express.json({ limit: "25mb" }));
 app.use(cookieParser());
 
 const COOKIE_OPTS = {
@@ -86,11 +59,11 @@ const COOKIE_OPTS = {
 /* -------------------------------------------------------------
    Auth & first-run setup
 ------------------------------------------------------------- */
-// v2.1: public (pre-login) edition config — brand, colours, terminology,
-// feature flags. The login screen, page title, and theme need this before
-// anyone is signed in; nothing in it is sensitive.
+// Public (pre-login) config: Owner-managed brand, colours, terminology and
+// feature toggles (v2.2), plus whether the emailed password reset is available.
+const passwordResetAvailable = () => mailEnabled() && !!(process.env.APP_URL || "").trim();
 app.get("/api/config", (req, res) => {
-  res.json(publicConfig(FEATURES));
+  res.json(settings.publicConfig({ passwordResetEmail: passwordResetAvailable() }));
 });
 
 app.get("/api/auth/setup-status", (req, res) => {
@@ -98,12 +71,34 @@ app.get("/api/auth/setup-status", (req, res) => {
   res.json({ needsSetup: count === 0 });
 });
 
+function sessionUser(row) {
+  return { id: row.id, username: row.username, role: row.role, mustChangePassword: !!row.must_change_password };
+}
+function issueSession(res, row) {
+  res.cookie("maintenhance_token", signToken({ id: row.id, username: row.username, role: row.role, tokenVersion: row.token_version || 0 }), COOKIE_OPTS);
+}
+function validNewPassword(pw) {
+  if (typeof pw !== "string" || pw.length < MIN_PASSWORD_LENGTH) return `The password must be at least ${MIN_PASSWORD_LENGTH} characters`;
+  if (pw.length > 200) return "That password is too long";
+  return null;
+}
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+// Returns an error string, or null when the email is blank or valid and not used by another user.
+function emailProblem(email, exceptUserId) {
+  const e = (email || "").trim();
+  if (!e) return null;
+  if (!EMAIL_RE.test(e) || e.length > 200) return "That doesn't look like a valid email address";
+  const clash = db.prepare("SELECT id FROM users WHERE lower(email) = lower(?) AND id != ?").get(e, exceptUserId || "");
+  return clash ? "That email address is already used by another user" : null;
+}
+
 app.post("/api/auth/setup", (req, res) => {
   const count = db.prepare("SELECT COUNT(*) AS n FROM users").get().n;
   if (count > 0) return res.status(400).json({ error: "Setup has already been completed" });
   const { username, password } = req.body || {};
-  if (!username || !password || password.length < 6) {
-    return res.status(400).json({ error: "Username and a password of at least 6 characters are required" });
+  const pwProblem = validNewPassword(password);
+  if (!username || !username.trim() || pwProblem) {
+    return res.status(400).json({ error: !username || !username.trim() ? "A username is required" : pwProblem });
   }
   const id = randomUUID();
   db.prepare("INSERT INTO users (id, username, password_hash, role) VALUES (?,?,?,?)").run(
@@ -113,20 +108,29 @@ app.post("/api/auth/setup", (req, res) => {
     "Owner"
   );
   db.prepare("INSERT OR REPLACE INTO app_data (id, data) VALUES (1, ?)").run(JSON.stringify(buildSeed()));
-  const user = { id, username: username.trim(), role: "Owner" };
-  res.cookie("maintenhance_token", signToken(user), COOKIE_OPTS);
-  res.json(user);
+  const row = db.prepare("SELECT * FROM users WHERE id = ?").get(id);
+  issueSession(res, row);
+  res.json(sessionUser(row));
 });
 
+// Failed-login throttle: 8 failures per username+IP in 15 minutes.
+const loginLimiter = makeLimiter({ max: 8, windowMs: 15 * 60 * 1000 });
 app.post("/api/auth/login", (req, res) => {
   const { username, password } = req.body || {};
-  const row = db.prepare("SELECT * FROM users WHERE username = ?").get((username || "").trim());
+  const uname = (username || "").trim();
+  const key = `${req.ip}|${uname.toLowerCase()}`;
+  const wait = loginLimiter.check(key);
+  if (wait) {
+    return res.status(429).json({ error: `Too many failed sign-in attempts. Try again in ${Math.ceil(wait / 60)} minute(s).` });
+  }
+  const row = db.prepare("SELECT * FROM users WHERE username = ?").get(uname);
   if (!row || !verifyPassword(password || "", row.password_hash)) {
+    loginLimiter.fail(key);
     return res.status(401).json({ error: "Invalid username or password" });
   }
-  const user = { id: row.id, username: row.username, role: row.role };
-  res.cookie("maintenhance_token", signToken(user), COOKIE_OPTS);
-  res.json(user);
+  loginLimiter.clear(key);
+  issueSession(res, row);
+  res.json(sessionUser(row));
 });
 
 app.post("/api/auth/logout", (req, res) => {
@@ -135,10 +139,125 @@ app.post("/api/auth/logout", (req, res) => {
 });
 
 app.get("/api/auth/me", requireAuth, (req, res) => {
-  // v2: which componentized features this deployment has turned on
-  // (see features.js) rides along with the session response, so the
-  // frontend never needs a separate round trip to find out.
-  res.json({ ...req.user, features: FEATURES });
+  const row = db.prepare("SELECT email FROM users WHERE id = ?").get(req.user.id);
+  res.json({
+    id: req.user.id, username: req.user.username, role: req.user.role,
+    email: (row && row.email) || "",
+    mustChangePassword: req.user.mustChangePassword,
+    features: FEATURES,
+  });
+});
+
+// Any signed-in user can change their own password — including one who is
+// being forced to. Ends every other session for this user and re-issues
+// this one.
+app.post("/api/auth/change-password", requireAuth, (req, res) => {
+  const { currentPassword, newPassword } = req.body || {};
+  const row = db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id);
+  if (!row || !verifyPassword(currentPassword || "", row.password_hash)) {
+    return res.status(400).json({ error: "Your current password isn't correct" });
+  }
+  const problem = validNewPassword(newPassword);
+  if (problem) return res.status(400).json({ error: problem });
+  if (verifyPassword(newPassword, row.password_hash)) {
+    return res.status(400).json({ error: "The new password must be different from the current one" });
+  }
+  db.prepare("UPDATE users SET password_hash = ?, must_change_password = 0, token_version = token_version + 1 WHERE id = ?")
+    .run(hashPassword(newPassword), row.id);
+  const fresh = db.prepare("SELECT * FROM users WHERE id = ?").get(row.id);
+  issueSession(res, fresh);
+  res.json({ ok: true, user: sessionUser(fresh) });
+});
+
+// A user's own email (also used as their password-reset address).
+app.patch("/api/auth/profile", requireAuth, (req, res) => {
+  const email = ((req.body || {}).email || "").trim();
+  const problem = emailProblem(email, req.user.id);
+  if (problem) return res.status(400).json({ error: problem });
+  db.prepare("UPDATE users SET email = ? WHERE id = ?").run(email || null, req.user.id);
+  res.json({ ok: true, email });
+});
+
+// ---- Emailed password reset (needs SMTP_HOST and APP_URL) ----
+const forgotLimiter = makeLimiter({ max: 5, windowMs: 60 * 60 * 1000 });
+const sha256 = (v) => crypto.createHash("sha256").update(v).digest("hex");
+app.post("/api/auth/forgot", async (req, res) => {
+  // Same answer whether or not an account exists, so this can't be used to find accounts.
+  const generic = { ok: true, message: "If an account matches, a reset link has been emailed." };
+  if (!passwordResetAvailable()) return res.status(404).json({ error: "Emailed password reset isn't set up on this server" });
+  const ident = String((req.body || {}).identifier || "").trim();
+  if (!ident) return res.json(generic);
+  const key = req.ip;
+  if (forgotLimiter.check(key)) return res.status(429).json({ error: "Too many requests. Please try again later." });
+  forgotLimiter.fail(key);
+  try {
+    const row = db.prepare("SELECT * FROM users WHERE (username = ? OR lower(email) = lower(?)) AND email IS NOT NULL AND email != ''").get(ident, ident);
+    if (row) {
+      const token = crypto.randomBytes(32).toString("hex");
+      db.prepare("DELETE FROM password_resets WHERE user_id = ?").run(row.id);
+      db.prepare("INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES (?,?,?)")
+        .run(sha256(token), row.id, new Date(Date.now() + 60 * 60 * 1000).toISOString());
+      const base = process.env.APP_URL.trim().replace(/\/+$/, "");
+      const brand = settings.current().brand.name;
+      await sendMail({
+        to: row.email,
+        subject: `${brand} — reset your password`,
+        text: `Hi ${row.username},\n\nSomeone asked to reset the password for your ${brand} account. Use this link within one hour:\n\n${base}/?reset=${token}\n\nIf you didn't ask for this, you can ignore this email — your password hasn't changed.\n\n— ${brand}`,
+      });
+    }
+  } catch (e) {
+    console.error("[maintenhance] Password reset email failed:", e.message);
+  }
+  res.json(generic);
+});
+app.post("/api/auth/reset", (req, res) => {
+  const { token, newPassword } = req.body || {};
+  const problem = validNewPassword(newPassword);
+  if (problem) return res.status(400).json({ error: problem });
+  const bad = { error: "This reset link is invalid or has expired. Request a new one." };
+  if (!token || typeof token !== "string") return res.status(400).json(bad);
+  const rec = db.prepare("SELECT * FROM password_resets WHERE token_hash = ?").get(sha256(token));
+  if (!rec || rec.expires_at < new Date().toISOString()) return res.status(400).json(bad);
+  db.prepare("UPDATE users SET password_hash = ?, must_change_password = 0, token_version = token_version + 1 WHERE id = ?")
+    .run(hashPassword(newPassword), rec.user_id);
+  db.prepare("DELETE FROM password_resets WHERE user_id = ?").run(rec.user_id);
+  res.json({ ok: true });
+});
+
+/* -------------------------------------------------------------
+   Owner-managed settings (v2.2): branding, terminology, features.
+------------------------------------------------------------- */
+app.put("/api/settings", requireAuth, requireOwner, (req, res) => {
+  const v = settings.validate(req.body || {});
+  if (!v.ok) return res.status(400).json({ error: v.errors.join(". "), errors: v.errors });
+  settings.save(v.settings);
+  res.json(settings.publicConfig({ passwordResetEmail: passwordResetAvailable() }));
+});
+app.post("/api/settings/reset", requireAuth, requireOwner, (req, res) => {
+  settings.resetToDefaults();
+  res.json(settings.publicConfig({ passwordResetEmail: passwordResetAvailable() }));
+});
+app.put("/api/settings/logo", requireAuth, requireOwner, (req, res) => {
+  const dataUrl = (req.body || {}).dataUrl;
+  const v = settings.validateLogo(dataUrl);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  settings.setLogo(dataUrl);
+  res.json(settings.publicConfig({ passwordResetEmail: passwordResetAvailable() }));
+});
+app.delete("/api/settings/logo", requireAuth, requireOwner, (req, res) => {
+  settings.clearLogo();
+  res.json(settings.publicConfig({ passwordResetEmail: passwordResetAvailable() }));
+});
+// Public: the logo is shown on the login screen. Served as an image only
+// (nosniff + a sandboxing CSP so an SVG can never run script).
+app.get("/api/logo", (req, res) => {
+  const logo = settings.getLogo();
+  if (!logo) return res.status(404).end();
+  res.setHeader("Content-Type", logo.mime);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+  res.setHeader("Cache-Control", "public, max-age=3600");
+  res.send(logo.buf);
 });
 
 /* -------------------------------------------------------------
@@ -153,6 +272,7 @@ function rowToUser(row) {
     username: row.username,
     role: row.role,
     email: row.email || "",
+    mustChangePassword: !!row.must_change_password,
     notifyPmOverdue: !!row.notify_pm_overdue,
     notifyWarrantyExpiring: !!row.notify_warranty_expiring,
     notifyWorkRequestUnreviewed: !!row.notify_work_request_unreviewed,
@@ -161,16 +281,18 @@ function rowToUser(row) {
 
 app.get("/api/users", requireAuth, (req, res) => {
   const rows = db.prepare(
-    "SELECT id, username, role, email, notify_pm_overdue, notify_warranty_expiring, notify_work_request_unreviewed FROM users ORDER BY created_at"
+    "SELECT id, username, role, email, must_change_password, notify_pm_overdue, notify_warranty_expiring, notify_work_request_unreviewed FROM users ORDER BY created_at"
   ).all();
   res.json(rows.map(rowToUser));
 });
 
 app.post("/api/users", requireAuth, requireOwner, (req, res) => {
   const { username, password, role, email } = req.body || {};
-  if (!username || !password || password.length < 6) {
-    return res.status(400).json({ error: "Username and a password of at least 6 characters are required" });
-  }
+  if (!username || !username.trim()) return res.status(400).json({ error: "A username is required" });
+  const pwProblem = validNewPassword(password);
+  if (pwProblem) return res.status(400).json({ error: pwProblem });
+  const emailErr = emailProblem(email);
+  if (emailErr) return res.status(400).json({ error: emailErr });
   if (!["Owner", "Manager", "Executor", "Guest"].includes(role)) {
     return res.status(400).json({ error: "Role must be Owner, Manager, Executor, or Guest" });
   }
@@ -178,7 +300,7 @@ app.post("/api/users", requireAuth, requireOwner, (req, res) => {
   if (existing) return res.status(400).json({ error: "That username is already taken" });
   const id = randomUUID();
   try {
-    db.prepare("INSERT INTO users (id, username, password_hash, role, email) VALUES (?,?,?,?,?)").run(
+    db.prepare("INSERT INTO users (id, username, password_hash, role, email, must_change_password) VALUES (?,?,?,?,?,1)").run(
       id,
       username.trim(),
       hashPassword(password),
@@ -189,7 +311,7 @@ app.post("/api/users", requireAuth, requireOwner, (req, res) => {
     console.error("[maintenhance] Failed to create user:", e.message);
     return res.status(400).json({ error: "Couldn't create that account. Check the server logs for details." });
   }
-  res.json(rowToUser(db.prepare("SELECT id, username, role, email, notify_pm_overdue, notify_warranty_expiring, notify_work_request_unreviewed FROM users WHERE id = ?").get(id)));
+  res.json(rowToUser(db.prepare("SELECT id, username, role, email, must_change_password, notify_pm_overdue, notify_warranty_expiring, notify_work_request_unreviewed FROM users WHERE id = ?").get(id)));
 });
 
 // Update a user's notification email/preferences. Owner-only, same as
@@ -198,6 +320,8 @@ app.patch("/api/users/:id", requireAuth, requireOwner, (req, res) => {
   const row = db.prepare("SELECT id FROM users WHERE id = ?").get(req.params.id);
   if (!row) return res.status(404).json({ error: "No such user" });
   const { email, notifyPmOverdue, notifyWarrantyExpiring, notifyWorkRequestUnreviewed } = req.body || {};
+  const emailErr = emailProblem(email, req.params.id);
+  if (emailErr) return res.status(400).json({ error: emailErr });
   db.prepare(
     "UPDATE users SET email = ?, notify_pm_overdue = ?, notify_warranty_expiring = ?, notify_work_request_unreviewed = ? WHERE id = ?"
   ).run(
@@ -207,7 +331,27 @@ app.patch("/api/users/:id", requireAuth, requireOwner, (req, res) => {
     notifyWorkRequestUnreviewed ? 1 : 0,
     req.params.id
   );
-  res.json(rowToUser(db.prepare("SELECT id, username, role, email, notify_pm_overdue, notify_warranty_expiring, notify_work_request_unreviewed FROM users WHERE id = ?").get(req.params.id)));
+  res.json(rowToUser(db.prepare("SELECT id, username, role, email, must_change_password, notify_pm_overdue, notify_warranty_expiring, notify_work_request_unreviewed FROM users WHERE id = ?").get(req.params.id)));
+});
+
+// Owner sets a temporary password (typed, or generated and shown once). The
+// user must replace it at their next sign-in, and any open sessions end.
+app.post("/api/users/:id/reset-password", requireAuth, requireOwner, (req, res) => {
+  const row = db.prepare("SELECT id FROM users WHERE id = ?").get(req.params.id);
+  if (!row) return res.status(404).json({ error: "No such user" });
+  if (req.params.id === req.user.id) return res.status(400).json({ error: "Use Change password for your own account" });
+  let pw = ((req.body || {}).password || "").toString();
+  if (pw) {
+    const problem = validNewPassword(pw);
+    if (problem) return res.status(400).json({ error: problem });
+  } else {
+    // 12 characters from an alphabet without look-alikes (no 0/O, 1/l/I).
+    const alphabet = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    pw = Array.from(crypto.randomBytes(12), (b) => alphabet[b % alphabet.length]).join("");
+  }
+  db.prepare("UPDATE users SET password_hash = ?, must_change_password = 1, token_version = token_version + 1 WHERE id = ?")
+    .run(hashPassword(pw), req.params.id);
+  res.json({ ok: true, temporaryPassword: pw });
 });
 
 app.delete("/api/users/:id", requireAuth, requireOwner, (req, res) => {
@@ -472,31 +616,29 @@ app.patch("/api/alarms/:id", requireAuth, requireAdminRole, (req, res) => {
 ------------------------------------------------------------- */
 const staticDir = path.join(__dirname, "public");
 
-// v2.1: the PWA manifest is generated from the edition config so the
-// installed app's name and theme colour match the deployment's branding.
-// Registered ahead of express.static so it wins over the built file.
+// The PWA manifest is generated from the Owner's saved branding so the
+// installed app's name and theme colour match. Registered ahead of
+// express.static so it wins over the built file.
 app.get("/manifest.json", (req, res) => {
   let base = {};
   try { base = JSON.parse(fs.readFileSync(path.join(staticDir, "manifest.json"), "utf8")); } catch (e) { /* dev/no build */ }
+  const b = settings.current().brand;
   res.type("application/manifest+json").json({
     ...base,
-    name: EDITION.brand.name,
-    short_name: EDITION.brand.shortName && EDITION.brand.name.length > 12 ? EDITION.brand.shortName : EDITION.brand.name,
-    description: `${EDITION.brand.name} — ${EDITION.brand.tagline || "maintenance management"}`,
-    theme_color: EDITION.brand.colors.primary,
+    name: b.name,
+    short_name: b.shortName && b.name.length > 12 ? b.shortName : b.name,
+    description: `${b.name} — ${b.tagline || "maintenance management"}`,
+    theme_color: b.colors.primary,
   });
 });
-// Logos and other per-deployment brand assets: drop files in
-// DATA_DIR/branding/ and reference them as /branding/<file> in
-// BRAND_LOGO_URL.
-const brandingDir = path.join(db.DATA_DIR, "branding");
-if (!fs.existsSync(brandingDir)) fs.mkdirSync(brandingDir, { recursive: true });
-app.use("/branding", express.static(brandingDir, { maxAge: "1h" }));
 app.use(express.static(staticDir));
 app.get("*", (req, res, next) => {
   if (req.path.startsWith("/api/")) return next();
   res.sendFile(path.join(staticDir, "index.html"));
 });
+
+runMigrations();
+backup.register(app, { requireAuth, requireOwner, ATTACH_DIR });
 
 app.listen(PORT, () => {
   console.log(`MaintEnhance server listening on port ${PORT}`);

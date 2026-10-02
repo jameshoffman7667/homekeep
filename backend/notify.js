@@ -3,7 +3,8 @@
 // no SMTP_HOST set, this module does nothing but log once at startup.
 // See .env.example for the SMTP_* variables and README.md for setup.
 const db = require("./db");
-const { EDITION } = require("./edition");
+const settings = require("./settings");
+const brandName = () => settings.current().brand.name;
 
 const SMTP_HOST = process.env.SMTP_HOST || "";
 const SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000; // once a day
@@ -40,14 +41,14 @@ function buildDigest(data, user, today) {
     const overdue = data.workOrders.filter(
       (w) =>
         w.type !== "PM Base" &&
-        (w.status === "Open" || w.status === "In Progress") &&
-        w.scheduledDate &&
-        w.scheduledDate < today
+        (w.status === "Active" || w.status === "Scheduled") &&
+        (w.scheduledDate || w.requiredByDate) &&
+        (w.scheduledDate || w.requiredByDate) < today
     );
     if (overdue.length) {
       lines.push(`Overdue work orders (${overdue.length}):`);
       overdue.forEach((w) => {
-        lines.push(`  - #${w.number} ${w.title} — was scheduled ${w.scheduledDate}`);
+        lines.push(`  - #${w.number} ${w.title} — was due ${w.scheduledDate || w.requiredByDate}`);
       });
     }
   }
@@ -104,7 +105,7 @@ async function runNotificationSweep() {
     const today = todayISO();
     const users = getNotifiableUsers();
     const t = getTransporter();
-    const from = process.env.SMTP_FROM || `${EDITION.brand.name} <maintenhance@${SMTP_HOST}>`;
+    const from = process.env.SMTP_FROM || `${brandName()} <maintenhance@${SMTP_HOST}>`;
 
     for (const user of users) {
       const body = buildDigest(data, user, today);
@@ -113,8 +114,8 @@ async function runNotificationSweep() {
         await t.sendMail({
           from,
           to: user.email,
-          subject: `${EDITION.brand.name} — items that need attention`,
-          text: `Hi ${user.username},\n\n${body}\n\n— ${EDITION.brand.name}`,
+          subject: `${brandName()} — items that need attention`,
+          text: `Hi ${user.username},\n\n${body}\n\n— ${brandName()}`,
         });
         console.log(`[maintenhance] Sent notification digest to ${user.email}`);
       } catch (e) {
@@ -136,4 +137,12 @@ function startNotificationScheduler() {
   setInterval(runNotificationSweep, SWEEP_INTERVAL_MS);
 }
 
-module.exports = { startNotificationScheduler, runNotificationSweep, buildDigest };
+// v2.2: used by the emailed password-reset link.
+function mailEnabled() { return !!SMTP_HOST; }
+async function sendMail({ to, subject, text }) {
+  if (!SMTP_HOST) throw new Error("SMTP is not configured");
+  const from = process.env.SMTP_FROM || `${brandName()} <maintenhance@${SMTP_HOST}>`;
+  await getTransporter().sendMail({ from, to, subject, text });
+}
+
+module.exports = { startNotificationScheduler, runNotificationSweep, buildDigest, mailEnabled, sendMail };
