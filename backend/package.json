@@ -1,6 +1,6 @@
 {
   "name": "maintenhance-server",
-  "version": "2.5.1",
+  "version": "2.6.0",
   "private": true,
   "type": "commonjs",
   "scripts": {

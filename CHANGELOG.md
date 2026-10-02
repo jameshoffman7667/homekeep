@@ -19,6 +19,13 @@ the Git commit's summary line) and a **Commit extended description**
 
 ---
 
+## v2.6
+
+**Commit short description:** `v2.6: Accounts, designations, metrics, UX`
+
+**Commit extended description:**
+v2.6 implements 26 logged changes. Accounts: a user avatar menu (Account settings, Sign out) replaces the bell and key; profile photo, dark mode, install app and email digest subscriptions move into Tools, renamed Tools and settings; forced password change no longer asks for the temporary password; adding a member or resetting a password offers an editable temporary password and an optional email of the credentials (needs SMTP). Roles: executor designations Planner, Scheduler, Specialist, plus an Executor flag for Owners and Managers. Assets: category combobox, BOM copy between assets, real archived state, managers delete only unlinked assets (Archive is now Remove, with explanation). Forms: work request and work order field order and required fields, location filters assets including sub-locations, vendor removed from work orders (via parts), PM wizard catalogue collapsed. Owner dashboard metrics: requests per executor, hour efficiency, schedule compliance, lead time, verification time, reactive percentage (lead time and verification start from this release). Scheduling: shift chips open an edit modal, free-entry durations, phone-width calendars scroll sideways at 7 days wide. Help loads faster with a Top button. Tested in a browser harness only, not in a live deployment.
+
 ## v2.5.1
 
 **Commit short description:** `v2.5.1: Confirm password, show/hide password`

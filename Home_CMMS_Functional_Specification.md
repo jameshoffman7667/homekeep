@@ -335,6 +335,34 @@ Three Owner toggles under Tools → Features, all default off. With all three of
 - Every password box (setup, sign-in, emailed reset, forced password change, My account, Owner add-member) has an eye button that toggles between hidden and visible text. The state is per box and is not remembered.
 - Form inputs are sized with border-box so they never exceed their container.
 
+### 3.21 Accounts and the user menu (v2.6)
+- The top bar shows the user's avatar (profile photo, or initial on the user's colour). Tapping it opens a small menu: **Account settings** (opens Tools and settings) and a red **Sign out**. The notification bell, sidebar subtitle and key popup are removed.
+- Tools and settings (renamed from Tools) holds the account card: profile photo upload, email, password, dark mode, install-app, and email digest subscriptions.
+- Forced password change does not ask for the temporary password again.
+- Add member and Reset password prefill an editable temporary password, include an Email field, and when SMTP is configured ask "Email these credentials?".
+- Sign-in subtitle reads "Sign in"; the "word for organization" setting defaults to Organization.
+
+### 3.22 Executor designations (v2.6)
+- Executors may carry designations Planner, Scheduler, Specialist. Planners may assign work; Schedulers may use the workforce schedule; Specialists are flagged for specialist work. Owners and Managers have an "Executor" flag (default off) that makes them assignable. Planner/Scheduler enforcement is client-side; alarm acknowledgement is enforced server-side.
+
+### 3.23 Assets (v2.6)
+- Category is a combobox of existing categories with free entry. A bill of materials can be copied from another asset.
+- "Archive" is renamed **Remove**, with an explanatory popup. Managers can permanently delete an asset only when nothing links to it (work orders, requests, PMs, parts, alarms); otherwise it is archived (hidden, history kept).
+
+### 3.24 Work request and work order forms (v2.6)
+- Fields follow a fixed order with required fields marked. Selecting a location filters assets to that location and its sub-locations.
+- Work orders: executors are required, and hours per executor required, only when execution scheduling is on. PM base work orders have no assigned executors; the PM wizard sets requirements when PMs are added. Vendor is removed from work orders and comes through parts. The PM wizard catalogue card is collapsed with a View entries pop-up.
+
+### 3.25 Owner dashboard metrics (v2.6)
+- Work requests per executor; hour efficiency per executor; schedule compliance; work request lead time (creation to conversion); work order verification time (completed to closed); reactive percentage (unplanned / all work orders). Lead time and verification time are measured only from v2.6 onward.
+
+### 3.26 Scheduling and narrow screens (v2.6)
+- Workforce schedule header title sits above its controls. Tapping a shift chip opens an edit modal with delete. Durations accept free entry.
+- On narrow screens schedule views (including the dashboard week) scroll sideways inside a card that is always 7 days wide; on Labour assignment the work orders list sits above the calendar in a card showing about three orders.
+
+### 3.27 Email digests (v2.6)
+- Users subscribe in Tools and settings, by role/designation: existing digests plus alarms, low stock, my schedule and team schedule.
+
 ## 4. Non-Functional Requirements
 
 | Category | Requirement |

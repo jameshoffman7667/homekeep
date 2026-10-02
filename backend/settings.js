@@ -17,10 +17,11 @@ const DEFAULTS = {
     shortName: "ME",
     tagline: "Maintenance Management",
     topBarTitle: "",
+    logoWrench: false,
     colors: { primary: "#28415F", primaryDark: "#7FA3CC", accent: "#C85410", accentDark: "#E38C4E" },
   },
   terms: {
-    orgNoun: "household",
+    orgNoun: "Organization",
     locationLevels: LEVEL_KEYS.slice(),
     siteLevelIndex: 0,
   },
@@ -51,6 +52,7 @@ function current() {
   if (saved && typeof saved === "object") {
     const b = saved.brand || {}, t = saved.terms || {}, f = saved.features || {};
     for (const k of ["name", "shortName", "tagline", "topBarTitle"]) if (typeof b[k] === "string") out.brand[k] = b[k];
+    if (typeof b.logoWrench === "boolean") out.brand.logoWrench = b.logoWrench;
     if (b.colors) for (const k of Object.keys(out.brand.colors)) if (COLOR_RE.test(b.colors[k] || "")) out.brand.colors[k] = b.colors[k];
     if (typeof t.orgNoun === "string" && t.orgNoun.trim()) out.terms.orgNoun = t.orgNoun;
     if (Array.isArray(t.locationLevels) && t.locationLevels.length === 6 && t.locationLevels.every((x) => typeof x === "string" && x.trim()))
@@ -81,6 +83,7 @@ function validate(input) {
   str(b.shortName, "Short name", 0, 12, out.brand, "shortName");
   str(b.tagline, "Tagline", 0, 60, out.brand, "tagline");
   str(b.topBarTitle, "Top-bar title", 0, 40, out.brand, "topBarTitle");
+  if (b.logoWrench !== undefined) out.brand.logoWrench = !!b.logoWrench;
   if (b.colors) {
     for (const k of Object.keys(out.brand.colors)) {
       if (b.colors[k] === undefined) continue;
@@ -88,7 +91,7 @@ function validate(input) {
       else errors.push(`Colour "${k}" must be a hex value like #28415F`);
     }
   }
-  str(t.orgNoun, "Household/organization word", 1, 20, out.terms, "orgNoun");
+  str(t.orgNoun, "Word for organization", 1, 20, out.terms, "orgNoun");
   if (t.locationLevels !== undefined) {
     if (!Array.isArray(t.locationLevels) || t.locationLevels.length !== 6) errors.push("Exactly six location level labels are required");
     else {

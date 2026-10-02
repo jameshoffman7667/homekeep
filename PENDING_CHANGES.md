@@ -4,12 +4,8 @@ Ideas logged here since the last release. When you say "create a new version,"
 all of these get implemented together, the version is bumped, and this file
 is cleared back to empty.
 
-Current release: v2.5.1
+Current release: v2.6
 
 ## Log
 
 (none)
-
-## Logged for future (not scheduled)
-- Generate PWA icons from the uploaded logo.
-- Off-device automated backup of the data volume (restic/rclone/rsync).

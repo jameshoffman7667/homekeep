@@ -65,7 +65,7 @@ const COOKIE_OPTS = {
 const passwordResetAvailable = () => mailEnabled() && !!(process.env.APP_URL || "").trim();
 // Extra public flags: password reset availability and whether a Gemini key is
 // configured (only yes/no, never the key itself).
-const configExtra = () => ({ passwordResetEmail: passwordResetAvailable(), geminiKeyDetected: prefill.geminiAvailable() });
+const configExtra = () => ({ passwordResetEmail: passwordResetAvailable(), geminiKeyDetected: prefill.geminiAvailable(), mailConfigured: mailEnabled() });
 app.get("/api/config", (req, res) => {
   res.json(settings.publicConfig(configExtra()));
 });
@@ -76,7 +76,7 @@ app.get("/api/auth/setup-status", (req, res) => {
 });
 
 function sessionUser(row) {
-  return { id: row.id, username: row.username, role: row.role, mustChangePassword: !!row.must_change_password };
+  return rowToUser(row);
 }
 function issueSession(res, row) {
   res.cookie("maintenhance_token", signToken({ id: row.id, username: row.username, role: row.role, tokenVersion: row.token_version || 0 }), COOKIE_OPTS);
@@ -143,13 +143,8 @@ app.post("/api/auth/logout", (req, res) => {
 });
 
 app.get("/api/auth/me", requireAuth, (req, res) => {
-  const row = db.prepare("SELECT email FROM users WHERE id = ?").get(req.user.id);
-  res.json({
-    id: req.user.id, username: req.user.username, role: req.user.role,
-    email: (row && row.email) || "",
-    mustChangePassword: req.user.mustChangePassword,
-    features: FEATURES,
-  });
+  const row = db.prepare("SELECT " + USER_COLS + " FROM users WHERE id = ?").get(req.user.id);
+  res.json({ ...rowToUser(row), mustChangePassword: req.user.mustChangePassword, features: FEATURES });
 });
 
 // Any signed-in user can change their own password — including one who is
@@ -158,7 +153,9 @@ app.get("/api/auth/me", requireAuth, (req, res) => {
 app.post("/api/auth/change-password", requireAuth, (req, res) => {
   const { currentPassword, newPassword } = req.body || {};
   const row = db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id);
-  if (!row || !verifyPassword(currentPassword || "", row.password_hash)) {
+  // v2.6: someone signed in with a temporary password may choose their own without re-typing it.
+  const forced = !!(row && row.must_change_password);
+  if (!row || (!forced && !verifyPassword(currentPassword || "", row.password_hash))) {
     return res.status(400).json({ error: "Your current password isn't correct" });
   }
   const problem = validNewPassword(newPassword);
@@ -173,13 +170,24 @@ app.post("/api/auth/change-password", requireAuth, (req, res) => {
   res.json({ ok: true, user: sessionUser(fresh) });
 });
 
-// A user's own email (also used as their password-reset address).
+// A user's own email, profile photo and digest subscriptions.
 app.patch("/api/auth/profile", requireAuth, (req, res) => {
-  const email = ((req.body || {}).email || "").trim();
-  const problem = emailProblem(email, req.user.id);
-  if (problem) return res.status(400).json({ error: problem });
-  db.prepare("UPDATE users SET email = ? WHERE id = ?").run(email || null, req.user.id);
-  res.json({ ok: true, email });
+  const body = req.body || {};
+  const sets = []; const vals = [];
+  if (body.email !== undefined) {
+    const email = (body.email || "").trim();
+    const problem = emailProblem(email, req.user.id);
+    if (problem) return res.status(400).json({ error: problem });
+    sets.push("email = ?"); vals.push(email || null);
+  }
+  if (body.avatar !== undefined) {
+    const a = body.avatar || "";
+    if (a && (!/^data:image\/(jpeg|png|webp);base64,/.test(a) || a.length > 200000)) return res.status(400).json({ error: "That photo is not usable" });
+    sets.push("avatar = ?"); vals.push(a || null);
+  }
+  for (const [k, col] of NOTIFY_FIELDS) if (body[k] !== undefined) { sets.push(col + " = ?"); vals.push(body[k] ? 1 : 0); }
+  if (sets.length) db.prepare("UPDATE users SET " + sets.join(", ") + " WHERE id = ?").run(...vals, req.user.id);
+  res.json({ ok: true, user: rowToUser(db.prepare("SELECT " + USER_COLS + " FROM users WHERE id = ?").get(req.user.id)) });
 });
 
 // ---- Emailed password reset (needs SMTP_HOST and APP_URL) ----
@@ -294,6 +302,16 @@ app.post("/api/prefill", requireAuth, async (req, res) => {
    picker built from this list); creating/removing accounts stays
    Owner-only — that UI only lives on the Owner Tools page anyway.
 ------------------------------------------------------------- */
+const DESIGNATIONS = ["planner", "scheduler", "specialist", "executor"];
+function parseDesignations(v) {
+  try { const a = JSON.parse(v || "[]"); return Array.isArray(a) ? a.filter((x) => DESIGNATIONS.includes(x)) : []; } catch (e) { return []; }
+}
+const NOTIFY_FIELDS = [
+  ["notifyPmOverdue", "notify_pm_overdue"], ["notifyWarrantyExpiring", "notify_warranty_expiring"],
+  ["notifyWorkRequestUnreviewed", "notify_work_request_unreviewed"], ["notifyAlarms", "notify_alarms"],
+  ["notifyLowStock", "notify_low_stock"], ["notifyMySchedule", "notify_my_schedule"], ["notifyTeamSchedule", "notify_team_schedule"],
+];
+const USER_COLS = "id, username, role, email, must_change_password, notify_pm_overdue, notify_warranty_expiring, notify_work_request_unreviewed, designations, avatar, notify_alarms, notify_low_stock, notify_my_schedule, notify_team_schedule";
 function rowToUser(row) {
   return {
     id: row.id,
@@ -304,12 +322,18 @@ function rowToUser(row) {
     notifyPmOverdue: !!row.notify_pm_overdue,
     notifyWarrantyExpiring: !!row.notify_warranty_expiring,
     notifyWorkRequestUnreviewed: !!row.notify_work_request_unreviewed,
+    notifyAlarms: !!row.notify_alarms,
+    notifyLowStock: !!row.notify_low_stock,
+    notifyMySchedule: !!row.notify_my_schedule,
+    notifyTeamSchedule: !!row.notify_team_schedule,
+    designations: parseDesignations(row.designations),
+    avatar: row.avatar || "",
   };
 }
 
 app.get("/api/users", requireAuth, (req, res) => {
   const rows = db.prepare(
-    "SELECT id, username, role, email, must_change_password, notify_pm_overdue, notify_warranty_expiring, notify_work_request_unreviewed FROM users ORDER BY created_at"
+    "SELECT id, username, role, email, must_change_password, notify_pm_overdue, notify_warranty_expiring, notify_work_request_unreviewed, designations, avatar, notify_alarms, notify_low_stock, notify_my_schedule, notify_team_schedule FROM users ORDER BY created_at"
   ).all();
   res.json(rows.map(rowToUser));
 });
@@ -339,27 +363,48 @@ app.post("/api/users", requireAuth, requireOwner, (req, res) => {
     console.error("[maintenhance] Failed to create user:", e.message);
     return res.status(400).json({ error: "Couldn't create that account. Check the server logs for details." });
   }
-  res.json(rowToUser(db.prepare("SELECT id, username, role, email, must_change_password, notify_pm_overdue, notify_warranty_expiring, notify_work_request_unreviewed FROM users WHERE id = ?").get(id)));
+  res.json(rowToUser(db.prepare("SELECT id, username, role, email, must_change_password, notify_pm_overdue, notify_warranty_expiring, notify_work_request_unreviewed, designations, avatar, notify_alarms, notify_low_stock, notify_my_schedule, notify_team_schedule FROM users WHERE id = ?").get(id)));
 });
 
 // Update a user's notification email/preferences. Owner-only, same as
 // add/remove — the only place this is edited from is Owner Tools.
 app.patch("/api/users/:id", requireAuth, requireOwner, (req, res) => {
-  const row = db.prepare("SELECT id FROM users WHERE id = ?").get(req.params.id);
+  const row = db.prepare("SELECT * FROM users WHERE id = ?").get(req.params.id);
   if (!row) return res.status(404).json({ error: "No such user" });
-  const { email, notifyPmOverdue, notifyWarrantyExpiring, notifyWorkRequestUnreviewed } = req.body || {};
+  const body = req.body || {};
+  const email = body.email !== undefined ? body.email : row.email;
   const emailErr = emailProblem(email, req.params.id);
   if (emailErr) return res.status(400).json({ error: emailErr });
-  db.prepare(
-    "UPDATE users SET email = ?, notify_pm_overdue = ?, notify_warranty_expiring = ?, notify_work_request_unreviewed = ? WHERE id = ?"
-  ).run(
-    (email || "").trim() || null,
-    notifyPmOverdue ? 1 : 0,
-    notifyWarrantyExpiring ? 1 : 0,
-    notifyWorkRequestUnreviewed ? 1 : 0,
-    req.params.id
-  );
-  res.json(rowToUser(db.prepare("SELECT id, username, role, email, must_change_password, notify_pm_overdue, notify_warranty_expiring, notify_work_request_unreviewed FROM users WHERE id = ?").get(req.params.id)));
+  const sets = ["email = ?"]; const vals = [(email || "").trim() || null];
+  for (const [k, col] of NOTIFY_FIELDS) if (body[k] !== undefined) { sets.push(col + " = ?"); vals.push(body[k] ? 1 : 0); }
+  if (body.designations !== undefined) {
+    sets.push("designations = ?");
+    vals.push(JSON.stringify(parseDesignations(JSON.stringify(Array.isArray(body.designations) ? body.designations : []))));
+  }
+  db.prepare("UPDATE users SET " + sets.join(", ") + " WHERE id = ?").run(...vals, req.params.id);
+  res.json(rowToUser(db.prepare("SELECT " + USER_COLS + " FROM users WHERE id = ?").get(req.params.id)));
+});
+
+// Emails a member their username, temporary password and sign-in link (Owner only; needs SMTP).
+app.post("/api/users/:id/email-credentials", requireAuth, requireOwner, async (req, res) => {
+  if (!mailEnabled()) return res.status(400).json({ error: "Email isn't set up on this server (SMTP_HOST is not configured)." });
+  const row = db.prepare("SELECT username, email FROM users WHERE id = ?").get(req.params.id);
+  if (!row) return res.status(404).json({ error: "No such user" });
+  if (!row.email) return res.status(400).json({ error: "That member has no email address" });
+  const pw = ((req.body || {}).password || "").toString();
+  if (!pw) return res.status(400).json({ error: "No temporary password supplied" });
+  const link = (process.env.APP_URL || "").trim().replace(/\/$/, "") || `${req.protocol}://${req.get("host")}`;
+  const name = settings.current().brand.name;
+  try {
+    await sendMail({
+      to: row.email,
+      subject: `Your ${name} sign-in details`,
+      text: `Hi ${row.username},\n\nYour account is ready.\n\nSign in: ${link}\nUsername: ${row.username}\nTemporary password: ${pw}\n\nYou'll be asked to choose your own password the first time you sign in.\n\n— ${name}`,
+    });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: "Couldn't send the email: " + e.message });
+  }
 });
 
 // Owner sets a temporary password (typed, or generated and shown once). The
@@ -627,7 +672,13 @@ app.get("/api/alarms", requireAuth, (req, res) => {
     : db.prepare("SELECT * FROM alarms ORDER BY triggered_at DESC").all();
   res.json(rows.map(rowToAlarm));
 });
-app.patch("/api/alarms/:id", requireAuth, requireAdminRole, (req, res) => {
+function requireAlarmAck(req, res, next) {
+  if (req.user && (req.user.role === "Owner" || req.user.role === "Manager")) return next();
+  const r = db.prepare("SELECT designations FROM users WHERE id = ?").get(req.user && req.user.id);
+  if (req.user && req.user.role === "Executor" && r && parseDesignations(r.designations).includes("specialist")) return next();
+  return res.status(403).json({ error: "Owners, Managers and Specialists only" });
+}
+app.patch("/api/alarms/:id", requireAuth, requireAlarmAck, (req, res) => {
   const row = db.prepare("SELECT * FROM alarms WHERE id = ?").get(req.params.id);
   if (!row) return res.status(404).json({ error: "Alarm not found" });
   const { status, resolutionType, resolutionRef, resolutionReason } = req.body || {};

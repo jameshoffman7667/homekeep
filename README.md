@@ -3,6 +3,8 @@
 > **MaintEnhance** (short form "ME") is the product name used throughout.
 > (Versions before v1.8 were called HomeKeep; see CHANGELOG.md.)
 
+> **v2.6 note:** new user menu, executor designations, owner metrics, asset removal rules, email digests and phone-friendly schedules — see CHANGELOG.md.
+>
 > **v2.5.1 note:** first-run setup now asks you to confirm the Owner password, and every password box has a show/hide (eye) button.
 >
 > **v2.5 note:** touch screens can now use the planning calendars (tap a card, tap where it goes), and storage is split into a fast `/data` volume (database) and a slower `/files` volume (photos, snapshots, temp files) — see §9 and `.env.example`.

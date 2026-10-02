@@ -171,6 +171,19 @@ try {
 } catch (e) {
   console.error("[maintenhance] v2.2 password columns migration failed:", e.message);
 }
+// Migration (v2.6): executor designations, profile photo and extra digest options.
+try {
+  const cols = db.prepare("PRAGMA table_info(users)").all().map((c) => c.name);
+  const add = (name, ddl) => { if (!cols.includes(name)) db.exec("ALTER TABLE users ADD COLUMN " + ddl); };
+  add("designations", "designations TEXT NOT NULL DEFAULT '[]'");
+  add("avatar", "avatar TEXT");
+  add("notify_alarms", "notify_alarms INTEGER NOT NULL DEFAULT 0");
+  add("notify_low_stock", "notify_low_stock INTEGER NOT NULL DEFAULT 0");
+  add("notify_my_schedule", "notify_my_schedule INTEGER NOT NULL DEFAULT 0");
+  add("notify_team_schedule", "notify_team_schedule INTEGER NOT NULL DEFAULT 0");
+} catch (e) {
+  console.error("[maintenhance] v2.6 columns migration failed:", e.message);
+}
 // The email now doubles as the password-reset address, so it must be
 // unique (case-insensitive). An existing database with duplicate emails
 // can't take the index; in that case skip it (the API still checks).

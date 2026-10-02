@@ -27,17 +27,39 @@ function getAppData() {
 function getNotifiableUsers() {
   return db
     .prepare(
-      "SELECT username, email, notify_pm_overdue, notify_warranty_expiring, notify_work_request_unreviewed FROM users WHERE email IS NOT NULL AND email != ''"
+      "SELECT id, username, role, designations, email, notify_pm_overdue, notify_warranty_expiring, notify_work_request_unreviewed, notify_alarms, notify_low_stock, notify_my_schedule, notify_team_schedule FROM users WHERE email IS NOT NULL AND email != ''"
     )
     .all();
 }
 
 // Builds the per-user digest sections. Returns null if there's nothing
 // this user has opted into and has something to report right now.
+// v2.6: which digest options a member may receive. Owners and Managers get
+// everything; Executors by designation; Guests none. "My schedule" needs
+// the person to be an executor (Executor role, or Owner/Manager flagged Executor).
+function designationsOf(user) {
+  try { const a = JSON.parse(user.designations || "[]"); return Array.isArray(a) ? a : []; } catch (e) { return []; }
+}
+function allowedDigests(user) {
+  const d = designationsOf(user);
+  const admin = user.role === "Owner" || user.role === "Manager";
+  const ex = user.role === "Executor";
+  const can = (des) => admin || (ex && d.includes(des));
+  return {
+    overdue: can("scheduler"), unreviewed: can("planner"), warranty: can("specialist"), alarms: can("specialist"),
+    lowStock: can("planner"), teamSchedule: can("scheduler"),
+    mySchedule: ex || (admin && d.includes("executor")),
+  };
+}
+function addDays(iso, n) {
+  const d = new Date(iso + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10);
+}
 function buildDigest(data, user, today) {
   const lines = [];
+  const allow = allowedDigests(user);
+  const openWo = (w) => w.type !== "PM Base" && (w.status === "Active" || w.status === "Scheduled");
 
-  if (user.notify_pm_overdue) {
+  if (user.notify_pm_overdue && allow.overdue) {
     const overdue = data.workOrders.filter(
       (w) =>
         w.type !== "PM Base" &&
@@ -53,7 +75,7 @@ function buildDigest(data, user, today) {
     }
   }
 
-  if (user.notify_warranty_expiring) {
+  if (user.notify_warranty_expiring && allow.warranty) {
     const soon = (data.assets || []).filter((a) => {
       if (!a.warrantyEnd) return false;
       const d = daysBetween(today, a.warrantyEnd);
@@ -67,7 +89,7 @@ function buildDigest(data, user, today) {
     }
   }
 
-  if (user.notify_work_request_unreviewed) {
+  if (user.notify_work_request_unreviewed && allow.unreviewed) {
     const stale = (data.workRequests || []).filter((r) => {
       if (r.status !== "Submitted" && r.status !== "Under Review") return false;
       if (!r.dateSubmitted) return false;
@@ -79,6 +101,62 @@ function buildDigest(data, user, today) {
         lines.push(`  - #${r.number} ${r.title} — submitted ${r.dateSubmitted}`);
       });
     }
+  }
+
+  if (user.notify_alarms && allow.alarms) {
+    let open = [];
+    try { open = db.prepare("SELECT message, severity, triggered_at FROM alarms WHERE status = 'open' ORDER BY triggered_at DESC").all(); } catch (e) { /* none */ }
+    if (open.length) {
+      lines.push(`Open alarms (${open.length}):`);
+      open.forEach((a) => lines.push(`  - [${a.severity}] ${a.message} — ${String(a.triggered_at || "").slice(0, 10)}`));
+    }
+  }
+
+  if (user.notify_low_stock && allow.lowStock) {
+    const need = {}; // partId -> { total, wos: [] }
+    data.workOrders.filter(openWo).forEach((w) => (w.parts || []).forEach(({ partId, qty }) => {
+      const n = need[partId] || (need[partId] = { total: 0, wos: [] });
+      n.total += Number(qty) || 0; n.wos.push(`#${w.number} ${w.title}`);
+    }));
+    const low = (data.inventory || []).map((p) => {
+      const n = need[p.id];
+      const atReorder = Number(p.qty) <= Number(p.reorderAt || 0);
+      const short = n && Number(p.qty) < n.total;
+      return atReorder || short ? { p, n, atReorder, short } : null;
+    }).filter(Boolean);
+    if (low.length) {
+      lines.push(`Low stock parts (${low.length}):`);
+      low.forEach(({ p, n, atReorder, short }) => {
+        const why = [atReorder ? `at/below reorder level ${p.reorderAt}` : "", short ? `below the ${n.total} needed by open work orders` : ""].filter(Boolean).join("; ");
+        lines.push(`  - ${p.name} — ${p.qty} on hand (${why})`);
+        if (n) lines.push(`      needed by: ${n.wos.join(", ")}`);
+      });
+    }
+  }
+
+  const weekDays = Array.from({ length: 7 }, (_, i) => addDays(today, i));
+  const nameOf = (id) => { const r = db.prepare("SELECT username FROM users WHERE id = ?").get(id); return r ? r.username : id; };
+  const schedFor = (execId) => {
+    const out = [];
+    const shifts = (data.workShifts || []).filter((s) => s.executorId === execId && weekDays.includes(s.date));
+    shifts.sort((a, b) => a.date.localeCompare(b.date));
+    shifts.forEach((s) => out.push(`  - ${s.date}: shift ${s.start}–${s.end}`));
+    data.workOrders.filter((w) => openWo(w) && (w.executorIds || []).includes(execId) && w.scheduledDate && weekDays.includes(w.scheduledDate))
+      .sort((a, b) => a.scheduledDate.localeCompare(b.scheduledDate))
+      .forEach((w) => out.push(`  - ${w.scheduledDate}: #${w.number} ${w.title}`));
+    return out;
+  };
+  if (user.notify_my_schedule && allow.mySchedule) {
+    const mine = schedFor(user.id);
+    if (mine.length) { lines.push("Your schedule for the next 7 days:"); lines.push(...mine); }
+  }
+  if (user.notify_team_schedule && allow.teamSchedule) {
+    const ids = new Set();
+    (data.workShifts || []).forEach((s) => weekDays.includes(s.date) && ids.add(s.executorId));
+    data.workOrders.filter(openWo).forEach((w) => w.scheduledDate && weekDays.includes(w.scheduledDate) && (w.executorIds || []).forEach((i) => ids.add(i)));
+    const rows = [];
+    ids.forEach((id) => { const r = schedFor(id); if (r.length) { rows.push(`${nameOf(id)}:`); rows.push(...r); } });
+    if (rows.length) { lines.push("Team schedule for the next 7 days:"); lines.push(...rows); }
   }
 
   return lines.length ? lines.join("\n") : null;

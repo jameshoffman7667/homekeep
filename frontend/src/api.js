@@ -60,7 +60,8 @@ export const api = {
   // v2.2: password change / reset
   changePassword: (currentPassword, newPassword) =>
     request("/api/auth/change-password", { method: "POST", body: JSON.stringify({ currentPassword, newPassword }) }),
-  updateProfile: (email) => request("/api/auth/profile", { method: "PATCH", body: JSON.stringify({ email }) }),
+  updateProfile: (patch) => request("/api/auth/profile", { method: "PATCH", body: JSON.stringify(typeof patch === "string" ? { email: patch } : patch) }),
+  emailCredentials: (id, password) => request(`/api/users/${id}/email-credentials`, { method: "POST", body: JSON.stringify({ password }) }),
   forgotPassword: (identifier) => request("/api/auth/forgot", { method: "POST", body: JSON.stringify({ identifier }) }),
   resetPassword: (token, newPassword) => request("/api/auth/reset", { method: "POST", body: JSON.stringify({ token, newPassword }) }),
   ownerResetPassword: (id, password) =>

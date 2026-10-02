@@ -7,7 +7,7 @@ import {
   Calendar, FileDown, FileUp, Info, Archive, Download, ExternalLink, ShoppingCart,
   Building2, DoorOpen, Square, Box, Sun, Moon, MonitorSmartphone, QrCode,
   Gauge, Snowflake, Wand2, Camera, WifiOff, RefreshCw,
-  Siren, Key, Copy, Eye, EyeOff, Link2, Clock, User, Printer,
+  Siren, Key, Copy, Eye, EyeOff, Link2, Clock, User, Printer, Settings, ArrowUp, Upload,
 } from "lucide-react";
 import { createPortal } from "react-dom";
 import * as XLSX from "xlsx";
@@ -170,6 +170,8 @@ const GlobalStyle = () => (
 
     /* ---- Mobile / touch responsiveness ---- */
     .hk-sidebar { transition: transform .18s ease; }
+    .hk-hscroll { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
+    .hk-hscroll-in { min-width: 780px; }
     .hk-sidebar-backdrop { display: none; }
 
     @media (max-width: 860px) {
@@ -186,11 +188,7 @@ const GlobalStyle = () => (
       .hk-grid-2, .hk-grid-3, .hk-grid-4, .hk-grid-fixed2, .hk-grid-fixed3, .hk-kanban {
         grid-template-columns: 1fr !important;
       }
-      /* the 7-day dashboard strip becomes a 4-wide wrap instead of one column */
-      .hk-grid-7 { grid-template-columns: repeat(4, 1fr) !important; }
-      /* a real calendar keeps its 7 day-of-week columns, just tighter */
-      .hk-cal-grid { gap: 2px !important; }
-      .hk-cal-grid > div { font-size: 10px !important; padding: 3px !important; min-height: 46px !important; }
+      /* v2.6: schedules keep exactly 7 days across and scroll sideways inside their card (see .hk-hscroll) */
 
       /* comfortable tap targets and readable controls on touch screens */
       button, select, input, .hk-tap { min-height: 40px; }
@@ -199,7 +197,6 @@ const GlobalStyle = () => (
     }
 
     @media (max-width: 480px) {
-      .hk-grid-7 { grid-template-columns: repeat(2, 1fr) !important; }
       .hk-page-pad { padding: 10px !important; }
     }
 
@@ -232,10 +229,10 @@ const LEVEL_ICONS = {
    SETTINGS.terms.locationLevels, so relabeling never touches saved data. */
 const DEFAULT_SETTINGS = {
   brand: {
-    name: "MaintEnhance", shortName: "ME", tagline: "Maintenance Management", topBarTitle: "", logoUrl: "",
+    name: "MaintEnhance", shortName: "ME", tagline: "Maintenance Management", topBarTitle: "", logoUrl: "", logoWrench: false,
     colors: { primary: "#28415F", primaryDark: "#7FA3CC", accent: "#C85410", accentDark: "#E38C4E" },
   },
-  terms: { orgNoun: "household", locationLevels: ["Property", "Structure", "Floor", "Room", "Area", "Sub-area"], siteLevelIndex: 0 },
+  terms: { orgNoun: "Organization", locationLevels: ["Property", "Structure", "Floor", "Room", "Area", "Sub-area"], siteLevelIndex: 0 },
   features: { homeAssistantAlarms: true, linkPrefill: true, linkPrefillAi: false, executionScheduling: false, workforceScheduling: false, hourlyAssignment: false },
 };
 let SETTINGS = DEFAULT_SETTINGS;
@@ -270,8 +267,10 @@ function isSiteLevel(key) { return key === LOCATION_LEVELS[SETTINGS.terms.siteLe
 // Swaps the word "household" for the Owner's chosen word (e.g. "organization").
 function term(str) {
   if (typeof str !== "string") return str;
-  const n = SETTINGS.terms.orgNoun || "household";
-  return str.replace(/household/g, n).replace(/Household/g, n.charAt(0).toUpperCase() + n.slice(1));
+  const n = SETTINGS.terms.orgNoun || "Organization";
+  const lower = n.charAt(0).toLowerCase() + n.slice(1);
+  const upper = n.charAt(0).toUpperCase() + n.slice(1);
+  return str.replace(/household/g, lower).replace(/Household/g, upper);
 }
 function brandSlug() { return SETTINGS.brand.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "maintenhance"; }
 const SAFE_COLOR = /^[#a-zA-Z0-9(),.%\s-]+$/;
@@ -295,7 +294,18 @@ function BrandStyle() {
 }
 function BrandMark({ size = 26, radius = 3 }) {
   const url = SETTINGS.brand.logoUrl;
-  if (url) return <img src={api.brandUrl(url)} alt={SETTINGS.brand.name} style={{ height: size, width: "auto", maxWidth: size * 4, objectFit: "contain", flexShrink: 0 }} />;
+  if (url) {
+    const img = <img src={api.brandUrl(url)} alt={SETTINGS.brand.name} style={{ height: size, width: "auto", maxWidth: size * 4, objectFit: "contain", flexShrink: 0, display: "block" }} />;
+    if (!SETTINGS.brand.logoWrench) return img;
+    const w = Math.round(size * 0.5);
+    return (
+      <span style={{ position: "relative", display: "inline-flex", flexShrink: 0 }}>
+        {img}
+        <Wrench size={w} color="#E8650F" strokeWidth={2.6} aria-hidden="true" data-logo-wrench="1"
+          style={{ position: "absolute", right: -Math.round(w * 0.25), bottom: -Math.round(w * 0.2), filter: "drop-shadow(0 0 1.5px #fff) drop-shadow(0 0 1px #fff)" }} />
+      </span>
+    );
+  }
   return (
     <div style={{ width: size, height: size, background: C.orange, borderRadius: radius, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
       <Wrench size={Math.round(size * 0.58)} color="#fff" />
@@ -406,6 +416,49 @@ const PRIORITY_SOFT = { High: C.rustSoft, Medium: C.goldSoft, Low: C.panelAlt };
 
 function isAdmin(role) {
   return role === "Owner" || role === "Manager";
+}
+// v2.6: Owners/Managers, or an Executor holding the Planner / Scheduler designation (see DESIGNATIONS).
+const planRole = (role) => isAdmin(role) || canPlan();
+const scheduleRole = (role) => isAdmin(role) || canSchedule();
+/* v2.6 — designations. Owners and Managers can do everything a designation allows.
+   Executors get the extra rights only from the designations an Owner gives them.
+   For Owners/Managers the "executor" designation (default off) only decides whether
+   they appear as available people on work orders, labour assignment and the workforce schedule. */
+const DESIGNATIONS = [
+  { key: "planner", label: "Planner", help: "Edits other people's work requests, turns requests into work orders, creates and edits work orders, vendors and parts." },
+  { key: "scheduler", label: "Scheduler", help: "Full access to the workforce schedule, labour assignment and shift templates, like a Manager." },
+  { key: "specialist", label: "Specialist", help: "Can acknowledge and resolve alarms." },
+];
+let ME = { id: "", role: "Guest", designations: [] };
+function canDes(u, k) {
+  if (!u) return false;
+  if (u.role === "Owner" || u.role === "Manager") return true;
+  return u.role === "Executor" && (u.designations || []).includes(k);
+}
+const canPlan = () => canDes(ME, "planner");
+const canSchedule = () => canDes(ME, "scheduler");
+const canAck = () => canDes(ME, "specialist");
+// A person who can be given work: Executors always; Owners/Managers only when flagged.
+function isExecPerson(u) {
+  if (!u) return false;
+  if (u.role === "Executor") return true;
+  return (u.role === "Owner" || u.role === "Manager") && (u.designations || []).includes("executor");
+}
+const DIGEST_OPTIONS = [
+  { key: "notifyPmOverdue", label: "Overdue work orders", des: "scheduler" },
+  { key: "notifyWorkRequestUnreviewed", label: "Work requests sitting unreviewed", des: "planner" },
+  { key: "notifyWarrantyExpiring", label: "Warranties expiring soon", des: "specialist" },
+  { key: "notifyAlarms", label: "Open alarms", des: "specialist" },
+  { key: "notifyLowStock", label: "Low stock parts — at or below the reorder quantity, or below what open work orders need (lists those work orders)", des: "planner" },
+  { key: "notifyMySchedule", label: "My schedule — my assigned work days and work orders for the next 7 days", des: "me" },
+  { key: "notifyTeamSchedule", label: "Team schedule — everyone's work days and work orders for the next 7 days", des: "scheduler" },
+];
+const digestAllowed = (u, o) => (o.des === "me" ? isExecPerson(u) : canDes(u, o.des));
+function genTempPassword() {
+  const alphabet = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const bytes = new Uint8Array(12);
+  (typeof crypto !== "undefined" && crypto.getRandomValues) ? crypto.getRandomValues(bytes) : bytes.forEach((_, i) => { bytes[i] = Math.floor(Math.random() * 256); });
+  return Array.from(bytes, (b) => alphabet[b % alphabet.length]).join("");
 }
 function canWrite(role) {
   return role !== "Guest";
@@ -951,9 +1004,9 @@ function useCloseGuard(dialog) {
   };
 }
 
-function Panel({ children, style }) {
+function Panel({ children, style, className, ...rest }) {
   return (
-    <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 4, ...style }}>
+    <div className={className} {...rest} style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 4, ...style }}>
       {children}
     </div>
   );
@@ -1382,12 +1435,12 @@ const NAV = [
   { id: "budget", label: "Budget", icon: DollarSign },
   { id: "purchasing", label: "Purchasing", icon: ShoppingCart, adminOnly: true },
   { id: "alarms", label: "Alarms", icon: Siren, adminOnly: true },
-  { id: "owner", label: "Tools", icon: Shield, notGuest: true },
+  { id: "owner", label: "Tools and settings", icon: Shield },
   { id: "help", label: "Help", icon: Info },
 ];
 
 function Sidebar({ tab, setTab, open, role, counts, onNavigate }) {
-  const items = NAV.filter((n) => (!n.ownerOnly || role === "Owner") && (!n.adminOnly || isAdmin(role)) && (!n.notGuest || role !== "Guest") && (!n.featureKey || SETTINGS.features[n.featureKey])).map((n) => (n.id === "schedule" && execOn() ? { ...n, label: "Labour assignment" } : n));
+  const items = NAV.filter((n) => (!n.ownerOnly || role === "Owner") && (!n.adminOnly || isAdmin(role) || (n.id === "alarms" && canAck())) && (!n.notGuest || role !== "Guest") && (!n.featureKey || SETTINGS.features[n.featureKey])).map((n) => (n.id === "schedule" && execOn() ? { ...n, label: "Labour assignment" } : n));
   return (
     <div
       style={{ width: 216, flexShrink: 0, background: SAFE_COLOR.test(SETTINGS.brand.colors.primary || "") ? SETTINGS.brand.colors.primary : DEFAULT_SETTINGS.brand.colors.primary, color: "#fff", display: open ? "flex" : "none", flexDirection: "column", position: "fixed", top: 0, bottom: 0, left: 0, zIndex: 40 }}
@@ -1398,8 +1451,7 @@ function Sidebar({ tab, setTab, open, role, counts, onNavigate }) {
           <BrandMark size={26} />
           <span style={{ fontFamily: FONT_HEAD, fontWeight: 700, fontSize: SETTINGS.brand.name.length > 14 ? 14.5 : 17, letterSpacing: "0.01em", lineHeight: 1.15, minWidth: 0 }}>{SETTINGS.brand.name}</span>
         </div>
-        {SETTINGS.brand.tagline && <div style={{ fontFamily: FONT_BODY, fontSize: 11, color: "#B7C3CF", marginTop: 4 }}>{SETTINGS.brand.tagline}</div>}
-      </div>
+              </div>
       <div style={{ flex: 1, padding: "6px 10px", overflowY: "auto" }}>
         {items.map((n) => {
           const Icon = n.icon;
@@ -1422,7 +1474,7 @@ function Sidebar({ tab, setTab, open, role, counts, onNavigate }) {
         })}
       </div>
       <div style={{ padding: 14, borderTop: "1px solid rgba(255,255,255,0.12)", fontFamily: FONT_BODY, fontSize: 11, color: "#8FA0AF" }}>
-        v2.5.1 · matches the MaintEnhance functional spec
+        v2.6 · matches the MaintEnhance functional spec
       </div>
     </div>
   );
@@ -1445,7 +1497,7 @@ function WeekLookahead({ data, goToOrder }) {
   return (
     <Panel style={{ padding: 16, marginTop: 16 }}>
       <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 10 }}>Next 7 days<InfoTip k="nextDays" /></div>
-      <div className="hk-grid-7" style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6 }}>
+      <div className="hk-hscroll" data-hscroll="week-lookahead"><div className="hk-hscroll-in" style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 6 }}>
         {days.map((d) => {
           const dt = new Date(d + "T00:00:00");
           const items = byDay[d] || [];
@@ -1467,8 +1519,111 @@ function WeekLookahead({ data, goToOrder }) {
             </div>
           );
         })}
-      </div>
+      </div></div>
     </Panel>
+  );
+}
+
+/* v2.6 — Owner metrics. Day-level dates only (the app records dates, not times). */
+const dayDiff = (a, b) => Math.round((new Date(b + "T00:00:00") - new Date(a + "T00:00:00")) / 86400000);
+function OwnerMetrics({ data }) {
+  const [users, setUsers] = useState([]);
+  const [period, setPeriod] = useState("90");
+  useEffect(() => { api.listUsers().then(setUsers).catch(() => setUsers([])); }, []);
+  const name = (id) => (users.find((u) => u.id === id) || {}).username || "Former member";
+  const since = period === "all" ? null : (() => { const d = new Date(); d.setDate(d.getDate() - Number(period)); return d.toISOString().slice(0, 10); })();
+  const inPeriod = (iso) => !since || (iso && iso >= since);
+  const real = (data.workOrders || []).filter((w) => w.type !== "PM Base");
+  const done = real.filter((w) => w.status === "Completed" || w.status === "Closed");
+
+  // 1. Work requests entered, per person.
+  const wrCounts = {};
+  (data.workRequests || []).filter((r) => inPeriod(r.dateSubmitted)).forEach((r) => { wrCounts[r.requestedBy || "?"] = (wrCounts[r.requestedBy || "?"] || 0) + 1; });
+  const wrRows = Object.entries(wrCounts).sort((a, b) => b[1] - a[1]).map(([k, v]) => ({ label: k, value: v, text: String(v) }));
+
+  // 2. Hours efficiency: actual hours booked / estimated hours (per executor, so crew size is already accounted for).
+  const eff = {};
+  done.filter((w) => inPeriod(w.completedDate)).forEach((w) => {
+    const est = Number(w.estHours) || 0;
+    const booked = (w.timeEntries || []);
+    if (!est || !booked.length) return;
+    execIdsOf(w).forEach((id) => {
+      const mine = booked.filter((t) => t.executorId === id).reduce((n, t) => n + (Number(t.hours) || 0), 0);
+      if (!mine) return;
+      const e = eff[id] || (eff[id] = { actual: 0, est: 0, n: 0 });
+      e.actual += mine; e.est += est; e.n += 1;
+    });
+  });
+  const effRows = Object.entries(eff).map(([id, e]) => ({ label: name(id), value: e.actual / e.est, text: `${Math.round((e.actual / e.est) * 100)}%`, sub: `${fmtH(e.actual)} h booked of ${fmtH(e.est)} h estimated · ${e.n} work order${e.n === 1 ? "" : "s"}` })).sort((a, b) => b.value - a.value);
+
+  // 3. Schedule compliance: completed on the day it was scheduled.
+  const comp = {};
+  done.filter((w) => w.scheduledDate && w.completedDate && inPeriod(w.completedDate)).forEach((w) => {
+    execIdsOf(w).forEach((id) => { const c = comp[id] || (comp[id] = { ok: 0, n: 0 }); c.n += 1; if (w.completedDate === w.scheduledDate) c.ok += 1; });
+  });
+  const compRows = Object.entries(comp).map(([id, c]) => ({ label: name(id), value: c.ok / c.n, text: `${Math.round((c.ok / c.n) * 100)}%`, sub: `${c.ok} of ${c.n} on the scheduled day` })).sort((a, b) => b.value - a.value);
+
+  // 4. Work request lead time: request entered -> work order created.
+  const reqById = Object.fromEntries((data.workRequests || []).map((r) => [r.id, r]));
+  const leads = real.filter((w) => w.sourceRequestId && w.createdDate && reqById[w.sourceRequestId] && reqById[w.sourceRequestId].dateSubmitted && inPeriod(w.createdDate))
+    .map((w) => dayDiff(reqById[w.sourceRequestId].dateSubmitted, w.createdDate));
+  const avg = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
+  // 5. Verification time: Completed -> Closed.
+  const verifs = done.filter((w) => w.completedDate && w.verifiedDate && inPeriod(w.verifiedDate)).map((w) => dayDiff(w.completedDate, w.verifiedDate));
+  // 6. Reactive work %: unplanned / all work orders.
+  const inScope = real.filter((w) => inPeriod(w.createdDate || w.completedDate || w.scheduledDate || w.requiredByDate));
+  const reactive = inScope.filter((w) => w.type === "Unplanned").length;
+  const days = (v) => (v == null ? "—" : `${(Math.round(v * 10) / 10)} days`);
+
+  const Bars = ({ rows, pct, empty }) => (
+    <div>
+      {rows.length === 0 && <Empty text={empty} />}
+      {rows.map((r) => (
+        <div key={r.label} style={{ padding: "6px 0", borderTop: `1px solid ${C.lineSoft}` }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink }}>
+            <span>{r.label}</span><span style={{ fontWeight: 700 }}>{r.text}</span>
+          </div>
+          {pct && <div style={{ background: C.panelAlt, height: 6, borderRadius: 3, marginTop: 4 }}><div style={{ width: `${Math.min(100, r.value * 100)}%`, background: C.navy, height: 6, borderRadius: 3 }} /></div>}
+          {r.sub && <div style={{ fontFamily: FONT_BODY, fontSize: 11, color: C.inkFaint, marginTop: 2 }}>{r.sub}</div>}
+        </div>
+      ))}
+    </div>
+  );
+  const Card = ({ title, info, children }) => (
+    <Panel style={{ padding: 14 }}>
+      <div style={{ fontFamily: FONT_HEAD, fontSize: 13.5, fontWeight: 600, color: C.ink, marginBottom: 6 }}>{title}{info && <InfoTip k={info} />}</div>
+      {children}
+    </Panel>
+  );
+  const Tile = ({ title, value, sub, info }) => (
+    <Panel style={{ padding: "14px 16px" }}>
+      <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, fontWeight: 600, color: C.inkSoft }}>{title}{info && <InfoTip k={info} />}</div>
+      <div style={{ fontFamily: FONT_HEAD, fontSize: 28, fontWeight: 700, color: C.ink, marginTop: 4 }}>{value}</div>
+      <div style={{ fontFamily: FONT_BODY, fontSize: 11, color: C.inkFaint, marginTop: 2 }}>{sub}</div>
+    </Panel>
+  );
+  return (
+    <div data-owner-metrics style={{ marginTop: 22 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+        <h3 style={{ fontFamily: FONT_HEAD, fontSize: 16, margin: 0, color: C.ink }}>Metrics<InfoTip k="metrics" /></h3>
+        <select style={{ ...inputStyle, width: "auto" }} value={period} onChange={(e) => setPeriod(e.target.value)} aria-label="Metrics period">
+          <option value="30">Last 30 days</option>
+          <option value="90">Last 90 days</option>
+          <option value="365">Last 12 months</option>
+          <option value="all">All time</option>
+        </select>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12, marginBottom: 12 }}>
+        <Tile title="Work request lead time" info="mLead" value={days(avg(leads))} sub={leads.length ? `average, request entered → work order created (${leads.length})` : "no converted requests with a creation date yet"} />
+        <Tile title="Work order verification time" info="mVerify" value={days(avg(verifs))} sub={verifs.length ? `average, Completed → Closed (${verifs.length})` : "no closed work orders yet"} />
+        <Tile title="Reactive work" info="mReactive" value={inScope.length ? `${Math.round((reactive / inScope.length) * 100)}%` : "—"} sub={`${reactive} unplanned of ${inScope.length} work orders`} />
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
+        <Card title="Work requests entered" info="mWr"><Bars rows={wrRows} empty="No requests in this period." /></Card>
+        <Card title="Work order hour efficiency" info="mEff"><Bars rows={effRows} pct empty="No completed work orders with hours booked and an estimate." /></Card>
+        <Card title="Schedule compliance" info="mComp"><Bars rows={compRows} pct empty="No completed scheduled work orders in this period." /></Card>
+      </div>
+    </div>
   );
 }
 
@@ -1483,7 +1638,7 @@ function Dashboard({ data, setTab, role, applyFilter, goToOrder, goToRequest }) 
     const inRange = (v) => v !== null && v >= 0 && v <= 30;
     return inRange(rd) || inRange(sd);
   });
-  const warrantySoon = data.assets.filter((a) => {
+  const warrantySoon = data.assets.filter((a) => !a.archived).filter((a) => {
     const d = daysUntil(a.warrantyEnd);
     return d !== null && d >= 0 && d <= 90;
   });
@@ -1499,7 +1654,7 @@ function Dashboard({ data, setTab, role, applyFilter, goToOrder, goToRequest }) 
 
   return (
     <div>
-      <SectionHeader title="Dashboard" subtitle="Your household's maintenance activity at a glance." info={PAGE_INFO.dashboard} />
+      <SectionHeader title="Dashboard" subtitle={term("Your household's maintenance activity at a glance.")} info={PAGE_INFO.dashboard} />
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 22 }}>
         {stat("Open work orders", openWO.length, C.orange, () => applyFilter("orders", {}))}
         {stat("Pending requests", pendingWR.length, C.gold, () => applyFilter("requests", { status: "pending" }))}
@@ -1551,6 +1706,8 @@ function Dashboard({ data, setTab, role, applyFilter, goToOrder, goToRequest }) 
 
       <WeekLookahead data={data} goToOrder={goToOrder} />
 
+      {role === "Owner" && <OwnerMetrics data={data} />}
+
       {warrantySoon.length > 0 && (
         <Panel style={{ padding: 16, marginTop: 16 }}>
           <h3 style={{ fontFamily: FONT_HEAD, fontSize: 15, margin: "0 0 10px", color: C.ink }}>Warranty expiring soon<InfoTip k="warranty" /></h3>
@@ -1577,10 +1734,14 @@ function PmWizardModal({ property, data, update, onClose }) {
   const [yearBuilt, setYearBuilt] = useState(property.yearBuilt || "");
   const [climateZone, setClimateZone] = useState(property.climateZone || guessClimateZone(property.address || ""));
   const [selected, setSelected] = useState(new Set());
+  const [reqError, setReqError] = useState("");
+  const [reqs, setReqs] = useState({}); // id -> { crew, hours } (needed when labour scheduling is on)
   const [typeFilter, setTypeFilter] = useState("");
   const [catFilter, setCatFilter] = useState("");
   const [q, setQ] = useState("");
   const catalog = effectiveWizardCatalog(data);
+  const reqOf = (item) => reqs[item.id] || { crew: String(item.crewRequired || 1), hours: String(item.estHours || 1) };
+  const setReq = (item, patch) => setReqs((r) => ({ ...r, [item.id]: { ...reqOf(item), ...patch } }));
   const types = uniqSorted(catalog.map(catType));
   const fitsZone = (i) => i.zones === "all" || (i.zones || []).includes(climateZone);
   const cats = uniqSorted(catalog.filter((i) => !typeFilter || catType(i) === typeFilter).map(catCategory));
@@ -1609,6 +1770,10 @@ function PmWizardModal({ property, data, update, onClose }) {
   const clearShown = () => setSelected((prev) => { const n = new Set(prev); shown.forEach((i) => n.delete(i.id)); return n; });
 
   const finish = () => {
+    if (execOn()) {
+      const bad = catalog.filter((i) => selected.has(i.id)).filter((i) => !(Number(reqOf(i).crew) >= 1) || !(Number(reqOf(i).hours) > 0));
+      if (bad.length) { setReqError(`Set executors required and hours per executor for: ${bad.slice(0, 3).map((i) => i.title).join(", ")}${bad.length > 3 ? "…" : ""}`); return; }
+    }
     update((d) => {
       const prop = d.locations.find((l) => l.id === property.id);
       prop.address = address.trim();
@@ -1622,7 +1787,8 @@ function PmWizardModal({ property, data, update, onClose }) {
           id: uid("wo"), number: d.counters.wo, title: item.title, type: "PM Base", status: "Active",
           assetId: null, bomNodeId: null, locationId: property.id,
           description: item.description || "", sourceRequestId: null, sourceBenchmarkId: null,
-          sourcePmBaseId: null, sourceFixedDate: null, priority: "Medium", executorId: "",
+          sourcePmBaseId: null, sourceFixedDate: null, priority: "Medium", executorId: "", executorIds: [],
+          estHours: execOn() ? String(reqOf(item).hours) : "", crewRequired: execOn() ? String(reqOf(item).crew) : "",
           scheduledDate: "", requiredByDate: "", completedDate: null, verifiedDate: null,
           cost: "", vendorId: null, notes: "", parts: [], comments: [], partsDeducted: false, createdBy: null,
           pmMode: "Non-fixed", triggerType: "calendar",
@@ -1687,13 +1853,20 @@ function PmWizardModal({ property, data, update, onClose }) {
             {shown.map((item) => (
               <label key={item.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "7px 0", borderTop: `1px solid ${C.lineSoft}`, cursor: "pointer", opacity: fitsZone(item) ? 1 : 0.55 }}>
                 <input type="checkbox" checked={selected.has(item.id)} onChange={() => toggle(item.id)} style={{ marginTop: 3 }} />
-                <div>
+                <div style={{ flex: 1 }}>
                   <div style={{ fontFamily: FONT_BODY, fontSize: 13, fontWeight: 600, color: C.ink }}>{item.title}</div>
                   <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint }}>{catType(item)} · {catCategory(item)} · Every {item.frequencyValue} {item.frequencyUnit}{item.description ? ` · ${item.description}` : ""}</div>
+                  {execOn() && selected.has(item.id) && (
+                    <div onClick={(e) => e.preventDefault()} style={{ display: "flex", gap: 10, marginTop: 5, alignItems: "center", flexWrap: "wrap", fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkSoft }}>
+                      <label>Executors required <input type="number" min="1" step="1" data-wiz-crew style={{ ...inputStyle, width: 64, padding: "3px 6px", display: "inline-block" }} value={reqOf(item).crew} onChange={(e) => setReq(item, { crew: e.target.value })} /></label>
+                      <label>Hours per executor <input type="number" min="0" step="0.25" data-wiz-hours style={{ ...inputStyle, width: 72, padding: "3px 6px", display: "inline-block" }} value={reqOf(item).hours} onChange={(e) => setReq(item, { hours: e.target.value })} /></label>
+                    </div>
+                  )}
                 </div>
               </label>
             ))}
           </div>
+          {reqError && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.rust, marginTop: 8 }}>{reqError}</div>}
           <div style={{ display: "flex", justifyContent: "space-between", marginTop: 14 }}>
             <Btn variant="ghost" onClick={() => setStep(1)}>Back</Btn>
             <Btn variant="primary" onClick={finish}>Create {selected.size} PM template{selected.size === 1 ? "" : "s"}</Btn>
@@ -1716,10 +1889,44 @@ function LocationsView({ data, update, role }) {
   const initial = useRef(null);
   const isDirty = modal && JSON.stringify(form) !== initial.current;
 
+  // v2.6: adding a location is inline — a new row appears one level below the one clicked.
+  const [draft, setDraft] = useState(null); // { parentId, name }
+  const draftDone = useRef(false);
   const openAdd = (parentId) => {
-    const f = { name: "", level: defaultLevelForParent(data.locations, parentId), address: "", yearBuilt: "", climateZone: "Unknown" };
-    setForm(f); initial.current = JSON.stringify(f);
-    setModal({ mode: "add", parentId });
+    draftDone.current = false;
+    setDraft({ parentId: parentId || null, name: "" });
+    if (parentId) setExpanded((prev) => new Set(prev).add(parentId));
+  };
+  const commitDraft = () => {
+    if (draftDone.current || !draft) return;
+    draftDone.current = true;
+    const name = draft.name.trim();
+    const pid = draft.parentId;
+    setDraft(null);
+    if (!name) return;
+    update((d) => {
+      d.locations.push({ id: uid("loc"), name, level: defaultLevelForParent(d.locations, pid), parentId: pid, createdBy: null });
+      return d;
+    });
+  };
+  const cancelDraft = () => { draftDone.current = true; setDraft(null); };
+  const renderDraft = (parentId, depth) => {
+    if (!draft || draft.parentId !== parentId) return null;
+    const lvl = defaultLevelForParent(data.locations, parentId);
+    return (
+      <div key="draft" data-loc-draft className="hk-row" style={{ display: "flex", alignItems: "center", padding: "8px 16px", borderTop: `1px solid ${C.lineSoft}`, gap: 10, background: C.panelAlt }}>
+        <div style={{ width: depth * 20, flexShrink: 0 }} />
+        <span style={{ width: 14, flexShrink: 0 }} />
+        <Plus size={14} color={C.inkFaint} />
+        <input autoFocus value={draft.name} placeholder={`New ${levelLabel(lvl).toLowerCase()} name`} aria-label="New location name"
+          onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+          onBlur={commitDraft}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commitDraft(); } else if (e.key === "Escape") { e.preventDefault(); cancelDraft(); } }}
+          style={{ ...inputStyle, flex: 1, padding: "5px 8px" }} />
+        <Tag text={levelLabel(lvl)} color={C.navy} soft={C.navySoft} />
+        <button title="Save" aria-label="Save location" onMouseDown={(e) => { e.preventDefault(); commitDraft(); }} style={{ background: "none", border: "none", cursor: "pointer", color: C.olive, padding: 4 }}><Check size={16} /></button>
+      </div>
+    );
   };
   const openEdit = (node) => {
     const f = { name: node.name, level: node.level, address: node.address || "", yearBuilt: node.yearBuilt || "", climateZone: node.climateZone || "Unknown" };
@@ -1730,14 +1937,10 @@ function LocationsView({ data, update, role }) {
     if (!form.name.trim()) return;
     update((d) => {
       const propFields = isSiteLevel(form.level) ? { address: form.address.trim(), yearBuilt: form.yearBuilt, climateZone: form.climateZone } : {};
-      if (modal.mode === "add") {
-        d.locations.push({ id: uid("loc"), name: form.name.trim(), level: form.level, parentId: modal.parentId || null, createdBy: null, ...propFields });
-      } else {
-        const n = d.locations.find((l) => l.id === modal.node.id);
-        n.name = form.name.trim();
-        n.level = form.level;
-        Object.assign(n, propFields);
-      }
+      const n = d.locations.find((l) => l.id === modal.node.id);
+      n.name = form.name.trim();
+      n.level = form.level;
+      Object.assign(n, propFields);
       return d;
     });
     setModal(null);
@@ -1795,6 +1998,7 @@ function LocationsView({ data, update, role }) {
                 </div>
               )}
             </div>
+            {isOpen && renderDraft(item.id, depth + 1)}
             {hasKids && isOpen && renderChildren(item.id, depth + 1)}
           </div>
         );
@@ -1804,7 +2008,7 @@ function LocationsView({ data, update, role }) {
     <div>
       <SectionHeader
         title="Location Hierarchy"
-        subtitle="The physical map of the household that everything else is organized around."
+        subtitle={term("The physical map of the household that everything else is organized around.")}
         info={PAGE_INFO.locations}
         action={isAdmin(role) && <Btn variant="primary" onClick={() => openAdd(null)}><Plus size={15} /> Add top-level location</Btn>}
       />
@@ -1814,11 +2018,12 @@ function LocationsView({ data, update, role }) {
       </div>
       <Panel>
         {data.locations.length === 0 && <Empty text="No locations yet." />}
+        {renderDraft(null, 0)}
         {renderChildren(null, 0)}
       </Panel>
 
       {modal && (
-        <Modal title={modal.mode === "add" ? "Add location" : "Edit location"} info="location" onClose={() => closeGuard(isDirty, save, () => setModal(null))}>
+        <Modal title="Edit location" info="location" onClose={() => closeGuard(isDirty, save, () => setModal(null))}>
           <Field label="Name" required>
             <input style={inputStyle} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Primary Bathroom" autoFocus />
           </Field>
@@ -1827,11 +2032,6 @@ function LocationsView({ data, update, role }) {
               {LOCATION_LEVELS.map((l) => <option key={l} value={l}>{levelLabel(l)}</option>)}
             </select>
           </Field>
-          {modal.mode === "add" && (
-            <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint, marginBottom: 12 }}>
-              Parent: {modal.parentId ? locationPath(data.locations, modal.parentId) : "— (top level)"}
-            </div>
-          )}
           {isSiteLevel(form.level) && (
             <>
               <Field label="Address (optional)"><input style={inputStyle} value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} placeholder="123 Main St, Anytown, ST" /></Field>
@@ -1871,7 +2071,20 @@ function BomTree({ data, update, assetId, role }) {
   const [form, setForm] = useState({});
 
   const blankForm = { name: "", level: "Component", manufacturer: "", model: "", installDate: "", cost: "", notes: "" };
-
+  const [copyOpen, setCopyOpen] = useState(false);
+  const [copySrc, setCopySrc] = useState("");
+  const sources = data.assets.filter((a) => a.id !== assetId && data.bomNodes.some((n) => n.assetId === a.id));
+  const doCopy = () => {
+    if (!copySrc) return;
+    update((d) => {
+      const src = d.bomNodes.filter((n) => n.assetId === copySrc);
+      const idMap = {};
+      src.forEach((n) => { idMap[n.id] = uid("bom"); });
+      src.forEach((n) => { d.bomNodes.push({ ...n, id: idMap[n.id], assetId, parentId: n.parentId && idMap[n.parentId] ? idMap[n.parentId] : null }); });
+      return d;
+    });
+    setCopyOpen(false); setCopySrc("");
+  };
   const openAdd = (parentId) => {
     setForm({ ...blankForm, level: parentId ? "Sub-component" : "Component" });
     setModal({ mode: "add", parentId });
@@ -1905,7 +2118,12 @@ function BomTree({ data, update, assetId, role }) {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
         <div style={{ fontFamily: FONT_HEAD, fontSize: 14, fontWeight: 600, color: C.ink }}>Bill of Materials<InfoTip k="bom" /></div>
-        {canWrite(role) && <Btn small variant="ghost" onClick={() => openAdd(null)}><Plus size={13} /> Add component</Btn>}
+        {canWrite(role) && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <Btn small variant="ghost" onClick={() => setCopyOpen(true)}><Copy size={13} /> Copy BOM from another asset</Btn>
+            <Btn small variant="ghost" onClick={() => openAdd(null)}><Plus size={13} /> Add component</Btn>
+          </div>
+        )}
       </div>
       {rows.length === 0 && <Empty text="No components recorded yet — break this asset down into components, sub-components, and parts." />}
       {rows.map(({ item, depth }) => (
@@ -1926,6 +2144,24 @@ function BomTree({ data, update, assetId, role }) {
         </div>
       ))}
 
+      {copyOpen && (
+        <Modal title="Copy a bill of materials" info="bomCopy" onClose={() => setCopyOpen(false)}>
+          <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkSoft, marginBottom: 10 }}>
+            Copies every component, sub-component and part from another asset's BOM into this one{nodes.length ? ", added after what is already here" : ""}. Links to catalogue parts and work orders are not copied.
+          </div>
+          <Field label="Copy from">
+            <select style={inputStyle} value={copySrc} onChange={(e) => setCopySrc(e.target.value)}>
+              <option value="">— choose an asset —</option>
+              {sources.map((a) => <option key={a.id} value={a.id}>{a.name} ({data.bomNodes.filter((n) => n.assetId === a.id).length} items)</option>)}
+            </select>
+          </Field>
+          {sources.length === 0 && <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint }}>No other asset has a BOM yet.</div>}
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 8 }}>
+            <Btn variant="ghost" onClick={() => setCopyOpen(false)}>Cancel</Btn>
+            <Btn variant="primary" onClick={doCopy} disabled={!copySrc}>Copy BOM</Btn>
+          </div>
+        </Modal>
+      )}
       {modal && (
         <Modal title={modal.mode === "add" ? "Add BOM node" : "Edit BOM node"} info="bomNode" onClose={() => setModal(null)}>
           <Field label="Name" required>
@@ -1958,6 +2194,62 @@ function BomTree({ data, update, assetId, role }) {
   );
 }
 
+// v2.6: what an asset is linked to. Deleting is only allowed when nothing links to it.
+function assetLinks(data, assetId, extra) {
+  const out = [];
+  const n = (arr, f) => (arr || []).filter(f).length;
+  const wo = n(data.workOrders, (w) => w.assetId === assetId && w.type !== "PM Base");
+  const pmBase = n(data.workOrders, (w) => w.assetId === assetId && w.type === "PM Base");
+  const wr = n(data.workRequests, (r) => r.assetId === assetId);
+  const parts = n(data.inventory, (p) => p.assetId === assetId);
+  const pm = n(data.pmTemplates, (p) => p.assetId === assetId);
+  if (wo) out.push(`${wo} work order${wo > 1 ? "s" : ""}`);
+  if (pmBase) out.push(`${pmBase} PM base${pmBase > 1 ? "s" : ""}`);
+  if (pm) out.push(`${pm} PM task${pm > 1 ? "s" : ""}`);
+  if (wr) out.push(`${wr} work request${wr > 1 ? "s" : ""}`);
+  if (parts) out.push(`${parts} part${parts > 1 ? "s" : ""}`);
+  if (extra && extra.alarms) out.push(`${extra.alarms} alarm${extra.alarms > 1 ? "s" : ""}`);
+  if (extra && extra.mappings) out.push(`${extra.mappings} sensor mapping${extra.mappings > 1 ? "s" : ""}`);
+  return out;
+}
+const liveAssets = (data, keepId) => (data.assets || []).filter((a) => !a.archived || a.id === keepId);
+
+function RemoveAssetModal({ data, asset, onArchive, onDelete, onClose }) {
+  const [extra, setExtra] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      let alarms = 0, mappings = 0;
+      try { alarms = (await api.listAlarms()).filter((a) => a.assetId === asset.id).length; } catch (e) { /* no alarms access */ }
+      try { mappings = (await api.listAlarmMappings()).filter((m) => m.assetId === asset.id).length; } catch (e) { /* feature off */ }
+      if (alive) setExtra({ alarms, mappings });
+    })();
+    return () => { alive = false; };
+  }, [asset.id]);
+  const links = extra ? assetLinks(data, asset.id, extra) : [];
+  const p = { fontFamily: FONT_BODY, fontSize: 13, color: C.ink, margin: "0 0 10px" };
+  return (
+    <Modal title={`Remove “${asset.name}”`} info="removeAsset" onClose={onClose}>
+      <div data-remove-asset>
+        <p style={p}><b>Archive</b> hides the asset from lists and pickers but keeps it, its bill of materials and all of its history. You can restore it later with “Show archived”. This is the safe choice.</p>
+        <p style={p}><b>Delete</b> permanently erases the asset and its bill of materials. It cannot be undone, and it is only allowed when nothing is linked to the asset.</p>
+        {!extra && <div style={{ ...p, color: C.inkFaint }}>Checking what is linked to it…</div>}
+        {extra && links.length > 0 && (
+          <div style={{ ...p, color: C.rust, background: C.rustSoft, borderRadius: 4, padding: "8px 10px" }}>
+            Delete is not available: this asset is linked to {links.join(", ")}. Archive it instead.
+          </div>
+        )}
+        {extra && links.length === 0 && <div style={{ ...p, color: C.olive }}>Nothing is linked to this asset, so it can be deleted.</div>}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap", marginTop: 6 }}>
+          <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+          <Btn variant="primary" onClick={onArchive}><Archive size={13} /> Archive</Btn>
+          <Btn variant="danger" onClick={onDelete} disabled={!extra || links.length > 0}><Trash2 size={13} /> Delete permanently</Btn>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function AssetsView({ data, update, role, goToOrder, deepLinkAssetId, onConsumeDeepLink, onNewOrderForAsset }) {
   const dialog = useDialog();
   const closeGuard = useCloseGuard(dialog);
@@ -1966,6 +2258,8 @@ function AssetsView({ data, update, role, goToOrder, deepLinkAssetId, onConsumeD
   const [modal, setModal] = useState(null);
   const [showQr, setShowQr] = useState(false);
   const [showMeterLog, setShowMeterLog] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+  const [removing, setRemoving] = useState(false);
   const blank = { name: "", category: "", locationId: data.locations[0]?.id || "", manufacturer: "", model: "", serial: "", purchaseDate: "", warrantyEnd: "", manualUrl: "", isMajor: false, notes: "", meterUnit: "", currentMeterValue: "", meterUpdatedDate: "" };
   const [form, setForm] = useState(blank);
   const initial = useRef(null);
@@ -1975,7 +2269,9 @@ function AssetsView({ data, update, role, goToOrder, deepLinkAssetId, onConsumeD
   useEffect(() => { if (deepLinkAssetId) onConsumeDeepLink(); }, []); // eslint-disable-line
 
   const allowedLocs = locFilter ? descendantIds(data.locations, locFilter) : null;
-  const filteredAssets = data.assets.filter((a) => !allowedLocs || allowedLocs.has(a.locationId));
+  const filteredAssets = data.assets.filter((a) => (showArchived || !a.archived || a.id === selected) && (!allowedLocs || allowedLocs.has(a.locationId)));
+  const categoryOptions = [...new Set(data.assets.map((a) => (a.category || "").trim()).filter(Boolean))].sort((x, y) => x.localeCompare(y));
+  const archivedCount = data.assets.filter((a) => a.archived).length;
 
   const asset = data.assets.find((a) => a.id === selected);
 
@@ -1995,11 +2291,24 @@ function AssetsView({ data, update, role, goToOrder, deepLinkAssetId, onConsumeD
     });
     setModal(null);
   };
-  const removeAsset = async () => {
-    const ok = await dialog.confirm(`Archive "${asset.name}"? Its BOM and history stay in the record but it's removed from the active list.`);
+  const archiveAsset = () => {
+    update((d) => { const x = d.assets.find((q) => q.id === asset.id); if (x) x.archived = true; return d; });
+    setRemoving(false);
+    if (!showArchived) setSelected(data.assets.find((a) => a.id !== asset.id && !a.archived)?.id || null);
+  };
+  const restoreAsset = () => update((d) => { const x = d.assets.find((q) => q.id === asset.id); if (x) delete x.archived; return d; });
+  const deleteAsset = async () => {
+    // Re-check against the live data; never delete anything that is still linked.
+    if (assetLinks(data, asset.id).length) { setRemoving(false); await dialog.alertMsg("That asset is still linked to other records, so it can only be archived."); return; }
+    const ok = await dialog.confirm(`Permanently delete "${asset.name}" and its bill of materials? This cannot be undone.`);
     if (!ok) return;
-    const remaining = data.assets.filter((a) => a.id !== asset.id);
-    update((d) => { d.assets = d.assets.filter((a) => a.id !== asset.id); return d; });
+    const remaining = data.assets.filter((a) => a.id !== asset.id && !a.archived);
+    update((d) => {
+      d.assets = d.assets.filter((a) => a.id !== asset.id);
+      d.bomNodes = d.bomNodes.filter((n) => n.assetId !== asset.id);
+      return d;
+    });
+    setRemoving(false);
     setSelected(remaining[0]?.id || null);
   };
 
@@ -2020,11 +2329,16 @@ function AssetsView({ data, update, role, goToOrder, deepLinkAssetId, onConsumeD
         <Panel style={{ padding: 6, alignSelf: "start" }}>
           {filteredAssets.map((a) => (
             <div key={a.id} onClick={() => setSelected(a.id)} className="hk-row" style={{ padding: "9px 10px", borderRadius: 3, cursor: "pointer", background: selected === a.id ? C.navySoft : "transparent" }}>
-              <div style={{ fontFamily: FONT_BODY, fontSize: 13, fontWeight: 600, color: C.ink }}>{a.name}</div>
+              <div style={{ fontFamily: FONT_BODY, fontSize: 13, fontWeight: 600, color: a.archived ? C.inkFaint : C.ink }}>{a.name}{a.archived ? " (archived)" : ""}</div>
               <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint }}>{locationPath(data.locations, a.locationId)}</div>
             </div>
           ))}
           {filteredAssets.length === 0 && <Empty text="No assets at this location." />}
+          {archivedCount > 0 && (
+            <label style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 10px", borderTop: `1px solid ${C.lineSoft}`, fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkSoft, cursor: "pointer" }}>
+              <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} /> Show archived ({archivedCount})
+            </label>
+          )}
         </Panel>
 
         {asset ? (
@@ -2032,7 +2346,7 @@ function AssetsView({ data, update, role, goToOrder, deepLinkAssetId, onConsumeD
             <Panel style={{ padding: 18, marginBottom: 14 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                 <div>
-                  <div style={{ fontFamily: FONT_HEAD, fontSize: 20, fontWeight: 700, color: C.ink }}>{asset.name}</div>
+                  <div style={{ fontFamily: FONT_HEAD, fontSize: 20, fontWeight: 700, color: C.ink }}>{asset.name}{asset.archived && <span style={{ marginLeft: 8, verticalAlign: "middle" }}><Tag text="Archived" color={C.inkFaint} soft={C.panelAlt} /></span>}</div>
                   <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkFaint, marginTop: 2 }}>{locationPath(data.locations, asset.locationId)}</div>
                 </div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -2048,7 +2362,10 @@ function AssetsView({ data, update, role, goToOrder, deepLinkAssetId, onConsumeD
                   {isAdmin(role) && (
                     <>
                       <Btn small variant="ghost" onClick={openEdit}><Pencil size={12} /> Edit</Btn>
-                      <Btn small variant="danger" onClick={removeAsset}><Trash2 size={12} /> Archive</Btn>
+                      {asset.archived
+                        ? <Btn small variant="ghost" onClick={restoreAsset}><Archive size={12} /> Restore</Btn>
+                        : null}
+                      <Btn small variant="danger" onClick={() => setRemoving(true)}><Trash2 size={12} /> Remove</Btn>
                     </>
                   )}
                 </div>
@@ -2115,12 +2432,16 @@ function AssetsView({ data, update, role, goToOrder, deepLinkAssetId, onConsumeD
         )}
       </div>
 
+      {removing && asset && <RemoveAssetModal data={data} asset={asset} onArchive={archiveAsset} onDelete={deleteAsset} onClose={() => setRemoving(false)} />}
       {modal && (
         <Modal title={modal === "add" ? "Add asset" : "Edit asset"} info="asset" onClose={() => closeGuard(isDirty, save, () => setModal(null))} wide>
           {canWrite(role) && <PrefillBar p={pre} form={form} />}
           <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <Field label="Name" required><PrefillInput p={pre} field="name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
-            <Field label="Category"><input style={inputStyle} value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} placeholder="HVAC, Appliance, Vehicle…" /></Field>
+            <Field label="Category">
+              <input style={inputStyle} list="asset-category-options" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} placeholder="Pick one used before, or type a new one" autoComplete="off" />
+              <datalist id="asset-category-options">{categoryOptions.map((c) => <option key={c} value={c} />)}</datalist>
+            </Field>
             <Field label="Location" required>
               <select style={inputStyle} value={form.locationId} onChange={(e) => setForm({ ...form, locationId: e.target.value })}>
                 {flattenTree(data.locations, "parentId", null).map(({ item, depth }) => (
@@ -2160,14 +2481,16 @@ function AssetsView({ data, update, role, goToOrder, deepLinkAssetId, onConsumeD
 /* ============================================================
    PICKERS: asset/BOM link, and parts attachment
 ============================================================ */
-function AssetBomPicker({ data, assetId, bomNodeId, onChange }) {
+function AssetBomPicker({ data, assetId, bomNodeId, onChange, locationId }) {
+  const locSet = locationId ? descendantIds(data.locations, locationId) : null;
+  const assetOptions = liveAssets(data, assetId).filter((a) => !locSet || locSet.has(a.locationId) || a.id === assetId);
   const bomOptions = assetId ? flattenTree(data.bomNodes.filter((n) => n.assetId === assetId), "parentId", null) : [];
   return (
     <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
       <Field label="Asset">
         <select style={inputStyle} value={assetId || ""} onChange={(e) => onChange({ assetId: e.target.value || null, bomNodeId: null })}>
           <option value="">— none —</option>
-          {data.assets.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          {assetOptions.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </select>
       </Field>
       <Field label="BOM component">
@@ -2180,10 +2503,20 @@ function AssetBomPicker({ data, assetId, bomNodeId, onChange }) {
   );
 }
 
+// Vendors are linked through parts: the vendors of the catalogue parts a work order uses.
+function woPartVendors(data, wo) {
+  const names = [];
+  (wo.parts || []).forEach(({ partId }) => {
+    const p = (data.inventory || []).find((x) => x.id === partId);
+    const v = p && p.vendorId ? (data.vendors || []).find((x) => x.id === p.vendorId) : null;
+    if (v && !names.includes(v.name)) names.push(v.name);
+  });
+  return names;
+}
 function PartEditModal({ data, update, part, currentUser, role, onClose, onSaved, onDeleted }) {
   const dialog = useDialog();
   const closeGuard = useCloseGuard(dialog);
-  const blank = { name: "", description: "", manufacturer: "", manufacturerPartNumber: "", cost: "", link: "", assetId: null, bomNodeId: null, qty: 1, reorderAt: 1 };
+  const blank = { name: "", description: "", manufacturer: "", manufacturerPartNumber: "", cost: "", link: "", vendorId: "", assetId: null, bomNodeId: null, qty: 1, reorderAt: 1 };
   const [form, setForm] = useState(part ? { ...part } : blank);
   const initial = useRef(JSON.stringify(part ? { ...part } : blank));
   const isDirty = JSON.stringify(form) !== initial.current;
@@ -2229,6 +2562,12 @@ function PartEditModal({ data, update, part, currentUser, role, onClose, onSaved
             <PrefillInput p={pre} field="link" value={form.link || ""} onChange={(e) => setForm({ ...form, link: e.target.value })} placeholder="https://…" />
             <LinkButton url={form.link} small />
           </div>
+        </Field>
+        <Field label="Vendor">
+          <select style={inputStyle} value={form.vendorId || ""} onChange={(e) => setForm({ ...form, vendorId: e.target.value })}>
+            <option value="">— none —</option>
+            {data.vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+          </select>
         </Field>
         <Field label="Quantity on hand"><input type="number" style={inputStyle} value={form.qty} onChange={(e) => setForm({ ...form, qty: e.target.value })} /></Field>
         <Field label="Reorder at"><input type="number" style={inputStyle} value={form.reorderAt} onChange={(e) => setForm({ ...form, reorderAt: e.target.value })} /></Field>
@@ -2624,7 +2963,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
   const [search, setSearch] = useState("");
   const [priorityFilter, setPriorityFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState(pendingFilter?.status || "all");
-  const blank = { title: "", description: "", assetId: null, bomNodeId: null, locationId: "", priority: "Medium", requiredByDate: "", suggestedType: "Corrective", suggestedParts: [], photos: [] };
+  const blank = { title: "", description: "", assetId: null, bomNodeId: null, locationId: "", priority: "", requiredByDate: "", suggestedType: "Corrective", suggestedParts: [], photos: [] };
   const [form, setForm] = useState(blank);
   const initial = useRef(null);
   const [reviewForm, setReviewForm] = useState({});
@@ -2645,8 +2984,17 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
     setForm(f); initial.current = JSON.stringify(f);
     setModal({ action: "editRequest", wr });
   };
+  const wrProblem = () => {
+    const missing = [];
+    if (!form.title.trim()) missing.push("title");
+    if (!form.description.trim()) missing.push("description");
+    if (!form.priority) missing.push("priority");
+    if (!form.requiredByDate) missing.push("required-by date");
+    if (!form.locationId) missing.push("location");
+    return missing.length ? `Please fill in: ${missing.join(", ")}.` : "";
+  };
   const submitRequest = async () => {
-    if (!form.title.trim() || !form.locationId || !form.requiredByDate) { await dialog.alertMsg("Title, location, and a required-by date are required."); return; }
+    if (wrProblem()) { await dialog.alertMsg(wrProblem()); return; }
     const { photos: photoFiles, ...fields } = form;
     // Offline (or a flaky connection that drops the upload mid-flight):
     // queue it locally instead of failing the submission outright. The
@@ -2684,7 +3032,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
     }
   };
   const saveEditRequest = async () => {
-    if (!form.title.trim() || !form.locationId || !form.requiredByDate) { await dialog.alertMsg("Title, location, and a required-by date are required."); return; }
+    if (wrProblem()) { await dialog.alertMsg(wrProblem()); return; }
     update((d) => {
       const req = d.workRequests.find((r) => r.id === modal.wr.id);
       Object.assign(req, form, { title: form.title.trim() });
@@ -2711,6 +3059,10 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
       await dialog.alertMsg("A required-by date is required for every work order.");
       return;
     }
+    if (execOn() && (!(Number(reviewForm.crewRequired) >= 1) || !(Number(reviewForm.estHours) > 0))) {
+      await dialog.alertMsg("Please fill in the executors required and the hours per executor.");
+      return;
+    }
     update((d) => {
       d.counters = d.counters || { wo: 0, wr: 0, part: 0 };
       if (reviewForm.type === "PM Base") {
@@ -2720,8 +3072,8 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
           id: baseId, number: d.counters.wo, title: wr.title, type: "PM Base", status: "Active",
           assetId: wr.assetId, bomNodeId: wr.bomNodeId, locationId: wr.locationId,
           description: wr.description, sourceRequestId: wr.id, sourceBenchmarkId: null,
-          sourcePmBaseId: null, sourceFixedDate: null, priority: wr.priority || "Medium", executorId: "",
-          scheduledDate: "", requiredByDate: "", completedDate: null, verifiedDate: null,
+          sourcePmBaseId: null, sourceFixedDate: null, priority: wr.priority || "Medium", executorId: "", executorIds: [], estHours: reviewForm.estHours || "", crewRequired: reviewForm.crewRequired || "",
+          scheduledDate: "", requiredByDate: "", completedDate: null, verifiedDate: null, createdDate: todayISO(),
           cost: "", vendorId: null, notes: "", parts: wr.suggestedParts || [], comments: [], photos: wr.photos || [], partsDeducted: false, createdBy: currentUser,
           pmMode: reviewForm.pmMode, triggerType: reviewForm.triggerType || "calendar",
           checklistTemplate: (reviewForm.checklistTemplate || []).map((s) => ({ ...s })),
@@ -2753,9 +3105,9 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
           id: woId, number: d.counters.wo, title: wr.title, type: reviewForm.type, status: reviewForm.scheduledDate ? "Scheduled" : "Active",
           assetId: wr.assetId, bomNodeId: wr.bomNodeId, locationId: wr.locationId,
           description: wr.description, sourceRequestId: wr.id, sourceBenchmarkId: null,
-          sourcePmBaseId: null, sourceFixedDate: null, priority: wr.priority || "Medium", executorId: "",
+          sourcePmBaseId: null, sourceFixedDate: null, priority: wr.priority || "Medium", executorId: "", executorIds: [], estHours: reviewForm.estHours || "", crewRequired: reviewForm.crewRequired || "",
           scheduledDate: reviewForm.scheduledDate, requiredByDate: reviewForm.requiredByDate || wr.requiredByDate || "",
-          completedDate: null, verifiedDate: null, cost: "", vendorId: null,
+          completedDate: null, verifiedDate: null, createdDate: todayISO(), cost: "", vendorId: null,
           notes: "", parts: wr.suggestedParts || [], comments: [], photos: wr.photos || [], partsDeducted: false, createdBy: currentUser,
         });
         const req = d.workRequests.find((r) => r.id === wr.id);
@@ -2799,7 +3151,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
 
   const allowedLocs = locFilter ? descendantIds(data.locations, locFilter) : null;
   const searchLower = search.trim().toLowerCase();
-  const visible = (role === "Owner" || role === "Manager" ? data.workRequests : data.workRequests.filter((w) => w.requestedBy === currentUser))
+  const visible = (planRole(role) ? data.workRequests : data.workRequests.filter((w) => w.requestedBy === currentUser))
     .filter((wr) => !allowedLocs || allowedLocs.has(wr.locationId))
     .filter((wr) => priorityFilter === "all" || wr.priority === priorityFilter)
     .filter((wr) => statusFilter !== "pending" || wr.status === "Submitted" || wr.status === "Under Review")
@@ -2857,10 +3209,10 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
                   </div>
                 )}
                 <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-                  {canWrite(role) && (wr.status === "Submitted" || wr.status === "Under Review") && (isAdmin(role) || wr.requestedBy === currentUser) && (
+                  {canWrite(role) && (wr.status === "Submitted" || wr.status === "Under Review") && (planRole(role) || wr.requestedBy === currentUser) && (
                     <Btn small variant="ghost" onClick={() => openEditRequest(wr)}><Pencil size={12} /> Edit</Btn>
                   )}
-                  {(wr.status === "Submitted" || wr.status === "Under Review") && isAdmin(role) && (
+                  {(wr.status === "Submitted" || wr.status === "Under Review") && planRole(role) && (
                     <>
                       <Btn small variant="primary" onClick={() => openReview(wr, "convert")}><Check size={12} /> Convert to work order</Btn>
                       <Btn small variant="ghost" onClick={() => openReview(wr, "merge")}>Merge into existing</Btn>
@@ -2881,33 +3233,36 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
       {isFormOpen && (
         <Modal title={modal === "new" ? "Submit a work request" : "Edit work request"} info="wrForm" onClose={() => closeGuard(isDirty, modal === "new" ? submitRequest : saveEditRequest, () => setModal(null))} wide>
           <Field label="Title" required><input style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="What needs attention?" autoFocus /></Field>
-          <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 70 }} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
-          <AssetBomPicker data={data} assetId={form.assetId} bomNodeId={form.bomNodeId} onChange={({ assetId, bomNodeId }) => setForm({ ...form, assetId, bomNodeId, locationId: assetId ? data.assets.find((a) => a.id === assetId).locationId : form.locationId })} />
+          <Field label="Description" required><textarea style={{ ...inputStyle, minHeight: 70 }} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
           <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <Field label="Location" required>
-              <select style={inputStyle} value={form.locationId} onChange={(e) => setForm({ ...form, locationId: e.target.value })}>
-                {flattenTree(data.locations, "parentId", null).map(({ item, depth }) => (
-                  <option key={item.id} value={item.id}>{"—".repeat(depth) + " " + item.name}</option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Priority">
+            <Field label="Priority" required>
               <select style={inputStyle} value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })}>
+                <option value="">— select a priority —</option>
                 {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
               </select>
             </Field>
-          </div>
-          <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <Field label="Required by" required><input type="date" style={inputStyle} value={form.requiredByDate} onChange={(e) => setForm({ ...form, requiredByDate: e.target.value })} /></Field>
-            <Field label="Suggested work order type">
-              <select style={inputStyle} value={form.suggestedType} onChange={(e) => setForm({ ...form, suggestedType: e.target.value })}>
-                <option value="PM">PM</option>
-                <option value="PM Base">PM Base</option>
-                <option value="Benchmark">Benchmark</option>
-                <option value="Corrective">Corrective</option>
-              </select>
-            </Field>
           </div>
+          <Field label="Location" required>
+            <select style={inputStyle} value={form.locationId} onChange={(e) => {
+              const loc = e.target.value, set = descendantIds(data.locations, loc);
+              const keep = form.assetId && set.has((data.assets.find((a) => a.id === form.assetId) || {}).locationId);
+              setForm({ ...form, locationId: loc, ...(keep ? {} : { assetId: null, bomNodeId: null }) });
+            }}>
+              {flattenTree(data.locations, "parentId", null).map(({ item, depth }) => (
+                <option key={item.id} value={item.id}>{"—".repeat(depth) + " " + item.name}</option>
+              ))}
+            </select>
+          </Field>
+          <AssetBomPicker data={data} locationId={form.locationId} assetId={form.assetId} bomNodeId={form.bomNodeId} onChange={({ assetId, bomNodeId }) => setForm({ ...form, assetId, bomNodeId, locationId: assetId ? data.assets.find((a) => a.id === assetId).locationId : form.locationId })} />
+          <Field label="Suggested work order type">
+            <select style={inputStyle} value={form.suggestedType} onChange={(e) => setForm({ ...form, suggestedType: e.target.value })}>
+              <option value="PM">PM</option>
+              <option value="PM Base">PM Base</option>
+              <option value="Benchmark">Benchmark</option>
+              <option value="Corrective">Corrective</option>
+            </select>
+          </Field>
           <PartsPicker data={data} update={update} value={form.suggestedParts} onChange={(v) => setForm({ ...form, suggestedParts: v })} defaultLocationId={form.locationId} currentUser={currentUser} role={role} />
           {modal === "new" && (
             <Field label="Photos">
@@ -2941,6 +3296,7 @@ function WorkRequestsView({ data, update, role, currentUser, goToOrder, pendingF
           <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 12 }}>
             A request can never become an Unplanned work order — that type is always created directly.
           </div>
+          <ExecutorPicker obj={reviewForm} onChange={(p) => setReviewForm({ ...reviewForm, ...p })} users={[]} part="crew" crewRequiredFields />
           {reviewForm.type === "PM Base" ? (
             <PmBaseFields form={reviewForm} setForm={setReviewForm} data={data} />
           ) : (
@@ -3066,7 +3422,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
   const blank = {
     title: "", type: "Unplanned", assetId: null, bomNodeId: null, locationId: data.locations[0]?.id || "",
     description: "", scheduledDate: "", requiredByDate: "", vendorId: "", benchmarkId: "", executorId: "", executorIds: [], estHours: "", crewRequired: "",
-    priority: "Medium", pmMode: "Non-fixed", frequencyValue: "3", frequencyUnit: "months", fixedDates: [], parts: [],
+    priority: "", pmMode: "Non-fixed", frequencyValue: "3", frequencyUnit: "months", fixedDates: [], parts: [],
     failureCode: "", rootCause: "",
     triggerType: "calendar", meterIntervalValue: "", seasonalAnchor: "Spring", seasonalOffsetDays: "0",
     checklistTemplate: [], standby: false, standbyWindow: { ...DEFAULT_STANDBY_WINDOW },
@@ -3084,7 +3440,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
 
   useEffect(() => { if (pendingFilter) consumeFilter(); }, []); // eslint-disable-line
   useEffect(() => { api.listUsers().then(setUsers).catch(() => setUsers([])); }, []);
-  const assignableUsers = users.filter((u) => u.role === "Owner" || u.role === "Manager" || u.role === "Executor");
+  const assignableUsers = users.filter(isExecPerson);
 
   const openNew = () => { setForm(blank); initial.current = JSON.stringify(blank); setModal("new"); };
 
@@ -3099,8 +3455,17 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
   }, []); // eslint-disable-line
 
   const createWO = async () => {
-    if (!form.title.trim() || !form.locationId) { await dialog.alertMsg("Title and location are required."); return; }
-    if (form.type !== "PM Base" && !form.requiredByDate) { await dialog.alertMsg("A required-by date is required for every work order."); return; }
+    {
+      const missing = [];
+      if (!form.title.trim()) missing.push("title");
+      if (!form.description.trim()) missing.push("description");
+      if (!form.priority) missing.push("priority");
+      if (form.type !== "PM Base" && !form.requiredByDate) missing.push("required-by date");
+      if (!form.locationId) missing.push("location");
+      if (execOn() && !(Number(form.crewRequired) >= 1)) missing.push("executors required");
+      if (execOn() && !(Number(form.estHours) > 0)) missing.push("hours per executor");
+      if (missing.length) { await dialog.alertMsg(`Please fill in: ${missing.join(", ")}.`); return; }
+    }
     if (form.type === "PM Base") {
       const tt = form.triggerType || "calendar";
       if (tt === "calendar") {
@@ -3127,11 +3492,11 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
         description: form.description, sourceRequestId: null,
         sourceBenchmarkId: form.type === "Corrective" ? (form.benchmarkId || null) : null,
         sourcePmBaseId: null, sourceFixedDate: null,
-        priority: form.priority, executorId: form.executorId || "", executorIds: [...(form.executorIds || [])], estHours: form.estHours || "", crewRequired: form.crewRequired || "",
+        priority: form.priority, executorId: form.type === "PM Base" ? "" : (form.executorId || ""), executorIds: form.type === "PM Base" ? [] : [...(form.executorIds || [])], estHours: form.estHours || "", crewRequired: form.crewRequired || "",
         scheduledDate: form.type === "PM Base" ? "" : form.scheduledDate,
         requiredByDate: form.type === "PM Base" ? "" : (form.requiredByDate || ""),
-        completedDate: null, verifiedDate: null,
-        cost: "", vendorId: form.vendorId || null,
+        completedDate: null, verifiedDate: null, createdDate: todayISO(),
+        cost: "", vendorId: null,
         notes: checklist ? "Checklist: " + checklist : "",
         failureCode: (form.type === "Corrective" || form.type === "Unplanned") ? (form.failureCode || "") : "",
         rootCause: (form.type === "Corrective" || form.type === "Unplanned") ? (form.rootCause || "") : "",
@@ -3418,7 +3783,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
               <option value="">All executors</option>
               {assignableUsers.map((u) => <option key={u.id} value={u.id}>{u.username}{u.id === currentUserId ? " (me)" : ""}</option>)}
             </select>
-            {isAdmin(role) && (
+            {planRole(role) && (
               <>
               <Btn small variant={selectedIds.size ? "primary" : "ghost"} onClick={autoSchedule} title="Sets each selected Active work order's scheduled date to its required-by date">
                 <Calendar size={13} /> Auto schedule{selectedIds.size ? ` (${selectedIds.size})` : ""}
@@ -3432,7 +3797,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
             {columns.map((col) => (
               <div key={col.status}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
-                  {isAdmin(role) && col.items.length > 0 && (
+                  {planRole(role) && col.items.length > 0 && (
                     <input type="checkbox" title="Select all in this column" checked={col.items.every((w) => selectedIds.has(w.id))} onChange={() => toggleColumn(col.items)} style={{ cursor: "pointer", margin: 0 }} />
                   )}
                   <span style={{ width: 8, height: 8, borderRadius: 8, background: WO_STATUS_COLORS[col.status] }} />
@@ -3450,11 +3815,11 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                     const notDone = !isDoneStatus(w.status);
                     return (
                       <Panel key={w.id} style={{ padding: "10px 12px", cursor: "pointer", position: "relative" }}>
-                        {isAdmin(role) && (
+                        {planRole(role) && (
                           <input type="checkbox" title="Select for auto schedule" checked={selectedIds.has(w.id)} onChange={() => toggleSelected(w.id)} onClick={(e) => e.stopPropagation()}
                             style={{ position: "absolute", top: 8, right: 8, cursor: "pointer", margin: 0 }} />
                         )}
-                        <div onClick={() => setOpenId(w.id)} style={{ paddingRight: isAdmin(role) ? 20 : 0 }}>
+                        <div onClick={() => setOpenId(w.id)} style={{ paddingRight: planRole(role) ? 20 : 0 }}>
                           <div style={{ fontFamily: FONT_BODY, fontSize: 13, fontWeight: 700, color: C.ink }}>{formatWoNum(w.number)} · {w.title}</div>
                           <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: 3 }}>{locationPath(data.locations, w.locationId)}</div>
                           <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -3517,18 +3882,35 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
       {modal === "new" && (
         <Modal title="New work order" info="newWo" onClose={() => closeGuard(isDirty, createWO, () => setModal(null))} wide>
           <Field label="Title" required><input style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} autoFocus /></Field>
+          <Field label="Type">
+            <select style={{ ...inputStyle, maxWidth: 280 }} value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
+              {WO_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </Field>
+          <Field label="Description" required><textarea style={{ ...inputStyle, minHeight: 60 }} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
           <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <Field label="Type">
-              <select style={inputStyle} value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
-                {WO_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-              </select>
-            </Field>
-            <Field label="Priority">
+            <Field label="Priority" required>
               <select style={inputStyle} value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })}>
+                <option value="">— select a priority —</option>
                 {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
               </select>
             </Field>
+            {form.type !== "PM Base" && (
+              <Field label="Required by" required><input type="date" style={inputStyle} value={form.requiredByDate} onChange={(e) => setForm({ ...form, requiredByDate: e.target.value })} /></Field>
+            )}
           </div>
+          <Field label="Location" required>
+            <select style={inputStyle} value={form.locationId} onChange={(e) => {
+              const loc = e.target.value, set = descendantIds(data.locations, loc);
+              const keep = form.assetId && set.has((data.assets.find((a) => a.id === form.assetId) || {}).locationId);
+              setForm({ ...form, locationId: loc, ...(keep ? {} : { assetId: null, bomNodeId: null }) });
+            }}>
+              {flattenTree(data.locations, "parentId", null).map(({ item, depth }) => (
+                <option key={item.id} value={item.id}>{"—".repeat(depth) + " " + item.name}</option>
+              ))}
+            </select>
+          </Field>
+          <AssetBomPicker data={data} locationId={form.locationId} assetId={form.assetId} bomNodeId={form.bomNodeId} onChange={({ assetId, bomNodeId }) => setForm({ ...form, assetId, bomNodeId, locationId: assetId ? data.assets.find((a) => a.id === assetId).locationId : form.locationId })} />
 
           {form.type === "Corrective" && (
             <Field label="Copy from benchmark">
@@ -3538,9 +3920,6 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
               </select>
             </Field>
           )}
-
-          {form.type === "PM Base" && <PmBaseFields form={form} setForm={setForm} data={data} />}
-
           {(form.type === "Corrective" || form.type === "Unplanned") && (
             <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
               <Field label="Failure code">
@@ -3553,35 +3932,15 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
             </div>
           )}
 
-          <AssetBomPicker data={data} assetId={form.assetId} bomNodeId={form.bomNodeId} onChange={({ assetId, bomNodeId }) => setForm({ ...form, assetId, bomNodeId, locationId: assetId ? data.assets.find((a) => a.id === assetId).locationId : form.locationId })} />
-          <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <Field label="Location" required>
-              <select style={inputStyle} value={form.locationId} onChange={(e) => setForm({ ...form, locationId: e.target.value })}>
-                {flattenTree(data.locations, "parentId", null).map(({ item, depth }) => (
-                  <option key={item.id} value={item.id}>{"—".repeat(depth) + " " + item.name}</option>
-                ))}
-              </select>
-            </Field>
-            {form.type !== "PM Base" && (
-              <Field label="Scheduled date (optional — setting one schedules it)"><input type="date" style={inputStyle} value={form.scheduledDate} onChange={(e) => setForm({ ...form, scheduledDate: e.target.value })} /></Field>
-            )}
-          </div>
+          <ExecutorPicker obj={form} onChange={(p) => setForm({ ...form, ...p })} users={assignableUsers} part="crew" crewRequiredFields />
+          {form.type !== "PM Base" && <ExecutorPicker obj={form} onChange={(p) => setForm({ ...form, ...p })} users={assignableUsers} part="select" />}
           {form.type !== "PM Base" && (
-            <Field label="Required by" required><input type="date" style={inputStyle} value={form.requiredByDate} onChange={(e) => setForm({ ...form, requiredByDate: e.target.value })} /></Field>
+            <Field label="Scheduled date (optional — setting one schedules it)"><input type="date" style={{ ...inputStyle, maxWidth: 280 }} value={form.scheduledDate} onChange={(e) => setForm({ ...form, scheduledDate: e.target.value })} /></Field>
           )}
-          <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <Field label="Vendor">
-              <select style={inputStyle} value={form.vendorId} onChange={(e) => setForm({ ...form, vendorId: e.target.value })}>
-                <option value="">— none —</option>
-                {data.vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
-              </select>
-            </Field>
-            <ExecutorPicker obj={form} onChange={(p) => setForm({ ...form, ...p })} users={assignableUsers} />
-          </div>
           {form.type !== "PM Base" && (
             <PartsPicker data={data} update={update} value={form.parts} onChange={(v) => setForm({ ...form, parts: v })} defaultLocationId={form.locationId} currentUser={currentUser} role={role} />
           )}
-          <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 60 }} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
+          {form.type === "PM Base" && <PmBaseFields form={form} setForm={setForm} data={data} />}
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
             <Btn variant="ghost" onClick={() => closeGuard(isDirty, createWO, () => setModal(null))}>Cancel</Btn>
             <Btn variant="primary" onClick={createWO}>Create</Btn>
@@ -3604,7 +3963,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
 
           {openWO.type === "PM Base" ? (
             <>
-              {isAdmin(role) ? (
+              {planRole(role) ? (
                 <>
                   <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 60 }} value={detailEdits.description || ""} onChange={(e) => setDetailEdits({ ...detailEdits, description: e.target.value })} /></Field>
                   <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -3613,14 +3972,9 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                         {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
                       </select>
                     </Field>
-                    <Field label="Vendor">
-                      <select style={inputStyle} value={detailEdits.vendorId || ""} onChange={(e) => setDetailEdits({ ...detailEdits, vendorId: e.target.value })}>
-                        <option value="">— none —</option>
-                        {data.vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
-                      </select>
-                    </Field>
+                    <div />
                   </div>
-                  <ExecutorPicker obj={detailEdits} onChange={(p) => setDetailEdits({ ...detailEdits, ...p })} users={assignableUsers} />
+                  <ExecutorPicker obj={detailEdits} onChange={(p) => setDetailEdits({ ...detailEdits, ...p })} users={assignableUsers} part="crew" />
                   <PmBaseFields form={detailEdits} setForm={setDetailEdits} data={data} />
                   <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 16 }}>
                     <Btn small onClick={saveDetail}>Save changes</Btn>
@@ -3647,7 +4001,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
             </>
           ) : (
             <>
-              {isAdmin(role) ? (
+              {planRole(role) ? (
                 <>
                   <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <Field label="Scheduled date (setting one schedules it)"><input type="date" style={inputStyle} value={detailEdits.scheduledDate || ""} onChange={(e) => setDetailEdits({ ...detailEdits, scheduledDate: e.target.value })} /></Field>
@@ -3655,12 +4009,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                   </div>
                   <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <Field label="Cost ($)"><input style={inputStyle} value={detailEdits.cost || ""} onChange={(e) => setDetailEdits({ ...detailEdits, cost: e.target.value })} /></Field>
-                    <Field label="Vendor">
-                      <select style={inputStyle} value={detailEdits.vendorId || ""} onChange={(e) => setDetailEdits({ ...detailEdits, vendorId: e.target.value })}>
-                        <option value="">— none —</option>
-                        {data.vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
-                      </select>
-                    </Field>
+                    <Field label="Vendors (from the parts used)"><div style={{ ...inputStyle, background: C.panelAlt, color: C.inkSoft, minHeight: 20 }}>{woPartVendors(data, openWO).join(", ") || "—"}</div></Field>
                   </div>
                   <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <Field label="Priority">
@@ -3694,7 +4043,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                       ["Scheduled date", fmtDate(openWO.scheduledDate)],
                       ["Required by", fmtDate(openWO.requiredByDate)],
                       ["Cost", openWO.cost ? `$${openWO.cost}` : "—"],
-                      ["Vendor", openWO.vendorId ? (nameOf(data.vendors, openWO.vendorId) || "—") : "—"],
+                      ["Vendors (from parts)", woPartVendors(data, openWO).join(", ") || "—"],
                       ["Priority", openWO.priority || "Medium"],
                       ["Executor", (execIdsOf(openWO).map((id) => (assignableUsers.find((u) => u.id === id) || {}).username).filter(Boolean).join(", ")) || "Unassigned"],
                       ...(execOn() ? [["Estimate", `${openWO.estHours ? fmtH(openWO.estHours) + " h" : "—"} × ${crewOf(openWO)} executor${crewOf(openWO) === 1 ? "" : "s"}`], ["Hours logged", (openWO.timeEntries || []).length ? `${fmtH((openWO.timeEntries || []).reduce((t, e) => t + (Number(e.hours) || 0), 0))} h` : "—"]] : []),
@@ -3760,7 +4109,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                     </Btn>
                   ))}
                 </div>
-                {isAdmin(role) && (
+                {planRole(role) && (
                   <div style={{ display: "flex", gap: 6 }}>
                     <Btn small onClick={saveDetail}>Save changes</Btn>
                     <Btn small variant="primary" onClick={() => { if (saveDetail()) setOpenId(null); }}>Save & Close</Btn>
@@ -3789,7 +4138,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
                 </div>
               )}
 
-              {isAdmin(role) && (openWO.type === "Benchmark" || openWO.type === "Corrective") && (
+              {planRole(role) && (openWO.type === "Benchmark" || openWO.type === "Corrective") && (
                 <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${C.lineSoft}`, display: "flex", gap: 8, flexWrap: "wrap" }}>
                   {openWO.sourceBenchmarkId ? (
                     <Btn small variant="ghost" onClick={updateBenchmarkFromWO}>Update benchmark with this run</Btn>
@@ -3865,7 +4214,7 @@ function VendorsView({ data, update, role, currentUser }) {
         title="Vendors & Service Providers"
         subtitle="The contractors and service providers you actually call on."
         info={PAGE_INFO.vendors}
-        action={isAdmin(role) && <Btn variant="primary" onClick={openAdd}><Plus size={15} /> Add vendor</Btn>}
+        action={planRole(role) && <Btn variant="primary" onClick={openAdd}><Plus size={15} /> Add vendor</Btn>}
       />
       <div style={{ position: "relative", maxWidth: 340, marginBottom: 12 }}>
         <Search size={14} color={C.inkFaint} style={{ position: "absolute", left: 10, top: 10, pointerEvents: "none" }} />
@@ -3881,7 +4230,7 @@ function VendorsView({ data, update, role, currentUser }) {
               {v.notes && <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkSoft, marginTop: 2 }}>{v.notes}</div>}
               {v.link && <div style={{ marginTop: 6 }}><LinkButton url={v.link} small /></div>}
             </div>
-            {isAdmin(role) && (
+            {planRole(role) && (
               <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
                 <button onClick={() => openEdit(v)} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkSoft }}><Pencil size={14} /></button>
                 {canDelete(role, v, currentUser) && <button onClick={() => remove(v)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rust }}><Trash2 size={14} /></button>}
@@ -3947,7 +4296,7 @@ function PartsView({ data, update, role, currentUser }) {
         title="Parts Catalogue"
         subtitle="Every spare part and consumable kept on hand, and what it belongs to."
         info={PAGE_INFO.parts}
-        action={isAdmin(role) && <Btn variant="primary" onClick={() => setEditing("new")}><Plus size={15} /> Add part</Btn>}
+        action={planRole(role) && <Btn variant="primary" onClick={() => setEditing("new")}><Plus size={15} /> Add part</Btn>}
       />
       <div style={{ position: "relative", maxWidth: 340, marginBottom: 14 }}>
         <Search size={14} color={C.inkFaint} style={{ position: "absolute", left: 10, top: 10, pointerEvents: "none" }} />
@@ -4046,7 +4395,7 @@ function ScheduleView({ data, role, currentUserId, goToOrder }) {
   const [cursor, setCursor] = useState(() => { const t = new Date(); return { year: t.getFullYear(), month: t.getMonth() }; });
 
   useEffect(() => { api.listUsers().then(setUsers).catch(() => setUsers([])); }, []);
-  const assignableUsers = users.filter((u) => u.role === "Owner" || u.role === "Manager" || u.role === "Executor");
+  const assignableUsers = users.filter(isExecPerson);
 
   const firstOfMonth = new Date(cursor.year, cursor.month, 1);
   const startWeekday = firstOfMonth.getDay();
@@ -4093,10 +4442,11 @@ function ScheduleView({ data, role, currentUserId, goToOrder }) {
       <div className="hk-grid-fixed2" style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 16 }}>
         <LocationNavTree data={data} selectedId={locFilter} onSelect={setLocFilter} />
         <Panel style={{ padding: 10 }}>
-          <div className="hk-cal-grid" style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, marginBottom: 4 }}>
+          <div className="hk-hscroll" data-hscroll="schedule"><div className="hk-hscroll-in">
+          <div className="hk-cal-grid" style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 4, marginBottom: 4 }}>
             {WEEKDAY_LABELS.map((w) => <div key={w} style={{ fontFamily: FONT_BODY, fontSize: 11, fontWeight: 700, color: C.inkFaint, textAlign: "center", padding: "4px 0" }}>{w}</div>)}
           </div>
-          <div className="hk-cal-grid" style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
+          <div className="hk-cal-grid" style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 4 }}>
             {Array.from({ length: totalCells }).map((_, i) => {
               const dayNum = i - startWeekday + 1;
               const inMonth = dayNum >= 1 && dayNum <= daysInMonth;
@@ -4120,6 +4470,7 @@ function ScheduleView({ data, role, currentUserId, goToOrder }) {
               );
             })}
           </div>
+          </div></div>
         </Panel>
       </div>
     </div>
@@ -4137,8 +4488,8 @@ const SHEET_SPECS = [
   },
   {
     key: "assets", sheetName: "Assets", idPrefix: "a",
-    toRow: (a) => ({ id: a.id, name: a.name, category: a.category || "", locationId: a.locationId || "", manufacturer: a.manufacturer || "", model: a.model || "", serial: a.serial || "", purchaseDate: a.purchaseDate || "", warrantyEnd: a.warrantyEnd || "", manualUrl: a.manualUrl || "", isMajor: a.isMajor ? "yes" : "", meterUnit: a.meterUnit || "", currentMeterValue: a.currentMeterValue || "", meterUpdatedDate: a.meterUpdatedDate || "", notes: a.notes || "", createdBy: a.createdBy || "" }),
-    fromRow: (r) => ({ id: r.id, name: String(r.name || ""), category: String(r.category || ""), locationId: r.locationId ? String(r.locationId) : "", manufacturer: String(r.manufacturer || ""), model: String(r.model || ""), serial: String(r.serial || ""), purchaseDate: String(r.purchaseDate || ""), warrantyEnd: String(r.warrantyEnd || ""), manualUrl: String(r.manualUrl || ""), isMajor: String(r.isMajor || "").toLowerCase() === "yes", meterUnit: String(r.meterUnit || ""), currentMeterValue: r.currentMeterValue !== "" && r.currentMeterValue != null ? Number(r.currentMeterValue) : "", meterUpdatedDate: String(r.meterUpdatedDate || ""), notes: String(r.notes || ""), createdBy: r.createdBy || null }),
+    toRow: (a) => ({ id: a.id, name: a.name, category: a.category || "", locationId: a.locationId || "", manufacturer: a.manufacturer || "", model: a.model || "", serial: a.serial || "", purchaseDate: a.purchaseDate || "", warrantyEnd: a.warrantyEnd || "", manualUrl: a.manualUrl || "", isMajor: a.isMajor ? "yes" : "", meterUnit: a.meterUnit || "", currentMeterValue: a.currentMeterValue || "", meterUpdatedDate: a.meterUpdatedDate || "", notes: a.notes || "", archived: a.archived ? "yes" : "", createdBy: a.createdBy || "" }),
+    fromRow: (r) => ({ id: r.id, archived: String(r.archived || "").toLowerCase() === "yes" ? true : undefined, name: String(r.name || ""), category: String(r.category || ""), locationId: r.locationId ? String(r.locationId) : "", manufacturer: String(r.manufacturer || ""), model: String(r.model || ""), serial: String(r.serial || ""), purchaseDate: String(r.purchaseDate || ""), warrantyEnd: String(r.warrantyEnd || ""), manualUrl: String(r.manualUrl || ""), isMajor: String(r.isMajor || "").toLowerCase() === "yes", meterUnit: String(r.meterUnit || ""), currentMeterValue: r.currentMeterValue !== "" && r.currentMeterValue != null ? Number(r.currentMeterValue) : "", meterUpdatedDate: String(r.meterUpdatedDate || ""), notes: String(r.notes || ""), createdBy: r.createdBy || null }),
   },
   {
     key: "bomNodes", sheetName: "BOM Nodes", idPrefix: "bom",
@@ -4167,7 +4518,7 @@ const SHEET_SPECS = [
       pmMode: w.pmMode || "", frequencyValue: w.frequencyValue || "", frequencyUnit: w.frequencyUnit || "",
       fixedDates: (w.fixedDates || []).map((f) => `${String(f.month).padStart(2, "0")}-${String(f.day).padStart(2, "0")}`).join(", "),
       priority: w.priority || "", executorId: w.executorId || "", parts: serializePartsList(w.parts),
-      scheduledDate: w.scheduledDate || "", requiredByDate: w.requiredByDate || "", completedDate: w.completedDate || "", verifiedDate: w.verifiedDate || "",
+      scheduledDate: w.scheduledDate || "", requiredByDate: w.requiredByDate || "", completedDate: w.completedDate || "", verifiedDate: w.verifiedDate || "", createdDate: w.createdDate || "",
       cost: w.cost || "", vendorId: w.vendorId || "", notes: w.notes || "", createdBy: w.createdBy || "",
       failureCode: w.failureCode || "", rootCause: w.rootCause || "",
       triggerType: w.triggerType || "", meterIntervalValue: w.meterIntervalValue || "", meterBaselineValue: w.meterBaselineValue || "",
@@ -4208,7 +4559,7 @@ const SHEET_SPECS = [
         fixedDates: fixedDates.length ? fixedDates : undefined,
         priority: String(r.priority || "Medium"), executorId: r.executorId ? String(r.executorId) : "",
         parts: deserializePartsList(r.parts),
-        scheduledDate: String(r.scheduledDate || ""), requiredByDate: String(r.requiredByDate || ""), completedDate: r.completedDate ? String(r.completedDate) : null, verifiedDate: r.verifiedDate ? String(r.verifiedDate) : null,
+        scheduledDate: String(r.scheduledDate || ""), requiredByDate: String(r.requiredByDate || ""), completedDate: r.completedDate ? String(r.completedDate) : null, verifiedDate: r.verifiedDate ? String(r.verifiedDate) : null, createdDate: r.createdDate ? String(r.createdDate) : undefined,
         cost: r.cost !== "" && r.cost != null ? String(r.cost) : "", vendorId: r.vendorId ? String(r.vendorId) : null, notes: String(r.notes || ""), createdBy: r.createdBy || null,
         failureCode: String(r.failureCode || ""), rootCause: String(r.rootCause || ""),
         triggerType: r.triggerType || undefined,
@@ -4244,8 +4595,8 @@ const SHEET_SPECS = [
   },
   {
     key: "inventory", sheetName: "Parts", idPrefix: "inv",
-    toRow: (i) => ({ id: i.id, partNumber: i.partNumber || "", name: i.name, description: i.description || "", manufacturer: i.manufacturer || "", manufacturerPartNumber: i.manufacturerPartNumber || "", cost: i.cost || "", link: i.link || "", assetId: i.assetId || "", bomNodeId: i.bomNodeId || "", qty: i.qty, reorderAt: i.reorderAt, createdBy: i.createdBy || "" }),
-    fromRow: (r) => ({ id: r.id, partNumber: r.partNumber ? Number(r.partNumber) : undefined, name: String(r.name || ""), description: String(r.description || ""), manufacturer: String(r.manufacturer || ""), manufacturerPartNumber: String(r.manufacturerPartNumber || ""), cost: String(r.cost || ""), link: String(r.link || ""), assetId: r.assetId ? String(r.assetId) : null, bomNodeId: r.bomNodeId ? String(r.bomNodeId) : null, qty: Number(r.qty) || 0, reorderAt: Number(r.reorderAt) || 0, createdBy: r.createdBy || null }),
+    toRow: (i) => ({ id: i.id, partNumber: i.partNumber || "", name: i.name, description: i.description || "", manufacturer: i.manufacturer || "", manufacturerPartNumber: i.manufacturerPartNumber || "", cost: i.cost || "", link: i.link || "", vendorId: i.vendorId || "", assetId: i.assetId || "", bomNodeId: i.bomNodeId || "", qty: i.qty, reorderAt: i.reorderAt, createdBy: i.createdBy || "" }),
+    fromRow: (r) => ({ id: r.id, partNumber: r.partNumber ? Number(r.partNumber) : undefined, name: String(r.name || ""), description: String(r.description || ""), manufacturer: String(r.manufacturer || ""), manufacturerPartNumber: String(r.manufacturerPartNumber || ""), cost: String(r.cost || ""), link: String(r.link || ""), vendorId: r.vendorId ? String(r.vendorId) : "", assetId: r.assetId ? String(r.assetId) : null, bomNodeId: r.bomNodeId ? String(r.bomNodeId) : null, qty: Number(r.qty) || 0, reorderAt: Number(r.reorderAt) || 0, createdBy: r.createdBy || null }),
   },
   {
     // v1.8: the PM Wizard's starter-catalogue templates, now editable in
@@ -4258,7 +4609,7 @@ const SHEET_SPECS = [
     // falls back to the built-in default catalogue (see
     // effectiveWizardCatalog above).
     key: "pmWizardCatalog", sheetName: "PM Wizard Catalog", idPrefix: "wc",
-    toRow: (w) => ({ id: w.id, type: w.type || "", category: w.category || "", title: w.title, description: w.description || "", frequencyValue: w.frequencyValue || "", frequencyUnit: w.frequencyUnit || "months", zones: w.zones === "all" ? "all" : (w.zones || []).join(", ") }),
+    toRow: (w) => ({ id: w.id, type: w.type || "", category: w.category || "", title: w.title, description: w.description || "", frequencyValue: w.frequencyValue || "", frequencyUnit: w.frequencyUnit || "months", crewRequired: w.crewRequired || "", estHours: w.estHours || "", zones: w.zones === "all" ? "all" : (w.zones || []).join(", ") }),
     fromRow: (r) => {
       const zonesRaw = String(r.zones || "").trim();
       const zones = (!zonesRaw || zonesRaw.toLowerCase() === "all") ? "all" : zonesRaw.split(",").map((s) => s.trim()).filter(Boolean);
@@ -4266,6 +4617,8 @@ const SHEET_SPECS = [
         id: r.id, type: String(r.type || "").trim() || undefined, category: String(r.category || "").trim() || undefined, title: String(r.title || ""), description: String(r.description || ""),
         frequencyValue: r.frequencyValue !== "" && r.frequencyValue != null ? Number(r.frequencyValue) : 3,
         frequencyUnit: String(r.frequencyUnit || "months"), zones,
+        crewRequired: r.crewRequired !== "" && r.crewRequired != null ? Number(r.crewRequired) : undefined,
+        estHours: r.estHours !== "" && r.estHours != null ? Number(r.estHours) : undefined,
       };
     },
   },
@@ -4391,7 +4744,7 @@ function rowsToSettings(rows) {
     if (/^#[0-9a-fA-F]{6}$/.test(v)) brand.colors[c] = v;
     else errors.push({ row: rowOf[k], column: "value", problem: `Colour "${c}" must be a hex value like #28415F` });
   });
-  const terms = { orgNoun: text("terms.orgNoun", "Household/organization word", 1, 20) };
+  const terms = { orgNoun: text("terms.orgNoun", "Word for organization", 1, 20) };
   const levels = [];
   for (let i = 1; i <= 6; i++) {
     const k = `terms.level${i}`;
@@ -5047,12 +5400,12 @@ function BackupTools({ data, update }) {
 /* ============================================================
    OWNER TOOLS
 ============================================================ */
+// Owner: a member's email, designations and digests.
 function MemberNotifyModal({ user, onClose, onSaved }) {
   const [form, setForm] = useState({
     email: user.email || "",
-    notifyPmOverdue: user.notifyPmOverdue,
-    notifyWarrantyExpiring: user.notifyWarrantyExpiring,
-    notifyWorkRequestUnreviewed: user.notifyWorkRequestUnreviewed,
+    designations: [...(user.designations || [])],
+    ...Object.fromEntries(DIGEST_OPTIONS.map((o) => [o.key, !!user[o.key]])),
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -5062,21 +5415,40 @@ function MemberNotifyModal({ user, onClose, onSaved }) {
     catch (err) { setError(err.message || "Couldn't save"); }
     finally { setBusy(false); }
   };
+  const isAdminRole = user.role === "Owner" || user.role === "Manager";
+  const desList = user.role === "Executor" ? DESIGNATIONS : user.role === "Guest" ? [] : [];
+  const toggleDes = (k, on) => setForm((f) => ({ ...f, designations: on ? [...new Set([...f.designations, k])] : f.designations.filter((x) => x !== k) }));
+  const effective = { ...user, designations: form.designations };
   return (
-    <Modal title={`Notifications — ${user.username}`} info="notify" onClose={onClose}>
+    <Modal title={`Member settings — ${user.username}`} info="notify" onClose={onClose}>
       <Field label="Email (notifications and password reset)"><input type="email" style={inputStyle} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="name@example.com" /></Field>
+      {(desList.length > 0 || isAdminRole) && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 6 }}>Designations<InfoTip k="designations" /></div>
+          {isAdminRole && <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginBottom: 6 }}>{user.role}s already have the Planner, Scheduler and Specialist rights.</div>}
+          {desList.map((d) => (
+            <label key={d.key} style={{ display: "flex", alignItems: "flex-start", gap: 7, marginBottom: 6, fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink, cursor: "pointer" }}>
+              <input type="checkbox" checked={form.designations.includes(d.key)} onChange={(e) => toggleDes(d.key, e.target.checked)} style={{ marginTop: 2 }} />
+              <span><b>{d.label}</b> — {d.help}</span>
+            </label>
+          ))}
+          {isAdminRole && (
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 7, fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink, cursor: "pointer" }}>
+              <input type="checkbox" checked={form.designations.includes("executor")} onChange={(e) => toggleDes("executor", e.target.checked)} style={{ marginTop: 2 }} />
+              <span><b>Executor</b> — available to be given work: appears in the work order executor list, labour assignment and the workforce schedule.</span>
+            </label>
+          )}
+        </div>
+      )}
       {error && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.rust, marginBottom: 10 }}>{error}</div>}
+      <div style={{ fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 4 }}>Email digests</div>
       <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginBottom: 10 }}>
-        Requires SMTP to be configured on the server (see .env.example) — with no email set here, or none of the toggles below on, this member gets no digest.
+        Requires SMTP to be configured on the server (see .env.example) — with no email set here, or none of the options below on, this member gets no digest. Only options that fit their role and designations are listed. Members can also change these themselves under Tools and settings.
       </div>
-      {[
-        ["notifyPmOverdue", "Overdue work orders"],
-        ["notifyWarrantyExpiring", "Warranties expiring soon"],
-        ["notifyWorkRequestUnreviewed", "Work requests sitting unreviewed"],
-      ].map(([key, label]) => (
-        <label key={key} style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 8, fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink, cursor: "pointer" }}>
-          <input type="checkbox" checked={!!form[key]} onChange={(e) => setForm({ ...form, [key]: e.target.checked })} />
-          {label}
+      {DIGEST_OPTIONS.filter((o) => digestAllowed(effective, o)).map((o) => (
+        <label key={o.key} style={{ display: "flex", alignItems: "flex-start", gap: 7, marginBottom: 8, fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink, cursor: "pointer" }}>
+          <input type="checkbox" checked={!!form[o.key]} onChange={(e) => setForm({ ...form, [o.key]: e.target.checked })} style={{ marginTop: 2 }} />
+          <span>{o.label}</span>
         </label>
       ))}
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
@@ -5087,46 +5459,52 @@ function MemberNotifyModal({ user, onClose, onSaved }) {
   );
 }
 
-// Owner sets a temporary password for a member (typed, or generated and shown
-// once). The member must replace it at their next sign-in.
+// Offers to email a member their sign-in details (needs SMTP on the server).
+async function offerEmailCredentials(dialog, user, password) {
+  if (!user.email) return;
+  if (!SETTINGS.mailConfigured) {
+    await dialog.alertMsg(`${user.username} has an email address, but email isn't set up on the server (SMTP), so the sign-in details can't be emailed. Give them the username and temporary password yourself.`);
+    return;
+  }
+  const ok = await dialog.confirm(`Email ${user.username}'s username, temporary password and a sign-in link to ${user.email}?`);
+  if (!ok) return;
+  try { await api.emailCredentials(user.id, password); await dialog.alertMsg(`Sent to ${user.email}.`); }
+  catch (err) { await dialog.alertMsg(err.message || "Couldn't send the email."); }
+}
+
+// Owner sets a temporary password for a member: pre-filled, editable. The
+// member must replace it at their next sign-in.
 function ResetPasswordModal({ user, onClose, onDone }) {
-  const [password, setPassword] = useState("");
-  const [result, setResult] = useState(null);
+  const dialog = useDialog();
+  const [password, setPassword] = useState(() => genTempPassword());
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [copied, setCopied] = useState(false);
   const run = async () => {
-    if (password && password.length < MIN_PASSWORD) { setError(`A typed temporary password must be at least ${MIN_PASSWORD} characters (or leave it blank to generate one).`); return; }
+    if (password.length < MIN_PASSWORD) { setError(`The temporary password must be at least ${MIN_PASSWORD} characters.`); return; }
     setBusy(true); setError("");
-    try { const r = await api.ownerResetPassword(user.id, password); setResult(r.temporaryPassword); onDone(); }
-    catch (err) { setError(err.message || "Couldn't reset the password"); }
-    finally { setBusy(false); }
+    try {
+      const r = await api.ownerResetPassword(user.id, password);
+      onDone();
+      onClose();
+      await offerEmailCredentials(dialog, user, r.temporaryPassword);
+    } catch (err) { setError(err.message || "Couldn't reset the password"); setBusy(false); }
   };
-  const copy = async () => { try { await navigator.clipboard.writeText(result); setCopied(true); } catch (e) { /* clipboard blocked */ } };
   return (
     <Modal title={`Reset password — ${user.username}`} info="resetPw" onClose={onClose}>
-      {!result ? (
-        <>
-          <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkSoft, marginBottom: 12 }}>
-            Sets a temporary password for {user.username}. They will be asked to choose their own the next time they sign in, and any devices they're signed in on are signed out now.
-          </div>
-          <Field label="Temporary password (leave blank to generate one)"><input style={inputStyle} value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="off" /></Field>
-          {error && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.rust, marginBottom: 10 }}>{error}</div>}
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-            <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-            <Btn variant="primary" onClick={run} disabled={busy}>Reset password</Btn>
-          </div>
-        </>
-      ) : (
-        <>
-          <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkSoft, marginBottom: 10 }}>Give {user.username} this temporary password. It is shown only now.</div>
-          <div style={{ fontFamily: "monospace", fontSize: 18, letterSpacing: "0.04em", color: C.ink, background: C.panelAlt, border: `1px solid ${C.line}`, borderRadius: 4, padding: "10px 12px", marginBottom: 12, userSelect: "all" }}>{result}</div>
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-            <Btn variant="ghost" onClick={copy}><Copy size={13} /> {copied ? "Copied" : "Copy"}</Btn>
-            <Btn variant="primary" onClick={onClose}>Done</Btn>
-          </div>
-        </>
-      )}
+      <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkSoft, marginBottom: 12 }}>
+        Sets a temporary password for {user.username}. They will be asked to choose their own the next time they sign in, and any devices they're signed in on are signed out now. A password has been suggested; change it if you like.
+      </div>
+      <Field label="Temporary password">
+        <div style={{ display: "flex", gap: 6, alignItems: "stretch" }}>
+          <div style={{ flex: 1 }}><PasswordInput style={inputStyle} value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="off" /></div>
+          <Btn variant="ghost" onClick={() => setPassword(genTempPassword())} title="Generate another"><RefreshCw size={14} /></Btn>
+        </div>
+      </Field>
+      {error && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.rust, marginBottom: 10 }}>{error}</div>}
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+        <Btn variant="primary" onClick={run} disabled={busy}>Reset password</Btn>
+      </div>
     </Modal>
   );
 }
@@ -5134,7 +5512,8 @@ function ResetPasswordModal({ user, onClose, onDone }) {
 function MemberManagementInline({ currentUser }) {
   const dialog = useDialog();
   const [users, setUsers] = useState(null);
-  const [form, setForm] = useState({ username: "", password: "", role: "Executor", email: "" });
+  const blankForm = () => ({ username: "", password: genTempPassword(), role: "Executor", email: "" });
+  const [form, setForm] = useState(blankForm);
   const [error, setError] = useState("");
   const [notifyUser, setNotifyUser] = useState(null);
   const [resetUser, setResetUser] = useState(null);
@@ -5147,9 +5526,11 @@ function MemberManagementInline({ currentUser }) {
     if (!form.username.trim() || !form.password) { setError("Username and a temporary password are required."); return; }
     if (form.password.length < MIN_PASSWORD) { setError(`The temporary password must be at least ${MIN_PASSWORD} characters.`); return; }
     try {
-      await api.addUser(form.username.trim(), form.password, form.role, form.email.trim());
-      setForm({ username: "", password: "", role: "Executor", email: "" });
+      const made = await api.addUser(form.username.trim(), form.password, form.role, form.email.trim());
+      const pw = form.password;
+      setForm(blankForm());
       load();
+      await offerEmailCredentials(dialog, made, pw);
     } catch (err) { setError(err.message); }
   };
 
@@ -5170,12 +5551,13 @@ function MemberManagementInline({ currentUser }) {
             <span style={{ fontFamily: FONT_BODY, fontSize: 13.5, fontWeight: 600, color: C.ink }}>{u.username}</span>
             {u.id === currentUser.id && <span style={{ fontFamily: FONT_BODY, fontSize: 11, color: C.inkFaint }}> (you)</span>}
             {u.email && <div style={{ fontFamily: FONT_BODY, fontSize: 11, color: C.inkFaint }}>{u.email}</div>}
+            {(u.designations || []).length > 0 && <div style={{ fontFamily: FONT_BODY, fontSize: 11, color: C.teal, fontWeight: 600 }}>{u.designations.map((k) => (DESIGNATIONS.find((d) => d.key === k) || { label: "Executor" }).label).join(" · ")}</div>}
             {u.mustChangePassword && <div style={{ fontFamily: FONT_BODY, fontSize: 11, color: C.orange, fontWeight: 600 }}>Temporary password — must change at next sign-in</div>}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <Tag text={u.role} color={u.role === "Owner" ? C.navy : u.role === "Manager" ? C.teal : u.role === "Guest" ? C.inkFaint : C.olive} soft={u.role === "Owner" ? C.navySoft : u.role === "Manager" ? C.tealSoft : u.role === "Guest" ? C.panelAlt : C.oliveSoft} />
             {u.id !== currentUser.id && <button onClick={() => setResetUser(u)} title="Reset password" style={{ background: "none", border: "none", cursor: "pointer", color: C.inkSoft }}><Key size={14} /></button>}
-            <button onClick={() => setNotifyUser(u)} title="Email & notification settings" style={{ background: "none", border: "none", cursor: "pointer", color: C.inkSoft }}><Bell size={14} /></button>
+            <button onClick={() => setNotifyUser(u)} title="Email, designations and digests" style={{ background: "none", border: "none", cursor: "pointer", color: C.inkSoft }}><Pencil size={14} /></button>
             {u.id !== currentUser.id && <button onClick={() => remove(u)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rust }}><Trash2 size={14} /></button>}
           </div>
         </div>
@@ -5183,18 +5565,22 @@ function MemberManagementInline({ currentUser }) {
       <div style={{ fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink, margin: "16px 0 8px" }}>Add a member<InfoTip k="addMember" /></div>
       <div className="hk-grid-3" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
         <Field label="Username" required><input style={inputStyle} value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></Field>
-        <Field label="Temporary password" required><PasswordInput style={inputStyle} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} autoComplete="new-password" /></Field>
+        <Field label="Temporary password" required>
+          <div style={{ display: "flex", gap: 6, alignItems: "stretch" }}>
+            <div style={{ flex: 1, minWidth: 0 }}><PasswordInput style={inputStyle} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} autoComplete="new-password" /></div>
+            <Btn variant="ghost" onClick={() => setForm({ ...form, password: genTempPassword() })} title="Generate another"><RefreshCw size={14} /></Btn>
+          </div>
+        </Field>
         <Field label="Role">
           <select style={inputStyle} value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
             {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
           </select>
         </Field>
       </div>
-      <Field label="Email (optional — notifications and self-service password reset)"><input type="email" style={inputStyle} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="name@example.com" /></Field>
+      <Field label="Email (optional — notifications, self-service password reset, and emailing the sign-in details)"><input type="email" style={inputStyle} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="name@example.com" /></Field>
       <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 10 }}>
-        The password you set here is temporary: the member must choose their own the first time they sign in. At least {MIN_PASSWORD} characters.<br />
-        Owner: full access. Manager: same rights as Owner, but can only delete records they created, and can't reach this page. Executor: does the work — submits requests, updates work orders. Guest: read-only.
-        Notification preferences (which digests they receive) can be set after adding them, via the bell icon.
+        A temporary password is suggested; you can change it. The member must choose their own the first time they sign in. At least {MIN_PASSWORD} characters. If you enter an email, you'll be asked whether to email them their username, temporary password and a sign-in link (needs SMTP).<br />
+        Owner: full access. Manager: same rights as Owner, but can only delete records they created, and can't reach the Owner tools. Executor: does the work — submits requests, updates work orders; Owners can add designations (Planner, Scheduler, Specialist) with the pencil icon. Guest: read-only.
       </div>
       {error && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.rust, marginBottom: 10 }}>{error}</div>}
       <div style={{ display: "flex", justifyContent: "flex-end" }}>
@@ -5751,7 +6137,7 @@ function AlarmsView({ data, update, role, currentUser, onAlarmsChanged, features
               setMapForm({ ...mapForm, assetId: assetId || null, locationId: asset ? asset.locationId : mapForm.locationId });
             }}>
               <option value="">— none —</option>
-              {data.assets.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+              {liveAssets(data).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
             </select>
           </Field>
           <Field label="Location (optional)">
@@ -5783,7 +6169,7 @@ function AlarmsView({ data, update, role, currentUser, onAlarmsChanged, features
             <Field label="Asset (optional)">
               <select style={inputStyle} value={manualForm.assetId || ""} onChange={(e) => setManualForm({ ...manualForm, assetId: e.target.value || "" })}>
                 <option value="">— none —</option>
-                {data.assets.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                {liveAssets(data).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
               </select>
             </Field>
           </div>
@@ -5814,6 +6200,7 @@ function PmWizardCatalogEditor({ data, update }) {
   const dialog = useDialog();
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState(null);
+  const [viewOpen, setViewOpen] = useState(false);
   const catalog = effectiveWizardCatalog(data);
   const ZONE_OPTIONS = CLIMATE_ZONES.filter((z) => z !== "Unknown");
   const [fType, setFType] = useState("");
@@ -5825,13 +6212,14 @@ function PmWizardCatalogEditor({ data, update }) {
     && (!fq.trim() || (i.title + " " + (i.description || "")).toLowerCase().includes(fq.trim().toLowerCase())));
 
   const openAdd = () => {
-    setForm({ type: fType || "Home", category: fCat || "", title: "", description: "", frequencyValue: 12, frequencyUnit: "months", allZones: true, zones: [] });
+    setForm({ type: fType || "Home", category: fCat || "", title: "", description: "", frequencyValue: 12, frequencyUnit: "months", crewRequired: 1, estHours: 1, allZones: true, zones: [] });
     setModal("add");
   };
   const openEdit = (item) => {
     setForm({
       id: item.id, type: catType(item), category: item.category || "", title: item.title, description: item.description || "",
       frequencyValue: item.frequencyValue || 12, frequencyUnit: item.frequencyUnit || "months",
+      crewRequired: item.crewRequired || 1, estHours: item.estHours || 1,
       allZones: item.zones === "all", zones: item.zones === "all" ? [] : (item.zones || []),
     });
     setModal("edit");
@@ -5850,6 +6238,8 @@ function PmWizardCatalogEditor({ data, update }) {
       description: form.description.trim(),
       frequencyValue: Number(form.frequencyValue) || 1,
       frequencyUnit: form.frequencyUnit,
+      crewRequired: Number(form.crewRequired) >= 1 ? Number(form.crewRequired) : 1,
+      estHours: Number(form.estHours) > 0 ? Number(form.estHours) : 1,
       zones: form.allZones ? "all" : form.zones,
     };
     update((d) => {
@@ -5876,20 +6266,8 @@ function PmWizardCatalogEditor({ data, update }) {
     update((d) => { d.pmWizardCatalog = PM_WIZARD_CATALOG.map((i) => ({ ...i })); return d; });
   };
 
-  return (
-    <Panel style={{ padding: 18 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10, marginBottom: 4 }}>
-        <div>
-          <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink }}>PM Wizard starter catalogue<InfoTip k="pmWizardCatalog" /></div>
-          <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint, marginTop: 2 }}>
-            The suggested maintenance list the PM setup wizard offers when it's run on a {levelLabel(LOCATION_LEVELS[SETTINGS.terms.siteLevelIndex])}. Editing this doesn't change any PM Base already created.
-          </div>
-        </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <Btn small variant="ghost" onClick={resetToDefault}>Reset to default</Btn>
-          <Btn small onClick={openAdd}><Plus size={13} /> Add entry</Btn>
-        </div>
-      </div>
+  const listBody = (
+    <>
       {catalog.length === 0 && <Empty text="No starter-catalogue entries — the wizard will offer nothing to pick from until you add some." />}
       {catalog.length > 0 && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 8, margin: "10px 0 4px" }}>
@@ -5920,6 +6298,31 @@ function PmWizardCatalogEditor({ data, update }) {
           </div>
         </div>
       ))}
+    </>
+  );
+  const btns = (
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+      <Btn small variant="ghost" onClick={resetToDefault}>Reset to default</Btn>
+      <Btn small onClick={openAdd}><Plus size={13} /> Add an entry</Btn>
+    </div>
+  );
+  return (
+    <Panel style={{ padding: 18 }}>
+      <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink }}>PM Wizard starter catalogue<InfoTip k="pmWizardCatalog" /></div>
+      <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint, margin: "2px 0 12px" }}>
+        The suggested maintenance list the PM setup wizard offers when it's run on a {levelLabel(LOCATION_LEVELS[SETTINGS.terms.siteLevelIndex])}. Editing this doesn't change any PM Base already created. {catalog.length} entries.
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <Btn small variant="ghost" onClick={resetToDefault}>Reset to default</Btn>
+        <Btn small onClick={openAdd}><Plus size={13} /> Add an entry</Btn>
+        <Btn small variant="primary" onClick={() => setViewOpen(true)}><Search size={13} /> View entries</Btn>
+      </div>
+      {viewOpen && (
+        <Modal title="PM Wizard starter catalogue — entries" info="pmWizardCatalog" onClose={() => setViewOpen(false)} wide>
+          <div style={{ marginBottom: 8 }}>{btns}</div>
+          {listBody}
+        </Modal>
+      )}
       {modal && form && (
         <Modal title={modal === "edit" ? "Edit starter-catalogue entry" : "Add starter-catalogue entry"} info="catEntry" onClose={() => { setModal(null); setForm(null); }} wide>
           <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -5941,6 +6344,10 @@ function PmWizardCatalogEditor({ data, update }) {
                 {FREQUENCY_UNITS.map((u) => <option key={u} value={u}>{u}</option>)}
               </select>
             </Field>
+          </div>
+          <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <Field label="Executors required"><input type="number" min="1" step="1" style={inputStyle} value={form.crewRequired} onChange={(e) => setForm({ ...form, crewRequired: e.target.value })} /></Field>
+            <Field label="Hours per executor"><input type="number" min="0" step="0.25" style={inputStyle} value={form.estHours} onChange={(e) => setForm({ ...form, estHours: e.target.value })} /></Field>
           </div>
           <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -2, marginBottom: 6 }}>
             Every entry created here becomes a Calendar / Non-fixed PM Base — matching what the wizard has always generated. Meter- and seasonal-triggered PM still need to be set up by hand afterward, from Work Orders.
@@ -5992,7 +6399,7 @@ function BrandingCard() {
   const { onConfigChanged } = useContext(SettingsContext);
   const fromSettings = () => ({
     name: SETTINGS.brand.name, shortName: SETTINGS.brand.shortName, tagline: SETTINGS.brand.tagline,
-    topBarTitle: SETTINGS.brand.topBarTitle, colors: { ...SETTINGS.brand.colors },
+    topBarTitle: SETTINGS.brand.topBarTitle, logoWrench: !!SETTINGS.brand.logoWrench, colors: { ...SETTINGS.brand.colors },
     levels: [...SETTINGS.terms.locationLevels], siteLevelIndex: SETTINGS.terms.siteLevelIndex, orgNoun: SETTINGS.terms.orgNoun,
   });
   const [f, setF] = useState(fromSettings);
@@ -6022,7 +6429,7 @@ function BrandingCard() {
     setBusy("save");
     try {
       const resp = await api.saveSettings({
-        brand: { name: f.name.trim(), shortName: f.shortName.trim(), tagline: f.tagline.trim(), topBarTitle: f.topBarTitle.trim(), colors: f.colors },
+        brand: { name: f.name.trim(), shortName: f.shortName.trim(), tagline: f.tagline.trim(), topBarTitle: f.topBarTitle.trim(), logoWrench: !!f.logoWrench, colors: f.colors },
         terms: { orgNoun: f.orgNoun.trim(), locationLevels: trimmed, siteLevelIndex: Number(f.siteLevelIndex) },
         features: { ...SETTINGS.features },
       });
@@ -6095,6 +6502,12 @@ function BrandingCard() {
         <input ref={logoRef} type="file" accept="image/png,image/jpeg,image/svg+xml,image/webp" style={{ display: "none" }} onChange={pickLogo} />
         <span style={note}>PNG, JPG, SVG or WebP, up to 512 KB.</span>
       </div>
+      {SETTINGS.brand.logoUrl && (
+        <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, fontFamily: FONT_BODY, fontSize: 13, color: C.ink, cursor: "pointer" }}>
+          <input type="checkbox" checked={!!f.logoWrench} onChange={(e) => set("logoWrench", e.target.checked)} />
+          Overlay the orange wrench from the built-in logo (combined brand)
+        </label>
+      )}
 
       <div style={sub}>Colours</div>
       <div style={grid}>
@@ -6118,7 +6531,7 @@ function BrandingCard() {
             {f.levels.map((l, i) => <option key={i} value={i}>{l.trim() || `Level ${i + 1}`}</option>)}
           </select>
         </Field>
-        <Field label="Word for “household” (e.g. organization)"><input style={inputStyle} value={f.orgNoun} maxLength={20} onChange={(e) => set("orgNoun", e.target.value)} /></Field>
+        <Field label="Word for organization (e.g. Organization, Company, Household)"><input style={inputStyle} value={f.orgNoun} maxLength={20} onChange={(e) => set("orgNoun", e.target.value)} /></Field>
       </div>
 
       {errs.length > 0 && <div style={{ ...note, color: C.rust, marginTop: 4 }}>{errs.map((e, i) => <div key={i}>{e}</div>)}</div>}
@@ -6139,7 +6552,7 @@ function FeaturesCard() {
     setBusy(true);
     try {
       const resp = await api.saveSettings({
-        brand: { name: SETTINGS.brand.name, shortName: SETTINGS.brand.shortName, tagline: SETTINGS.brand.tagline, topBarTitle: SETTINGS.brand.topBarTitle, colors: SETTINGS.brand.colors },
+        brand: { name: SETTINGS.brand.name, shortName: SETTINGS.brand.shortName, tagline: SETTINGS.brand.tagline, topBarTitle: SETTINGS.brand.topBarTitle, logoWrench: !!SETTINGS.brand.logoWrench, colors: SETTINGS.brand.colors },
         terms: { orgNoun: SETTINGS.terms.orgNoun, locationLevels: SETTINGS.terms.locationLevels, siteLevelIndex: SETTINGS.terms.siteLevelIndex },
         features: { ...SETTINGS.features, [key]: on },
       });
@@ -6199,6 +6612,18 @@ function FeaturesCard() {
    live in PAGE_INFO above.
 ============================================================ */
 const FEATURE_INFO = {
+  bomCopy: ["Copies the bill of materials from another asset onto this one, so similar equipment does not need to be typed twice.", "Choose the source asset and select Copy. Rows are added to the existing list.", "Managers and owners."],
+  designations: ["Designations give an executor extra duties: Planner (assign and plan work), Scheduler (use the Workforce schedule) and Specialist (flagged for specialist jobs).", "Tick them on the member row. Owners and managers can also be flagged as an Executor so that work can be assigned to them (off by default).", "Owners only."],
+  digests: ["The emails you receive: the daily digests that apply to your role and designations, such as alarms, low stock, my schedule and team schedule.", "Tick the ones you want and save. Emails only go out when your Owner has set up email and your account has an address.", "Everyone with an email address."],
+  editShift: ["Change or delete one scheduled shift.", "Tap a shift on the Workforce schedule, adjust start, duration or end (fill any two) or pick a daily template, then Save, or choose Delete shift.", "Owners, managers and schedulers."],
+  metrics: ["Owner measures of how maintenance is running over the chosen period.", "Pick a period at the top right. Lead time and verification time are only measured for work from v2.6 onward.", "Owners only."],
+  mWr: ["How many work requests each person entered.", "Nothing to maintain; it counts requests in the period.", "Owners only."],
+  mEff: ["Hours booked against the estimate on completed work orders, per executor.", "Under 100% means faster than estimated; over 100% means slower.", "Owners only."],
+  mComp: ["Of the work orders scheduled for a person, the share they worked on the scheduled day.", "Nothing to maintain; it uses scheduled dates and logged hours.", "Owners only."],
+  mLead: ["Average time from a work request being created to it becoming a work order.", "Only requests created from v2.6 onward are included.", "Owners only."],
+  mVerify: ["Average time from a work order being Completed to it being verified and Closed.", "Only work completed from v2.6 onward is included.", "Owners only."],
+  mReactive: ["The share of work orders that were unplanned, out of all work orders in the period. Lower is generally better.", "Nothing to maintain; it counts work order types.", "Owners only."],
+  removeAsset: ["Retires an asset. If nothing links to it, it can be deleted permanently; otherwise it is archived (hidden, history kept).", "Read the pop-up and choose Archive or, when offered, Delete.", "Owners and managers; managers can delete only unlinked assets."],
   // ---- cards and sections
   nextDays: ["A seven-day look-ahead of work orders that are scheduled to start soon.", "Each box is one day. Click a work order to open it.", "Everyone can see it."],
   wrAwaiting: ["Requests that have been submitted and are waiting for a manager or owner to decide.", "Click a request to jump to the Work Requests page. A manager then converts, merges, asks for more information or declines it.", "Everyone sees the list; managers and owners act on it."],
@@ -6214,7 +6639,7 @@ const FEATURE_INFO = {
   comments: ["The running conversation and notes on a work order, with who wrote each and when.", "Type a comment and select Add. Completing a Scheduled work order also requires a comment, which is added here.", "Executors, managers and owners can comment."],
   spend: ["Costs logged on work orders, added up by asset category, so you can see where upkeep money goes.", "Nothing to maintain here; enter cost on work orders and this updates itself.", "Everyone can view."],
   backup: ["Safety copies of your data and tools for bulk editing in Excel.", "Export to Excel for a spreadsheet of every record. Full backup (.zip) adds photos. Import lets you pick tabs from a file, checks it first and then applies it. Nightly snapshots are kept automatically.", "Owners only."],
-  members: ["Everyone who can sign in, with their role.", "Use the bell to set a member's email and which daily digests they receive, the key to set a temporary password, and the bin to remove them. Roles are Owner, Manager, Executor or Guest.", "Owners only."],
+  members: ["Everyone who can sign in, with their role.", "Use the member buttons to set an email and designations, reset the password, or remove them. Roles are Owner, Manager, Executor or Guest.", "Owners only."],
   addMember: ["Creates a new account.", "Enter a username, a temporary password (they must change it at first sign-in), a role and, optionally, an email address.", "Owners only."],
   delWo: ["Permanently deletes a work order found by its number or title. Use it for entries created by mistake.", "Search, select the work order and confirm. This cannot be undone and the number is not reused.", "Owners only."],
   delWr: ["Permanently deletes a work request found by its number or title.", "Search, select it and confirm. This cannot be undone.", "Owners only."],
@@ -6422,18 +6847,14 @@ function templateSummary(t) {
 /* ---------- shift editors ---------- */
 function ShiftEditor({ value, onChange, compact }) {
   const v = value || blankShift();
-  const durs = v.dur !== "" && v.dur != null && !SHIFT_DURS.includes(Number(v.dur)) ? [...SHIFT_DURS, Number(v.dur)].sort((a, b) => a - b) : SHIFT_DURS;
   const lab = { fontFamily: FONT_BODY, fontSize: 10.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: "0.03em", marginBottom: 2 };
   const s = toMin(v.start), e = toMin(v.end);
   const overnight = s != null && e != null && e <= s;
   return (
     <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
       <div><div style={lab}>Start</div><input type="time" aria-label="Shift start" style={{ ...inputStyle, width: compact ? 112 : 124 }} value={v.start || ""} onChange={(ev) => onChange(editShift(v, "start", ev.target.value))} /></div>
-      <div><div style={lab}>Duration</div>
-        <select aria-label="Shift duration" style={{ ...inputStyle, width: compact ? 92 : 104 }} value={v.dur === "" || v.dur == null ? "" : String(Number(v.dur))} onChange={(ev) => onChange(editShift(v, "dur", ev.target.value))}>
-          <option value="">—</option>
-          {durs.map((d) => <option key={d} value={String(d)}>{fmtH(d)} h</option>)}
-        </select>
+      <div><div style={lab}>Duration (hours)</div>
+        <input type="number" inputMode="decimal" min="0" max="24" step="any" aria-label="Shift duration in hours" placeholder="e.g. 7.5" style={{ ...inputStyle, width: compact ? 92 : 104 }} value={v.dur === "" || v.dur == null ? "" : v.dur} onChange={(ev) => onChange(editShift(v, "dur", ev.target.value))} />
       </div>
       <div><div style={lab}>End</div><input type="time" aria-label="Shift end" style={{ ...inputStyle, width: compact ? 112 : 124 }} value={v.end || ""} onChange={(ev) => onChange(editShift(v, "end", ev.target.value))} /></div>
       {overnight && <span style={{ fontFamily: FONT_BODY, fontSize: 11, color: C.orange, fontWeight: 700, paddingBottom: 9 }}>Overnight (ends next day)</span>}
@@ -6464,7 +6885,9 @@ function WeeklyEditor({ value, onChange }) {
 function useStaff() {
   const [users, setUsers] = useState([]);
   useEffect(() => { api.listUsers().then(setUsers).catch(() => setUsers([])); }, []);
-  return users.filter((u) => u.role === "Owner" || u.role === "Manager" || u.role === "Executor");
+  const list = users.filter(isExecPerson);
+  list.all = users.filter((u) => u.role !== "Guest");
+  return list;
 }
 function ExecutorColoursCard({ data, update }) {
   const staff = useStaff();
@@ -6569,7 +6992,7 @@ function allTimeEntries(data) {
 }
 function HoursCard({ data, scope, userId }) {
   const staff = useStaff();
-  const name = (id) => (staff.find((u) => u.id === id) || {}).username || "Former member";
+  const name = (id) => ((staff.all || staff).find((u) => u.id === id) || {}).username || "Former member";
   const entries = allTimeEntries(data).filter((t) => scope === "all" || t.executorId === userId);
   const today = todayLocal(), d7 = addDaysISO(today, -6), d30 = addDaysISO(today, -29);
   const sum = (arr) => arr.reduce((s, t) => s + (Number(t.hours) || 0), 0);
@@ -6646,8 +7069,10 @@ function HoursWorkedModal({ wo, staff, currentUserId, onCancel, onSave }) {
 }
 
 /* ---------- work order form: executors, estimate, crew ---------- */
-function ExecutorPicker({ obj, onChange, users }) {
+// `part`: "all" (default), "crew" (executors required + hours per executor) or "select" (who is assigned).
+function ExecutorPicker({ obj, onChange, users, part = "all", crewRequiredFields = false }) {
   if (!execOn()) {
+    if (part === "crew") return null;
     return (
       <Field label="Executor">
         <select style={inputStyle} value={obj.executorId || ""} onChange={(e) => onChange({ executorId: e.target.value })}>
@@ -6659,30 +7084,35 @@ function ExecutorPicker({ obj, onChange, users }) {
   }
   const ids = execIdsOf(obj);
   const toggle = (id) => { const next = ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]; onChange({ executorIds: next, executorId: next[0] || "" }); };
-  return (
-    <>
-      <Field label="Executors">
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-          {users.map((u) => {
-            const on = ids.includes(u.id);
-            return (
-              <button key={u.id} type="button" onClick={() => toggle(u.id)} aria-pressed={on} title={`${u.username} (${u.role})`}
-                style={{ cursor: "pointer", fontFamily: FONT_BODY, fontSize: 12, fontWeight: 600, padding: "4px 10px", borderRadius: 12, border: `1px solid ${on ? C.navy : C.line}`, background: on ? C.navy : "transparent", color: on ? "#fff" : C.ink }}>
-                {on ? "✓ " : ""}{u.username}
-              </button>
-            );
-          })}
-          {users.length === 0 && <span style={{ fontSize: 12, color: C.inkFaint }}>No accounts</span>}
-        </div>
-      </Field>
-      <Field label="Estimated hours (per executor)">
-        <input type="number" min="0" step="0.25" style={inputStyle} value={obj.estHours || ""} onChange={(e) => onChange({ estHours: e.target.value })} placeholder="e.g. 2" />
-      </Field>
-      <Field label="Executors required">
+  const crew = (
+    <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+      <Field label="Executors required" required={crewRequiredFields}>
         <input type="number" min="1" step="1" style={inputStyle} value={obj.crewRequired || ""} onChange={(e) => onChange({ crewRequired: e.target.value })} placeholder="1" />
       </Field>
-    </>
+      <Field label="Hours per executor" required={crewRequiredFields}>
+        <input type="number" min="0" step="0.25" style={inputStyle} value={obj.estHours || ""} onChange={(e) => onChange({ estHours: e.target.value })} placeholder="e.g. 2" />
+      </Field>
+    </div>
   );
+  const select = (
+    <Field label="Executors">
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {users.map((u) => {
+          const on = ids.includes(u.id);
+          return (
+            <button key={u.id} type="button" onClick={() => toggle(u.id)} aria-pressed={on} title={`${u.username} (${u.role})`}
+              style={{ cursor: "pointer", fontFamily: FONT_BODY, fontSize: 12, fontWeight: 600, padding: "4px 10px", borderRadius: 12, border: `1px solid ${on ? C.navy : C.line}`, background: on ? C.navy : "transparent", color: on ? "#fff" : C.ink }}>
+              {on ? "✓ " : ""}{u.username}
+            </button>
+          );
+        })}
+        {users.length === 0 && <span style={{ fontSize: 12, color: C.inkFaint }}>No one is available — mark people as executors under Tools and settings</span>}
+      </div>
+    </Field>
+  );
+  if (part === "crew") return crew;
+  if (part === "select") return select;
+  return <>{select}{crew}</>;
 }
 /* ============================================================
    v2.4 — PLANNING CALENDAR (Labour assignment + Workforce schedule)
@@ -6695,6 +7125,11 @@ const PC_CSS = `
 .pc-card{cursor:grab;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;} .pc-card:active{cursor:grabbing;}
 .pc-held{outline:2px solid var(--hk-orange)!important;outline-offset:1px;box-shadow:0 0 0 4px color-mix(in srgb,var(--hk-orange) 25%,transparent);}
 @media (pointer:coarse){.pc-card{cursor:pointer;}}
+/* v2.6: on narrow screens the work orders to place sit above the calendar, in a card about three work orders tall */
+@media (max-width:860px){
+  .pc-split{grid-template-columns:minmax(0,1fr)!important;}
+  .pc-side{order:-1;position:static!important;max-height:var(--pc-side-h,262px)!important;overflow-y:auto!important;}
+}
 `;
 const SLOT_H = 22;
 
@@ -6792,17 +7227,18 @@ function PlanWoCard({ w, data, fromExec, draggable, onOpen, onRemove, tight, sty
 
 function PlanningCalendar({ kind, data, update, role, currentUserId, goToOrder, goTemplates }) {
   const labour = kind === "labour";
-  const canEdit = isAdmin(role);
+  const canEdit = scheduleRole(role);
   const dialog = useDialog();
   const staff = useStaff();
   const wfOn = workforceOn();
   const hourly = labour && hourlyOn();
   const [view, setView] = useState("month");
   const [anchor, setAnchor] = useState(todayLocal());
-  const [execSel, setExecSel] = useState(labour && role === "Executor" ? [currentUserId] : []);
+  const [execSel, setExecSel] = useState(labour && role === "Executor" && !scheduleRole(role) ? [currentUserId] : []);
   const [locFilter, setLocFilter] = useState("");
   const [unschedOnly, setUnschedOnly] = useState(true);
   const [popup, setPopup] = useState(null);
+  const [editShift, setEditShift] = useState(null); // shift id being edited
 
   const shifts = data.workShifts || [];
   const allowedLocs = locFilter ? descendantIds(data.locations, locFilter) : null;
@@ -6811,14 +7247,14 @@ function PlanningCalendar({ kind, data, update, role, currentUserId, goToOrder, 
   const wosOn = (date) => wos.filter((w) => w.scheduledDate === date);
   const worksOn = (id, date) => shifts.some((s) => s.date === date && s.executorId === id);
   const dayShifts = (date) => shifts.filter((s) => s.date === date);
-  const nameOf = (id) => (staff.find((u) => u.id === id) || {}).username || "Former member";
+  const nameOf = (id) => ((staff.all || staff).find((u) => u.id === id) || {}).username || "Former member";
 
   // Executors shown for a day on the labour screens.
   const colsFor = (date) => staff.filter((u) => {
     if (execSel.length && !execSel.includes(u.id)) return false;
     const hasWo = wosOn(date).some((w) => execIdsOf(w).includes(u.id));
     if (wfOn) return worksOn(u.id, date) || hasWo;
-    return u.role === "Executor" || execSel.includes(u.id) || hasWo;
+    return isExecPerson(u) || execSel.includes(u.id) || hasWo;
   });
   const hoursFor = (id, date) => wosOn(date).filter((w) => execIdsOf(w).includes(id)).reduce((s, w) => s + (Number(w.estHours) || 0), 0);
 
@@ -6914,9 +7350,12 @@ function PlanningCalendar({ kind, data, update, role, currentUserId, goToOrder, 
   const shiftChip = (s, big) => {
     const col = execColor(data, s.executorId);
     return (
-      <div key={s.id} data-shift={s.id} title={`${nameOf(s.executorId)} ${shiftText(s)}`} style={{ background: col, color: textOn(col), borderRadius: 2, padding: "2px 4px", marginBottom: 2, fontFamily: FONT_BODY, fontSize: big ? 11.5 : 10.5, fontWeight: 600, display: "flex", alignItems: "center", gap: 3, minWidth: 0 }}>
+      <div key={s.id} data-shift={s.id} role={canEdit ? "button" : undefined} tabIndex={canEdit ? 0 : undefined}
+        title={`${nameOf(s.executorId)} ${shiftText(s)}${canEdit ? " — tap to edit or delete" : ""}`}
+        onClick={(e) => { if (!canEdit) return; if (HELD.v) return; e.stopPropagation(); setEditShift(s.id); }}
+        onKeyDown={(e) => { if (canEdit && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setEditShift(s.id); } }}
+        style={{ background: col, color: textOn(col), borderRadius: 2, padding: "2px 4px", marginBottom: 2, fontFamily: FONT_BODY, fontSize: big ? 12 : 10.5, fontWeight: 600, display: "flex", alignItems: "center", gap: 3, cursor: canEdit ? "pointer" : "default", minWidth: 0 }}>
         <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{nameOf(s.executorId)} {shiftText(s)}</span>
-        {canEdit && <button type="button" title="Remove this shift" onClick={(e) => { e.stopPropagation(); removeShift(s.id); }} style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", padding: 0, display: "flex" }}><X size={10} /></button>}
       </div>
     );
   };
@@ -7201,12 +7640,12 @@ function PlanningCalendar({ kind, data, update, role, currentUserId, goToOrder, 
           </div>
         ) : null}
       />
-      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+      <div data-title style={{ fontFamily: FONT_HEAD, fontSize: 17, fontWeight: 700, color: C.ink, marginBottom: 8 }}>{title}</div>
+      <div data-controls style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
         <Btn small variant="ghost" onClick={() => step(-1)} title="Previous"><ChevronLeft size={14} /></Btn>
         <Btn small variant="ghost" onClick={() => step(1)} title="Next"><ChevronRight size={14} /></Btn>
         <Btn small variant="ghost" onClick={up} disabled={view === "month"} title={view === "day" ? "Up to the week" : "Up to the month"}><ChevronUp size={14} /></Btn>
         <Btn small variant="ghost" onClick={() => setAnchor(todayLocal())}>Today</Btn>
-        <span data-title style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 700, color: C.ink, minWidth: 180 }}>{title}</span>
         <div style={{ display: "inline-flex", border: `1px solid ${C.line}`, borderRadius: 3, overflow: "hidden" }}>{seg("month", "Month")}{seg("week", "Week")}{seg("day", "Day")}</div>
         <select aria-label="Filter by location" style={{ ...inputStyle, width: "auto", maxWidth: 220 }} value={locFilter} onChange={(e) => setLocFilter(e.target.value)}>
           <option value="">All locations</option>
@@ -7239,10 +7678,12 @@ function PlanningCalendar({ kind, data, update, role, currentUserId, goToOrder, 
           </div>
         );
       })()}
-      <div style={{ display: "grid", gridTemplateColumns: labour && canEdit ? "minmax(0,1fr) 236px" : "minmax(0,1fr)", gap: 14, alignItems: "start" }}>
-        <div style={{ minWidth: 0 }}>{view === "month" ? renderMonth() : view === "week" ? renderWeek() : renderDay()}</div>
+      <div className="pc-split" style={{ display: "grid", gridTemplateColumns: labour && canEdit ? "minmax(0,1fr) 236px" : "minmax(0,1fr)", gap: 14, alignItems: "start" }}>
+        <div style={{ minWidth: 0 }}>
+          {view === "day" ? renderDay() : <div className="hk-hscroll" data-hscroll={view}><div className="hk-hscroll-in">{view === "month" ? renderMonth() : renderWeek()}</div></div>}
+        </div>
         {labour && canEdit && (
-          <Panel style={{ padding: 10, position: "sticky", top: 70, maxHeight: "calc(100vh - 100px)", overflowY: "auto" }}>
+          <Panel className="pc-side" style={{ padding: 10, position: "sticky", top: 70, maxHeight: "calc(100vh - 100px)", overflowY: "auto" }}>
             <div data-sidelist style={{ fontFamily: FONT_HEAD, fontSize: 13.5, fontWeight: 700, color: C.ink }}>Work orders to place<InfoTip k="sideList" /></div>
             <div style={{ fontFamily: FONT_BODY, fontSize: 11, color: C.inkFaint, margin: "2px 0 6px" }}>By due date. Drag (or tap, then tap the target) onto a person (week or day view) or a calendar day.</div>
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontFamily: FONT_BODY, fontSize: 12, color: C.ink, marginBottom: 8 }}>
@@ -7261,6 +7702,16 @@ function PlanningCalendar({ kind, data, update, role, currentUserId, goToOrder, 
           </Panel>
         )}
       </div>
+      {editShift && (() => {
+        const sh = shifts.find((x) => x.id === editShift);
+        if (!sh) return null;
+        return (
+          <EditShiftModal shift={sh} name={nameOf(sh.executorId)} templates={(data.shiftTemplates || []).filter((t) => t.kind === "daily")}
+            onClose={() => setEditShift(null)}
+            onDelete={() => { removeShift(sh.id); setEditShift(null); }}
+            onSave={(v) => { update((d) => { const x = (d.workShifts || []).find((q) => q.id === sh.id); if (x) { x.start = v.start; x.end = v.end; } return d; }); setEditShift(null); }} />
+        );
+      })()}
       {popup && (
         <ApplyShiftModal
           popup={popup} data={data} name={nameOf(popup.execId)}
@@ -7276,6 +7727,41 @@ function PlanningCalendar({ kind, data, update, role, currentUserId, goToOrder, 
         />
       )}
     </div>
+  );
+}
+
+// Edit or delete a single scheduled shift: change the template, start, end or duration.
+function EditShiftModal({ shift, name, templates, onClose, onSave, onDelete }) {
+  const initial = () => {
+    const s = toMin(shift.start), e = toMin(shift.end);
+    const diff = s != null && e != null ? ((e - s + 1440) % 1440) / 60 : "";
+    return { start: shift.start, end: shift.end, dur: diff === 0 ? "" : String(diff), touched: ["start", "end"] };
+  };
+  const [v, setV] = useState(initial);
+  const [err, setErr] = useState("");
+  const when = parseISO(shift.date).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+  const save = () => { if (!shiftOk(v)) { setErr("Fill in any two of start, duration and end."); return; } onSave(v); };
+  return (
+    <Modal title={`Edit shift — ${name}`} info="editShift" onClose={onClose}>
+      <div data-edit-shift style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.inkSoft, marginBottom: 12 }}>{name} on {when}.</div>
+      {templates.length > 0 && (
+        <Field label="Use a template">
+          <select aria-label="Use a daily template" style={inputStyle} value="" onChange={(e) => { const t = templates.find((x) => x.id === e.target.value); if (t && t.shift) setV({ ...blankShift(), ...t.shift }); }}>
+            <option value="">— keep the times below —</option>
+            {templates.map((t) => <option key={t.id} value={t.id}>{t.name} — {templateSummary(t)}</option>)}
+          </select>
+        </Field>
+      )}
+      <ShiftEditor value={v} onChange={setV} />
+      {err && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.rust, marginTop: 8 }}>{err}</div>}
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginTop: 16 }}>
+        <Btn variant="danger" onClick={onDelete}><Trash2 size={13} /> Delete shift</Btn>
+        <div style={{ display: "flex", gap: 8 }}>
+          <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+          <Btn variant="primary" onClick={save}>Save</Btn>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -7375,7 +7861,7 @@ function ToolsSection({ title, sub }) {
     </div>
   );
 }
-function ToolsView({ data, update, currentUser, role, onOpenAccount }) {
+function ToolsView({ data, update, currentUser, role, account }) {
   const owner = role === "Owner", mgr = isAdmin(role);
   useEffect(() => {
     if (!TOOLS_FOCUS) return;
@@ -7385,18 +7871,14 @@ function ToolsView({ data, update, currentUser, role, onOpenAccount }) {
   const me = currentUser || {};
   return (
     <div>
-      <SectionHeader title="Tools" subtitle={owner ? "Everything you can set up: your account, team scheduling tools, accounts, branding, backups and record clean-up." : mgr ? "Your account, hours and team scheduling tools." : "Your account and hours."} info={PAGE_INFO.owner} />
+      <SectionHeader title="Tools and settings" subtitle={owner ? "Everything you can set up: your account, team scheduling tools, accounts, branding, backups and record clean-up." : mgr ? "Your account, hours and team scheduling tools." : "Your account and hours."} info={PAGE_INFO.owner} />
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <ToolsSection title="Executor tools" sub="Available to everyone who works on maintenance." />
-        <Panel style={{ padding: 18 }}>
-          <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 4 }}>My account<InfoTip k="myAccount" /></div>
-          <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkSoft, marginBottom: 10 }}>Change your email address (used for notifications and password reset) and your password.</div>
-          <Btn small onClick={onOpenAccount}><Key size={13} /> Open my account</Btn>
-        </Panel>
-        {execOn() && <HoursCard data={data} scope="me" userId={me.id} />}
-        {mgr && <ToolsSection title="Manager tools" sub="Team scheduling and reporting." />}
-        {mgr && <ExecutorColoursCard data={data} update={update} />}
-        {mgr && <ShiftTemplatesCard data={data} update={update} />}
+        {role !== "Guest" && <ToolsSection title="Executor tools" sub="Available to everyone who works on maintenance." />}
+        <MyAccountCard user={{ ...currentUser, color: execColor(data, currentUser.id) }} {...account} />
+        {execOn() && isExecPerson(me) && <HoursCard data={data} scope="me" userId={me.id} />}
+        {(mgr || canSchedule()) && <ToolsSection title={mgr ? "Manager tools" : "Scheduler tools"} sub="Team scheduling and reporting." />}
+        {(mgr || canSchedule()) && <ExecutorColoursCard data={data} update={update} />}
+        {(mgr || canSchedule()) && <ShiftTemplatesCard data={data} update={update} />}
         {mgr && execOn() && <HoursCard data={data} scope="all" userId={me.id} />}
         {owner && <ToolsSection title="Owner tools" sub="Accounts, branding, features, backups and clean-up." />}
         {owner && <MemberManagementInline currentUser={currentUser} />}
@@ -7486,8 +7968,8 @@ function AuthScreen({ onAuthed }) {
 
   const linkStyle = { background: "none", border: "none", padding: 0, color: C.navy, cursor: "pointer", fontFamily: FONT_BODY, fontSize: 12.5, textDecoration: "underline" };
   const subtitle = {
-    setup: term("Create the first Owner account to set up your household."),
-    login: term("Sign in to your household."),
+    setup: "Create the first Owner account.",
+    login: "Sign in",
     forgot: "Reset your password",
     forgotSent: "Check your email",
     reset: "Choose a new password",
@@ -7539,7 +8021,6 @@ function AuthScreen({ onAuthed }) {
 // Shown (instead of the app) while an account's password is a temporary one
 // set by the Owner. Nothing else is reachable until it is replaced.
 function ForcedPasswordChange({ user, onDone, onLogout }) {
-  const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirmPw, setConfirmPw] = useState("");
   const [error, setError] = useState("");
@@ -7550,7 +8031,7 @@ function ForcedPasswordChange({ user, onDone, onLogout }) {
     if (problem) { setError(problem); return; }
     setError(""); setBusy(true);
     try {
-      const r = await api.changePassword(current, next);
+      const r = await api.changePassword("", next);
       onDone(r.user ? { ...user, ...r.user } : { ...user, mustChangePassword: false });
     } catch (err) { setError(err.message || "Couldn't change the password"); }
     finally { setBusy(false); }
@@ -7558,10 +8039,9 @@ function ForcedPasswordChange({ user, onDone, onLogout }) {
   return (
     <AuthCard subtitle={`Hi ${user.username} — choose a new password`}>
       <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkSoft, marginBottom: 14 }}>
-        Your password was set or reset by the Owner, so it's temporary. Enter it below, then choose a password of your own to continue.
+        Your password was set or reset by the Owner, so it's temporary. Choose a password of your own to continue.
       </div>
       <form onSubmit={submit}>
-        <Field label="Temporary password" required><PasswordInput style={inputStyle} value={current} onChange={(e) => setCurrent(e.target.value)} autoFocus required autoComplete="current-password" /></Field>
         <Field label="New password" required><PasswordInput style={inputStyle} value={next} onChange={(e) => setNext(e.target.value)} required autoComplete="new-password" /></Field>
         <Field label="Confirm new password" required><PasswordInput style={inputStyle} value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} required autoComplete="new-password" /></Field>
         <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 12 }}>At least {MIN_PASSWORD} characters, and different from the temporary one.</div>
@@ -7575,8 +8055,49 @@ function ForcedPasswordChange({ user, onDone, onLogout }) {
   );
 }
 
-// "My account": own email (also the password-reset address) and password.
-function AccountModal({ user, onClose, onUserChanged }) {
+// v2.6: "My account" lives on the Tools and settings page (it used to be a pop-up behind the key button).
+function Avatar({ user, color, size = 32 }) {
+  const initial = ((user && user.username) || "?").trim().charAt(0).toUpperCase();
+  if (user && user.avatar) {
+    return <img src={user.avatar} alt="" data-avatar="photo" style={{ width: size, height: size, borderRadius: "50%", objectFit: "cover", display: "block", flexShrink: 0 }} />;
+  }
+  return (
+    <span data-avatar="initial" aria-hidden="true" style={{ width: size, height: size, borderRadius: "50%", background: color || C.navy, color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", fontFamily: FONT_HEAD, fontWeight: 700, fontSize: Math.round(size * 0.44), flexShrink: 0 }}>{initial}</span>
+  );
+}
+// Centre-crops to a square and shrinks to a small JPEG data URL for the profile photo.
+async function avatarFromFile(file) {
+  const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
+  const edge = Math.min(bmp.width, bmp.height), N = 192;
+  const canvas = document.createElement("canvas"); canvas.width = N; canvas.height = N;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, N, N);
+  ctx.drawImage(bmp, (bmp.width - edge) / 2, (bmp.height - edge) / 2, edge, edge, 0, 0, N, N);
+  bmp.close && bmp.close();
+  return canvas.toDataURL("image/jpeg", 0.82);
+}
+function DigestSettings({ user, onSave, mailOk }) {
+  const opts = DIGEST_OPTIONS.filter((o) => digestAllowed(user, o));
+  const [busy, setBusy] = useState("");
+  const toggle = async (key, val) => { setBusy(key); try { await onSave({ [key]: val }); } finally { setBusy(""); } };
+  return (
+    <div id="tools-digests">
+      <div style={{ fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink, margin: "4px 0 6px" }}>Email digests<InfoTip k="digests" /></div>
+      <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginBottom: 8 }}>
+        Choose which items are emailed to you each day. You need an email address saved above{mailOk ? "" : ", and the server's email (SMTP) must be set up — it isn't yet"}. Only items that apply to your role and designations are listed.
+      </div>
+      {opts.length === 0 && <Empty text="No digests apply to your role." />}
+      {opts.map((o) => (
+        <label key={o.key} style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 8, fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink, cursor: "pointer" }}>
+          <input type="checkbox" checked={!!user[o.key]} disabled={busy === o.key} onChange={(e) => toggle(o.key, e.target.checked)} style={{ marginTop: 2 }} />
+          <span>{o.label}</span>
+        </label>
+      ))}
+    </div>
+  );
+}
+function MyAccountCard({ user, onUserChanged, theme, setTheme, installPrompt, doInstall, onSignOut }) {
+  const dialog = useDialog();
   const [email, setEmail] = useState(user.email || "");
   const [emailMsg, setEmailMsg] = useState("");
   const [current, setCurrent] = useState("");
@@ -7584,12 +8105,25 @@ function AccountModal({ user, onClose, onUserChanged }) {
   const [confirmPw, setConfirmPw] = useState("");
   const [pwMsg, setPwMsg] = useState({ text: "", bad: false });
   const [busy, setBusy] = useState(false);
+  const photoRef = useRef(null);
 
+  const patch = async (p) => {
+    const r = await api.updateProfile(p);
+    if (r && r.user) onUserChanged({ ...user, ...r.user });
+    return r;
+  };
   const saveEmail = async () => {
     setBusy(true); setEmailMsg("");
-    try { await api.updateProfile(email.trim()); onUserChanged({ ...user, email: email.trim() }); setEmailMsg("Saved."); }
+    try { await patch({ email: email.trim() }); setEmailMsg("Saved."); }
     catch (err) { setEmailMsg(err.message || "Couldn't save"); }
     finally { setBusy(false); }
+  };
+  const pickPhoto = async (e) => {
+    const file = e.target.files && e.target.files[0]; e.target.value = "";
+    if (!file) return;
+    if (!/^image\//.test(file.type)) { await dialog.alertMsg("Please choose an image file."); return; }
+    try { await patch({ avatar: await avatarFromFile(file) }); }
+    catch (err) { await dialog.alertMsg(err.message || "Couldn't use that photo."); }
   };
   const changePw = async () => {
     const problem = newPasswordProblem(next, confirmPw);
@@ -7603,17 +8137,50 @@ function AccountModal({ user, onClose, onUserChanged }) {
     finally { setBusy(false); }
   };
   const sub = { fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink, margin: "4px 0 8px" };
+  const rule = { borderTop: `1px solid ${C.lineSoft}`, paddingTop: 14, marginTop: 16 };
+  const desLabels = [...DESIGNATIONS.filter((d) => (user.designations || []).includes(d.key)).map((d) => d.label), ...((user.role === "Owner" || user.role === "Manager") && (user.designations || []).includes("executor") ? ["Executor"] : [])];
   return (
-    <Modal title={`My account — ${user.username}`} info="account" onClose={onClose}>
-      <div style={sub}>Email</div>
-      <Field label="Email address (used for notifications and to reset your password)">
-        <input type="email" style={inputStyle} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@example.com" />
-      </Field>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
-        <Btn small onClick={saveEmail} disabled={busy}>Save email</Btn>
-        {emailMsg && <span style={{ fontFamily: FONT_BODY, fontSize: 12, color: emailMsg === "Saved." ? C.olive : C.rust }}>{emailMsg}</span>}
+    <Panel style={{ padding: 18 }}>
+      <div id="tools-account" style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 4 }}>My account — {user.username}<InfoTip k="myAccount" /></div>
+      <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkSoft, marginBottom: 12 }}>{user.role}{desLabels.length ? ` · ${desLabels.join(", ")}` : ""}</div>
+
+      <div style={sub}>Profile photo</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", marginBottom: 6 }}>
+        <Avatar user={user} color={user.color} size={56} />
+        <Btn small variant="ghost" onClick={() => photoRef.current && photoRef.current.click()}><Upload size={13} /> {user.avatar ? "Change photo" : "Upload photo"}</Btn>
+        {user.avatar && <Btn small variant="ghost" onClick={() => patch({ avatar: "" })}>Remove photo</Btn>}
+        <input ref={photoRef} type="file" accept="image/*" style={{ display: "none" }} onChange={pickPhoto} />
+        <span style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint }}>Shown as a circle in the top bar. Without a photo you get your initial on your colour.</span>
       </div>
-      <div style={{ borderTop: `1px solid ${C.lineSoft}`, paddingTop: 14 }}>
+
+      <div style={rule}>
+        <div style={sub}>Email</div>
+        <Field label="Email address (used for notifications and to reset your password)">
+          <input type="email" style={inputStyle} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@example.com" />
+        </Field>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <Btn small onClick={saveEmail} disabled={busy}>Save email</Btn>
+          {emailMsg && <span style={{ fontFamily: FONT_BODY, fontSize: 12, color: emailMsg === "Saved." ? C.olive : C.rust }}>{emailMsg}</span>}
+        </div>
+      </div>
+
+      <div style={rule}><DigestSettings user={user} onSave={patch} mailOk={!!SETTINGS.mailConfigured} /></div>
+
+      <div style={rule}>
+        <div style={sub}>Appearance and app</div>
+        <Field label="Colour theme">
+          <select style={{ ...inputStyle, maxWidth: 260 }} value={theme} onChange={(e) => setTheme(e.target.value)}>
+            <option value="auto">Match my device</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </Field>
+        {installPrompt
+          ? <Btn small variant="ghost" onClick={doInstall}><Download size={13} /> Install app</Btn>
+          : <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint }}>Install app: your browser offers this when the app can be installed on this device (look for “Install” in the browser menu if the button doesn't appear here).</div>}
+      </div>
+
+      <div style={rule}>
         <div style={sub}>Change password</div>
         <Field label="Current password"><PasswordInput style={inputStyle} value={current} onChange={(e) => setCurrent(e.target.value)} autoComplete="current-password" /></Field>
         <Field label="New password"><PasswordInput style={inputStyle} value={next} onChange={(e) => setNext(e.target.value)} autoComplete="new-password" /></Field>
@@ -7622,7 +8189,11 @@ function AccountModal({ user, onClose, onUserChanged }) {
         {pwMsg.text && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: pwMsg.bad ? C.rust : C.olive, marginBottom: 10 }}>{pwMsg.text}</div>}
         <Btn small variant="primary" onClick={changePw} disabled={busy || !current || !next}>Change password</Btn>
       </div>
-    </Modal>
+
+      <div style={rule}>
+        <Btn small variant="danger" onClick={onSignOut}><LogOut size={13} /> Sign out</Btn>
+      </div>
+    </Panel>
   );
 }
 
@@ -7715,7 +8286,16 @@ function MaintEnhanceAppInner() {
     standbyChecked.current = true;
     if (pmStandbyNeedsSync(data)) update((d) => d);
   }, [data]); // eslint-disable-line
-  const [showAccount, setShowAccount] = useState(false);
+  if (user && user.id) ME = user;
+  const [userMenu, setUserMenu] = useState(false);
+  const menuRef = useRef(null);
+  useEffect(() => {
+    if (!userMenu) return;
+    const onDown = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) setUserMenu(false); };
+    const onKey = (e) => { if (e.key === "Escape") setUserMenu(false); };
+    document.addEventListener("mousedown", onDown); document.addEventListener("touchstart", onDown); document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("touchstart", onDown); document.removeEventListener("keydown", onKey); };
+  }, [userMenu]);
 
   const persist = (next) => {
     clearTimeout(saveTimer.current);
@@ -7842,11 +8422,11 @@ function MaintEnhanceAppInner() {
   // `data` is still loading) would otherwise capture an uninitialized
   // `role` binding and throw when this effect later fires.
   const refreshAlarmCount = () => {
-    if (!user || !isAdmin(user.role)) return;
+    if (!user || !(isAdmin(user.role) || canDes(user, "specialist"))) return;
     api.listAlarms("open").then((rows) => setOpenAlarmCount(rows.length)).catch(() => {});
   };
   useEffect(() => {
-    if (!user || !isAdmin(user.role)) return;
+    if (!user || !(isAdmin(user.role) || canDes(user, "specialist"))) return;
     refreshAlarmCount();
     const interval = setInterval(refreshAlarmCount, 30000);
     return () => clearInterval(interval);
@@ -7896,9 +8476,9 @@ function MaintEnhanceAppInner() {
     parts: <PartsView data={data} update={update} role={role} currentUser={user.username} />,
     budget: <BudgetView data={data} />,
     purchasing: isAdmin(role) ? <PurchasingView data={data} update={update} currentUser={user.username} goToOrder={goToOrder} /> : <Dashboard data={data} setTab={setTab} role={role} applyFilter={applyFilter} goToOrder={goToOrder} goToRequest={goToRequest} />,
-    alarms: isAdmin(role) ? <AlarmsView data={data} update={update} role={role} currentUser={user.username} onAlarmsChanged={refreshAlarmCount} features={SETTINGS.features} /> : <Dashboard data={data} setTab={setTab} role={role} applyFilter={applyFilter} goToOrder={goToOrder} goToRequest={goToRequest} />,
+    alarms: (isAdmin(role) || canAck()) ? <AlarmsView data={data} update={update} role={role} currentUser={user.username} onAlarmsChanged={refreshAlarmCount} features={SETTINGS.features} /> : <Dashboard data={data} setTab={setTab} role={role} applyFilter={applyFilter} goToOrder={goToOrder} goToRequest={goToRequest} />,
     help: <HelpView role={role} />,
-    owner: role !== "Guest" ? <ToolsView data={data} update={update} currentUser={user} role={role} onOpenAccount={() => setShowAccount(true)} /> : <Dashboard data={data} setTab={setTab} role={role} applyFilter={applyFilter} goToOrder={goToOrder} goToRequest={goToRequest} />,
+    owner: <ToolsView data={data} update={update} currentUser={user} role={role} account={{ onUserChanged: setUser, theme, setTheme, installPrompt, doInstall, onSignOut: logout }} />,
   };
 
   return (
@@ -7918,9 +8498,6 @@ function MaintEnhanceAppInner() {
               )}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-              {installPrompt && (
-                <Btn small variant="ghost" onClick={doInstall}><Download size={13} /> Install app</Btn>
-              )}
               {!isOnline && (
                 <span title="No connection — work requests you submit will be saved on this device and sync automatically once you're back online" style={{ display: "flex", alignItems: "center", gap: 4, fontFamily: FONT_BODY, fontSize: 11.5, fontWeight: 600, color: C.orange, border: `1px solid ${C.orange}`, borderRadius: 3, padding: "4px 7px" }}>
                   <WifiOff size={12} /> Offline
@@ -7933,26 +8510,32 @@ function MaintEnhanceAppInner() {
                   {queueFailedCount > 0 ? `${queueFailedCount} failed to sync` : `${queueCount} pending sync`}
                 </button>
               )}
-              <button onClick={cycleTheme} title={themeLabel} className="hk-tap" style={{ background: "none", border: `1px solid ${C.line}`, borderRadius: 3, cursor: "pointer", color: C.inkSoft, padding: 6, display: "flex", alignItems: "center" }}>
-                {themeIcon}
-              </button>
-              <div style={{ position: "relative" }}>
-                <Bell size={17} color={C.inkSoft} />
-                {counts.requests > 0 && <span style={{ position: "absolute", top: -5, right: -6, background: C.orange, color: "#fff", fontSize: 9.5, fontWeight: 700, borderRadius: 8, padding: "1px 4px" }}>{counts.requests}</span>}
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <div className="hk-user-meta" style={{ textAlign: "right" }}>
-                  <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, fontWeight: 700, color: C.ink, lineHeight: 1.2 }}>{user.username}</div>
-                  <div style={{ fontFamily: FONT_BODY, fontSize: 10.5, color: C.inkFaint, lineHeight: 1.2 }}>{role}</div>
-                </div>
-                <button onClick={() => setShowAccount(true)} title="My account — email and password" className="hk-tap" style={{ background: "none", border: `1px solid ${C.line}`, borderRadius: 3, cursor: "pointer", color: C.inkSoft, padding: 6 }}><Key size={14} /></button>
-                <button onClick={logout} title="Log out" className="hk-tap" style={{ background: "none", border: `1px solid ${C.line}`, borderRadius: 3, cursor: "pointer", color: C.inkSoft, padding: 6 }}><LogOut size={14} /></button>
+              <div ref={menuRef} style={{ position: "relative" }}>
+                <button onClick={() => setUserMenu((o) => !o)} aria-haspopup="menu" aria-expanded={userMenu} title={`${user.username} — account menu`} data-usermenu className="hk-tap"
+                  style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
+                  <div className="hk-user-meta" style={{ textAlign: "right" }}>
+                    <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, fontWeight: 700, color: C.ink, lineHeight: 1.2 }}>{user.username}</div>
+                    <div style={{ fontFamily: FONT_BODY, fontSize: 10.5, color: C.inkFaint, lineHeight: 1.2 }}>{role}</div>
+                  </div>
+                  <Avatar user={user} color={execColor(data, user.id)} size={34} />
+                </button>
+                {userMenu && (
+                  <div role="menu" data-usermenu-pop style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, minWidth: 190, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 6, boxShadow: "0 6px 20px rgba(0,0,0,.18)", padding: 6, zIndex: 40 }}>
+                    <button role="menuitem" className="hk-row" onClick={() => { setUserMenu(false); TOOLS_FOCUS = "tools-account"; setTab("owner"); if (window.innerWidth <= 860) setSidebarOpen(false); }}
+                      style={{ display: "flex", alignItems: "center", gap: 9, width: "100%", textAlign: "left", background: "none", border: "none", cursor: "pointer", padding: "9px 10px", borderRadius: 4, fontFamily: FONT_BODY, fontSize: 13, color: C.ink }}>
+                      <Settings size={15} color={C.inkSoft} /> Account settings
+                    </button>
+                    <button role="menuitem" onClick={() => { setUserMenu(false); logout(); }}
+                      style={{ display: "flex", alignItems: "center", gap: 9, width: "100%", textAlign: "left", cursor: "pointer", marginTop: 4, padding: "9px 10px", borderRadius: 4, border: "none", background: C.rust, color: "#fff", fontFamily: FONT_BODY, fontSize: 13, fontWeight: 600 }}>
+                      <LogOut size={15} /> Sign out
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           </div>
           <div className="hk-page-pad" style={{ padding: 24, maxWidth: 1280 }}>{views[tab]}</div>
         </div>
-        {showAccount && <AccountModal user={user} onClose={() => setShowAccount(false)} onUserChanged={setUser} />}
       </div>
     </DialogProvider>
   );
