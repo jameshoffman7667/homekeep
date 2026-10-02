@@ -24,7 +24,7 @@ const DEFAULTS = {
     locationLevels: LEVEL_KEYS.slice(),
     siteLevelIndex: 0,
   },
-  features: { homeAssistantAlarms: true },
+  features: { homeAssistantAlarms: true, linkPrefill: true, linkPrefillAi: false },
 };
 
 const LOGO_MAX_BYTES = 512 * 1024;
@@ -56,7 +56,7 @@ function current() {
     if (Array.isArray(t.locationLevels) && t.locationLevels.length === 6 && t.locationLevels.every((x) => typeof x === "string" && x.trim()))
       out.terms.locationLevels = t.locationLevels.slice();
     if (Number.isInteger(t.siteLevelIndex) && t.siteLevelIndex >= 0 && t.siteLevelIndex < 6) out.terms.siteLevelIndex = t.siteLevelIndex;
-    if (typeof f.homeAssistantAlarms === "boolean") out.features.homeAssistantAlarms = f.homeAssistantAlarms;
+    for (const k of ["homeAssistantAlarms", "linkPrefill", "linkPrefillAi"]) if (typeof f[k] === "boolean") out.features[k] = f[k];
   }
   return out;
 }
@@ -111,7 +111,7 @@ function validate(input) {
     if (Number.isInteger(n) && n >= 0 && n < 6) out.terms.siteLevelIndex = n;
     else errors.push("Site level must be one of the six levels");
   }
-  if (f.homeAssistantAlarms !== undefined) out.features.homeAssistantAlarms = !!f.homeAssistantAlarms;
+  for (const k of ["homeAssistantAlarms", "linkPrefill", "linkPrefillAi"]) if (f[k] !== undefined) out.features[k] = !!f[k];
   return { ok: errors.length === 0, settings: out, errors };
 }
 
@@ -157,7 +157,7 @@ function publicConfig(extra) {
   return {
     brand: { ...s.brand, logoUrl: v ? `/api/logo?v=${v}` : "" },
     terms: s.terms,
-    features: { homeAssistantAlarms: s.features.homeAssistantAlarms },
+    features: { homeAssistantAlarms: s.features.homeAssistantAlarms, linkPrefill: s.features.linkPrefill, linkPrefillAi: s.features.linkPrefillAi },
     ...(extra || {}),
   };
 }

@@ -13,6 +13,7 @@ import * as XLSX from "xlsx";
 import QRCode from "qrcode";
 import { api } from "./api.js";
 import { shrinkImage } from "./imageShrink.js";
+import { PM_CATALOG_DEFAULT } from "./pmCatalog.js";
 import { queueItem, getQueuedItems, removeQueuedItem, updateQueuedItem } from "./offlineQueue.js";
 
 /* ============================================================
@@ -155,6 +156,9 @@ const GlobalStyle = () => (
     .hk-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
     .hk-scroll::-webkit-scrollbar-thumb { background: ${C.line}; border-radius: 4px; }
     .hk-fade { animation: hkfade .14s ease-out; }
+    @keyframes hkbeacon { 0%,100% { opacity:1; box-shadow: 0 0 0 0 rgba(214,40,40,.65);} 50% { opacity:.35; box-shadow: 0 0 0 5px rgba(214,40,40,0);} }
+    .hk-beacon { display:inline-block; width:9px; height:9px; border-radius:50%; background:#D62828; flex-shrink:0; animation: hkbeacon 1.1s ease-in-out infinite; }
+    @media (prefers-reduced-motion: reduce) { .hk-beacon { animation:none; } }
     @keyframes hkfade { from { opacity:0; transform: translateY(3px);} to {opacity:1; transform:none;} }
     .hk-btn { cursor: pointer; transition: filter .1s ease; }
     .hk-btn:hover { filter: brightness(0.94); }
@@ -230,7 +234,7 @@ const DEFAULT_SETTINGS = {
     colors: { primary: "#28415F", primaryDark: "#7FA3CC", accent: "#C85410", accentDark: "#E38C4E" },
   },
   terms: { orgNoun: "household", locationLevels: ["Property", "Structure", "Floor", "Room", "Area", "Sub-area"], siteLevelIndex: 0 },
-  features: { homeAssistantAlarms: true },
+  features: { homeAssistantAlarms: true, linkPrefill: true, linkPrefillAi: false },
 };
 let SETTINGS = DEFAULT_SETTINGS;
 function applySettings(cfg) {
@@ -368,21 +372,13 @@ function guessClimateZone(address) {
 // Starter PM catalogue offered by the wizard, pre-checked by climate zone
 // relevance ("all" = every zone). Frequencies are reasonable defaults —
 // every generated PM Base is fully editable afterward like any other.
-const PM_WIZARD_CATALOG = [
-  { id: "w-filter", title: "Replace HVAC filter", description: "Keeps the furnace/AC running efficiently.", frequencyValue: 3, frequencyUnit: "months", zones: "all" },
-  { id: "w-smoke", title: "Test smoke & CO detectors", description: "Press-test and replace batteries if needed.", frequencyValue: 6, frequencyUnit: "months", zones: "all" },
-  { id: "w-gutters", title: "Clean gutters & downspouts", description: "Prevents overflow and foundation water damage.", frequencyValue: 6, frequencyUnit: "months", zones: "all" },
-  { id: "w-waterheater", title: "Flush water heater", description: "Clears sediment buildup, extends tank life.", frequencyValue: 12, frequencyUnit: "months", zones: "all" },
-  { id: "w-dryervent", title: "Clean dryer vent", description: "Reduces fire risk and improves drying time.", frequencyValue: 12, frequencyUnit: "months", zones: "all" },
-  { id: "w-roof", title: "Inspect roof & flashing", description: "Catch small leaks before they become big ones.", frequencyValue: 12, frequencyUnit: "months", zones: "all" },
-  { id: "w-furnace", title: "Service furnace / heating system", description: "Annual burner and heat-exchanger check.", frequencyValue: 12, frequencyUnit: "months", zones: ["Very Cold", "Cold", "Mixed-Humid"] },
-  { id: "w-ac", title: "Service air conditioning", description: "Annual coil cleaning and refrigerant check.", frequencyValue: 12, frequencyUnit: "months", zones: ["Hot-Humid", "Hot-Dry", "Mixed-Humid", "Marine"] },
-  { id: "w-sump", title: "Inspect sump pump", description: "Test the float switch and backup power before the wet season.", frequencyValue: 6, frequencyUnit: "months", zones: ["Very Cold", "Cold", "Mixed-Humid", "Marine"] },
-  { id: "w-winterize", title: "Winterize outdoor spigots & irrigation", description: "Prevents burst pipes from freezing.", frequencyValue: 12, frequencyUnit: "months", zones: ["Very Cold", "Cold"] },
-  { id: "w-icedam", title: "Check attic insulation & ventilation", description: "Reduces ice-dam risk and heat loss.", frequencyValue: 12, frequencyUnit: "months", zones: ["Very Cold", "Cold"] },
-  { id: "w-deck", title: "Inspect & reseal deck / exterior wood", description: "UV and moisture protection.", frequencyValue: 12, frequencyUnit: "months", zones: ["Hot-Humid", "Hot-Dry", "Mixed-Humid", "Marine"] },
-  { id: "w-termite", title: "Pest / termite inspection", description: "More common in warm, humid climates.", frequencyValue: 12, frequencyUnit: "months", zones: ["Hot-Humid", "Mixed-Humid"] },
-];
+const PM_WIZARD_CATALOG = PM_CATALOG_DEFAULT;
+// v2.3: every entry has a Type (Home, Facilities, ...) and a sub type
+// ("category", e.g. HVAC & Heating). Entries saved before v2.3 have neither:
+// they count as Home / General.
+const catType = (i) => (i && i.type) || "Home";
+const catCategory = (i) => (i && i.category) || "General";
+const uniqSorted = (arr) => [...new Set(arr)].sort((a, b) => a.localeCompare(b));
 // v1.8: the starter catalogue above is now just the *default* — an Owner
 // can edit/add/remove entries from Owner Tools, which are saved into
 // data.pmWizardCatalog. Absent (undefined) falls back to this hardcoded
@@ -986,6 +982,88 @@ function SectionHeader({ title, subtitle, action, info }) {
   );
 }
 
+
+/* ---- Link pre-fill (v2.3) ----
+   Paste a product or company link and the form fields fill in from it (the
+   server fetches the page; an optional Owner-enabled AI step refines it).
+   Only empty fields are filled, and each filled field shows a faint "x" at its
+   right edge to clear just that value. `map` says which form field receives
+   each suggestion: { name, manufacturer, model, description, price, link }. */
+function usePrefill(kind, setForm, map) {
+  const [pf, setPf] = useState(() => new Set());
+  const [url, setUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState({ text: "", error: false });
+  const reset = () => { setPf(new Set()); setUrl(""); setStatus({ text: "", error: false }); };
+  const clear = (key) => {
+    setForm((f) => ({ ...f, [key]: "" }));
+    setPf((prev) => { const n = new Set(prev); n.delete(key); return n; });
+  };
+  const run = async (currentForm) => {
+    const u = url.trim();
+    if (!u) { setStatus({ text: "Paste a link first.", error: true }); return; }
+    setBusy(true); setStatus({ text: "", error: false });
+    try {
+      const r = await api.prefillFromLink(u, kind);
+      const filled = new Set(pf);
+      let count = 0;
+      const patch = {};
+      for (const src of ["name", "manufacturer", "model", "description", "price"]) {
+        const key = map[src], val = r.fields && r.fields[src];
+        if (!key || !val) continue;
+        if (String(currentForm[key] || "").trim()) continue; // never overwrite what's typed
+        patch[key] = val; filled.add(key); count++;
+      }
+      if (map.link && !String(currentForm[map.link] || "").trim()) { patch[map.link] = r.finalUrl || u; filled.add(map.link); count++; }
+      setForm((f) => ({ ...f, ...patch }));
+      setPf(filled);
+      setStatus({
+        text: count ? `Filled ${count} field${count === 1 ? "" : "s"}${r.usedAi ? " (AI-assisted)" : ""} — check them, and click the x on any you don't want.${r.aiNote ? " " + r.aiNote : ""}` : "Nothing new to fill in from that page (fields that already have a value are left alone).",
+        error: false,
+      });
+    } catch (e) { setStatus({ text: e.message || "Couldn't read that page.", error: true }); }
+    finally { setBusy(false); }
+  };
+  return { pf, url, setUrl, busy, status, run, clear, reset };
+}
+
+function PrefillBar({ p, form }) {
+  if (!SETTINGS.features.linkPrefill) return null;
+  return (
+    <div style={{ marginBottom: 12, padding: 10, border: `1px dashed ${C.line}`, borderRadius: 4, background: C.panelAlt }}>
+      <div style={{ display: "flex", gap: 6 }}>
+        <input
+          style={inputStyle} value={p.url} placeholder="Paste a link to fill this in automatically…"
+          onChange={(e) => p.setUrl(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); p.run(form); } }}
+        />
+        <Btn small variant="ghost" onClick={() => p.run(form)} disabled={p.busy}>{p.busy ? "Reading…" : "Fill from link"}</Btn>
+      </div>
+      {p.status.text && <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, marginTop: 6, color: p.status.error ? C.rust : C.inkSoft }}>{p.status.text}</div>}
+    </div>
+  );
+}
+
+// An input/textarea that shows a faint "x" while its value came from a link.
+function PrefillInput({ p, field, value, onChange, multiline, ...rest }) {
+  const flagged = p.pf.has(field) && !!value;
+  const Tag = multiline ? "textarea" : "input";
+  return (
+    <div style={{ position: "relative", flex: 1, minWidth: 0 }}>
+      <Tag {...rest} style={{ ...inputStyle, ...(rest.style || {}), paddingRight: flagged ? 28 : undefined }} value={value} onChange={onChange} />
+      {flagged && (
+        <button
+          type="button" title="Clear this value" aria-label="Clear this value" onClick={() => p.clear(field)}
+          style={{ position: "absolute", right: 6, top: multiline ? 6 : "50%", transform: multiline ? "none" : "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: C.inkSoft, opacity: 0.45, padding: 2, display: "flex" }}
+          onMouseEnter={(e) => { e.currentTarget.style.opacity = 1; }} onMouseLeave={(e) => { e.currentTarget.style.opacity = 0.45; }}
+        >
+          <X size={14} />
+        </button>
+      )}
+    </div>
+  );
+}
+
 function LinkButton({ url, small }) {
   if (!url) return null;
   return (
@@ -1185,7 +1263,7 @@ const PAGE_INFO = {
 /* ============================================================
    LOCATION HIERARCHY NAV
 ============================================================ */
-function LocationNavTree({ data, selectedId, onSelect }) {
+function LocationNavTree({ data, selectedId, onSelect, beaconIds }) {
   const allIds = useMemo(() => new Set(data.locations.map((l) => l.id)), [data.locations]);
   const [expanded, setExpanded] = useState(() => new Set(allIds));
   const toggle = (id) => {
@@ -1226,6 +1304,7 @@ function LocationNavTree({ data, selectedId, onSelect }) {
               >
                 {item.name}
               </span>
+              {beaconIds && beaconIds.has(item.id) && <span className="hk-beacon" title="Active alarm here or below" aria-label="Active alarm" />}
             </div>
             {hasKids && isOpen && renderChildren(item.id, depth + 1)}
           </div>
@@ -1264,7 +1343,7 @@ const NAV = [
   { id: "parts", label: "Parts Catalogue", icon: Package },
   { id: "budget", label: "Budget", icon: DollarSign },
   { id: "purchasing", label: "Purchasing", icon: ShoppingCart, adminOnly: true },
-  { id: "alarms", label: "Alarm Dashboard", icon: Siren, adminOnly: true },
+  { id: "alarms", label: "Alarms", icon: Siren, adminOnly: true },
   { id: "owner", label: "Owner Tools", icon: Shield, ownerOnly: true },
 ];
 
@@ -1272,7 +1351,7 @@ function Sidebar({ tab, setTab, open, role, counts, onNavigate }) {
   const items = NAV.filter((n) => (!n.ownerOnly || role === "Owner") && (!n.adminOnly || isAdmin(role)));
   return (
     <div
-      style={{ width: 216, flexShrink: 0, background: C.navy, color: "#fff", display: open ? "flex" : "none", flexDirection: "column", position: "fixed", top: 0, bottom: 0, left: 0, zIndex: 40 }}
+      style={{ width: 216, flexShrink: 0, background: SAFE_COLOR.test(SETTINGS.brand.colors.primary || "") ? SETTINGS.brand.colors.primary : DEFAULT_SETTINGS.brand.colors.primary, color: "#fff", display: open ? "flex" : "none", flexDirection: "column", position: "fixed", top: 0, bottom: 0, left: 0, zIndex: 40 }}
       className="hk-scroll hk-sidebar"
     >
       <div style={{ padding: "20px 18px 14px" }}>
@@ -1304,7 +1383,7 @@ function Sidebar({ tab, setTab, open, role, counts, onNavigate }) {
         })}
       </div>
       <div style={{ padding: 14, borderTop: "1px solid rgba(255,255,255,0.12)", fontFamily: FONT_BODY, fontSize: 11, color: "#8FA0AF" }}>
-        v2.1 · matches the MaintEnhance functional spec
+        v2.3 · matches the MaintEnhance functional spec
       </div>
     </div>
   );
@@ -1459,14 +1538,26 @@ function PmWizardModal({ property, data, update, onClose }) {
   const [yearBuilt, setYearBuilt] = useState(property.yearBuilt || "");
   const [climateZone, setClimateZone] = useState(property.climateZone || guessClimateZone(property.address || ""));
   const [selected, setSelected] = useState(new Set());
+  const [typeFilter, setTypeFilter] = useState("");
+  const [catFilter, setCatFilter] = useState("");
+  const [q, setQ] = useState("");
   const catalog = effectiveWizardCatalog(data);
+  const types = uniqSorted(catalog.map(catType));
+  const fitsZone = (i) => i.zones === "all" || (i.zones || []).includes(climateZone);
+  const cats = uniqSorted(catalog.filter((i) => !typeFilter || catType(i) === typeFilter).map(catCategory));
+  const shown = catalog.filter((i) => (!typeFilter || catType(i) === typeFilter) && (!catFilter || catCategory(i) === catFilter)
+    && (!q.trim() || (i.title + " " + (i.description || "")).toLowerCase().includes(q.trim().toLowerCase())));
 
   const onAddressBlur = () => {
     const guess = guessClimateZone(address);
     if (guess !== "Unknown") setClimateZone(guess);
   };
   const goToStep2 = () => {
-    setSelected(new Set(catalog.filter((i) => i.zones === "all" || i.zones.includes(climateZone)).map((i) => i.id)));
+    // A small (custom) catalogue is pre-checked by climate zone as before; the big
+    // combined catalogue starts empty so nobody gets hundreds of templates by accident.
+    setSelected(new Set(catalog.length <= 30 ? catalog.filter(fitsZone).map((i) => i.id) : []));
+    setTypeFilter(types.includes("Home") ? "Home" : "");
+    setCatFilter(""); setQ("");
     setStep(2);
   };
   const toggle = (id) => setSelected((prev) => {
@@ -1474,6 +1565,9 @@ function PmWizardModal({ property, data, update, onClose }) {
     if (next.has(id)) next.delete(id); else next.add(id);
     return next;
   });
+
+  const selectShown = () => setSelected((prev) => { const n = new Set(prev); shown.filter(fitsZone).forEach((i) => n.add(i.id)); return n; });
+  const clearShown = () => setSelected((prev) => { const n = new Set(prev); shown.forEach((i) => n.delete(i.id)); return n; });
 
   const finish = () => {
     update((d) => {
@@ -1530,16 +1624,33 @@ function PmWizardModal({ property, data, update, onClose }) {
       {step === 2 && (
         <>
           <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.inkFaint, marginBottom: 10 }}>
-            Pre-checked based on the <strong>{climateZone}</strong> climate zone — uncheck anything that doesn't apply (no pool, no basement, etc.). Each becomes its own PM Base template, fully editable afterward from Work Orders.
+            Filter by type and sub type, then tick what applies. Entries not typical for the <strong>{climateZone}</strong> climate zone are greyed (you can still tick them). Each becomes its own PM Base template, fully editable afterward from Work Orders.
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 8, marginBottom: 8 }}>
+            <select style={inputStyle} value={typeFilter} onChange={(e) => { setTypeFilter(e.target.value); setCatFilter(""); }}>
+              <option value="">All types</option>
+              {types.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+            <select style={inputStyle} value={catFilter} onChange={(e) => setCatFilter(e.target.value)}>
+              <option value="">All sub types</option>
+              {cats.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <input style={inputStyle} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" />
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6, flexWrap: "wrap" }}>
+            <Btn small variant="ghost" onClick={selectShown}>Tick all shown</Btn>
+            <Btn small variant="ghost" onClick={clearShown}>Untick all shown</Btn>
+            <span style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.inkFaint }}>{shown.length} shown · {selected.size} selected in total</span>
           </div>
           <div className="hk-scroll" style={{ maxHeight: 340, overflowY: "auto" }}>
             {catalog.length === 0 && <Empty text="The starter catalogue is empty — add entries from Owner Tools, or skip this and build PM Bases from scratch." />}
-            {catalog.map((item) => (
-              <label key={item.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "7px 0", borderTop: `1px solid ${C.lineSoft}`, cursor: "pointer" }}>
+            {catalog.length > 0 && shown.length === 0 && <Empty text="Nothing matches these filters." />}
+            {shown.map((item) => (
+              <label key={item.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "7px 0", borderTop: `1px solid ${C.lineSoft}`, cursor: "pointer", opacity: fitsZone(item) ? 1 : 0.55 }}>
                 <input type="checkbox" checked={selected.has(item.id)} onChange={() => toggle(item.id)} style={{ marginTop: 3 }} />
                 <div>
                   <div style={{ fontFamily: FONT_BODY, fontSize: 13, fontWeight: 600, color: C.ink }}>{item.title}</div>
-                  <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint }}>Every {item.frequencyValue} {item.frequencyUnit} · {item.description}</div>
+                  <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint }}>{catType(item)} · {catCategory(item)} · Every {item.frequencyValue} {item.frequencyUnit}{item.description ? ` · ${item.description}` : ""}</div>
                 </div>
               </label>
             ))}
@@ -1820,6 +1931,7 @@ function AssetsView({ data, update, role, goToOrder, deepLinkAssetId, onConsumeD
   const [form, setForm] = useState(blank);
   const initial = useRef(null);
   const isDirty = modal && JSON.stringify(form) !== initial.current;
+  const pre = usePrefill("asset", setForm, { name: "name", manufacturer: "manufacturer", model: "model", description: "notes", link: "manualUrl" });
 
   useEffect(() => { if (deepLinkAssetId) onConsumeDeepLink(); }, []); // eslint-disable-line
 
@@ -1828,8 +1940,8 @@ function AssetsView({ data, update, role, goToOrder, deepLinkAssetId, onConsumeD
 
   const asset = data.assets.find((a) => a.id === selected);
 
-  const openAdd = () => { setForm(blank); initial.current = JSON.stringify(blank); setModal("add"); };
-  const openEdit = () => { const f = { ...asset }; setForm(f); initial.current = JSON.stringify(f); setModal("edit"); };
+  const openAdd = () => { pre.reset(); setForm(blank); initial.current = JSON.stringify(blank); setModal("add"); };
+  const openEdit = () => { pre.reset(); const f = { ...asset }; setForm(f); initial.current = JSON.stringify(f); setModal("edit"); };
   const save = () => {
     if (!form.name.trim()) return;
     update((d) => {
@@ -1966,8 +2078,9 @@ function AssetsView({ data, update, role, goToOrder, deepLinkAssetId, onConsumeD
 
       {modal && (
         <Modal title={modal === "add" ? "Add asset" : "Edit asset"} onClose={() => closeGuard(isDirty, save, () => setModal(null))} wide>
+          {canWrite(role) && <PrefillBar p={pre} form={form} />}
           <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <Field label="Name" required><input style={inputStyle} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} autoFocus /></Field>
+            <Field label="Name" required><PrefillInput p={pre} field="name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
             <Field label="Category"><input style={inputStyle} value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} placeholder="HVAC, Appliance, Vehicle…" /></Field>
             <Field label="Location" required>
               <select style={inputStyle} value={form.locationId} onChange={(e) => setForm({ ...form, locationId: e.target.value })}>
@@ -1976,13 +2089,13 @@ function AssetsView({ data, update, role, goToOrder, deepLinkAssetId, onConsumeD
                 ))}
               </select>
             </Field>
-            <Field label="Manufacturer"><input style={inputStyle} value={form.manufacturer} onChange={(e) => setForm({ ...form, manufacturer: e.target.value })} /></Field>
-            <Field label="Model"><input style={inputStyle} value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} /></Field>
+            <Field label="Manufacturer"><PrefillInput p={pre} field="manufacturer" value={form.manufacturer} onChange={(e) => setForm({ ...form, manufacturer: e.target.value })} /></Field>
+            <Field label="Model"><PrefillInput p={pre} field="model" value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} /></Field>
             <Field label="Serial"><input style={inputStyle} value={form.serial} onChange={(e) => setForm({ ...form, serial: e.target.value })} /></Field>
             <Field label="Purchase date"><input type="date" style={inputStyle} value={form.purchaseDate} onChange={(e) => setForm({ ...form, purchaseDate: e.target.value })} /></Field>
             <Field label="Warranty ends"><input type="date" style={inputStyle} value={form.warrantyEnd} onChange={(e) => setForm({ ...form, warrantyEnd: e.target.value })} /></Field>
           </div>
-          <Field label="Manual (link to PDF or manufacturer page)"><input style={inputStyle} value={form.manualUrl} onChange={(e) => setForm({ ...form, manualUrl: e.target.value })} placeholder="https://…" /></Field>
+          <Field label="Manual (link to PDF or manufacturer page)"><PrefillInput p={pre} field="manualUrl" value={form.manualUrl} onChange={(e) => setForm({ ...form, manualUrl: e.target.value })} placeholder="https://…" /></Field>
           <label style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 12, fontFamily: FONT_BODY, fontSize: 12.5, color: C.ink, cursor: "pointer" }}>
             <input type="checkbox" checked={!!form.isMajor} onChange={(e) => setForm({ ...form, isMajor: e.target.checked })} />
             Major asset — show a printable QR label for it
@@ -1994,7 +2107,7 @@ function AssetsView({ data, update, role, goToOrder, deepLinkAssetId, onConsumeD
           <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 12 }}>
             Set a meter unit to enable meter-based PM triggers ("service every 250 hours") for this asset — readings can then be logged from its detail page without reopening this form.
           </div>
-          <Field label="Notes"><textarea style={{ ...inputStyle, minHeight: 60 }} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field>
+          <Field label="Notes"><PrefillInput p={pre} field="notes" multiline style={{ minHeight: 60 }} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
             <Btn variant="ghost" onClick={() => closeGuard(isDirty, save, () => setModal(null))}>Cancel</Btn>
             <Btn variant="primary" onClick={save}>Save</Btn>
@@ -2035,6 +2148,7 @@ function PartEditModal({ data, update, part, currentUser, role, onClose, onSaved
   const [form, setForm] = useState(part ? { ...part } : blank);
   const initial = useRef(JSON.stringify(part ? { ...part } : blank));
   const isDirty = JSON.stringify(form) !== initial.current;
+  const pre = usePrefill("part", setForm, { name: "name", manufacturer: "manufacturer", model: "manufacturerPartNumber", description: "description", price: "cost", link: "link" });
 
   const save = () => {
     if (!form.name.trim()) return;
@@ -2063,16 +2177,17 @@ function PartEditModal({ data, update, part, currentUser, role, onClose, onSaved
 
   return (
     <Modal title={part ? `Edit ${formatPartNum(part.partNumber)}` : "New part"} onClose={() => closeGuard(isDirty, save, onClose)} wide>
-      <Field label="Name" required><input style={inputStyle} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. 16x25x1 Furnace Filter" autoFocus /></Field>
-      <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 50 }} value={form.description || ""} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
+      <PrefillBar p={pre} form={form} />
+      <Field label="Name" required><PrefillInput p={pre} field="name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. 16x25x1 Furnace Filter" /></Field>
+      <Field label="Description"><PrefillInput p={pre} field="description" multiline style={{ minHeight: 50 }} value={form.description || ""} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
       <AssetBomPicker data={data} assetId={form.assetId} bomNodeId={form.bomNodeId} onChange={({ assetId, bomNodeId }) => setForm({ ...form, assetId, bomNodeId })} />
       <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-        <Field label="Manufacturer"><input style={inputStyle} value={form.manufacturer || ""} onChange={(e) => setForm({ ...form, manufacturer: e.target.value })} /></Field>
-        <Field label="Manufacturer part #"><input style={inputStyle} value={form.manufacturerPartNumber || ""} onChange={(e) => setForm({ ...form, manufacturerPartNumber: e.target.value })} /></Field>
-        <Field label="Cost ($)"><input style={inputStyle} value={form.cost || ""} onChange={(e) => setForm({ ...form, cost: e.target.value })} /></Field>
+        <Field label="Manufacturer"><PrefillInput p={pre} field="manufacturer" value={form.manufacturer || ""} onChange={(e) => setForm({ ...form, manufacturer: e.target.value })} /></Field>
+        <Field label="Manufacturer part #"><PrefillInput p={pre} field="manufacturerPartNumber" value={form.manufacturerPartNumber || ""} onChange={(e) => setForm({ ...form, manufacturerPartNumber: e.target.value })} /></Field>
+        <Field label="Cost ($)"><PrefillInput p={pre} field="cost" value={form.cost || ""} onChange={(e) => setForm({ ...form, cost: e.target.value })} /></Field>
         <Field label="Web link">
           <div style={{ display: "flex", gap: 6 }}>
-            <input style={inputStyle} value={form.link || ""} onChange={(e) => setForm({ ...form, link: e.target.value })} placeholder="https://…" />
+            <PrefillInput p={pre} field="link" value={form.link || ""} onChange={(e) => setForm({ ...form, link: e.target.value })} placeholder="https://…" />
             <LinkButton url={form.link} small />
           </div>
         </Field>
@@ -3129,7 +3244,7 @@ function WorkOrdersView({ data, update, role, currentUser, currentUserId, openId
     // v1.8: a numeric checklist reading outside its configured expected
     // range raises an alarm automatically (dedup'd per work order + step,
     // so re-entering the same out-of-spec reading doesn't spam the
-    // dashboard with duplicates — see Alarm Dashboard). Computed from
+    // dashboard with duplicates — see Alarms). Computed from
     // openWO (this component's own prop) + the patch being applied,
     // rather than from inside update()'s producer callback — React may
     // not have applied that state update by the time this line runs, so
@@ -3677,9 +3792,10 @@ function VendorsView({ data, update, role, currentUser }) {
   const [form, setForm] = useState(blank);
   const initial = useRef(null);
   const isDirty = modal && JSON.stringify(form) !== initial.current;
+  const pre = usePrefill("vendor", setForm, { name: "name", description: "notes", link: "link" });
 
-  const openAdd = () => { setForm(blank); initial.current = JSON.stringify(blank); setModal("add"); };
-  const openEdit = (v) => { const f = { ...v }; setForm(f); initial.current = JSON.stringify(f); setModal(v.id); };
+  const openAdd = () => { pre.reset(); setForm(blank); initial.current = JSON.stringify(blank); setModal("add"); };
+  const openEdit = (v) => { pre.reset(); const f = { ...v }; setForm(f); initial.current = JSON.stringify(f); setModal(v.id); };
   const save = () => {
     if (!form.name.trim()) return;
     if (modal === "add") {
@@ -3733,16 +3849,17 @@ function VendorsView({ data, update, role, currentUser }) {
       </Panel>
       {modal && (
         <Modal title={modal === "add" ? "Add vendor" : "Edit vendor"} onClose={() => closeGuard(isDirty, save, () => setModal(null))}>
-          <Field label="Name" required><input style={inputStyle} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} autoFocus /></Field>
+          {canWrite(role) && <PrefillBar p={pre} form={form} />}
+          <Field label="Name" required><PrefillInput p={pre} field="name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
           <Field label="Specialty"><input style={inputStyle} value={form.specialty} onChange={(e) => setForm({ ...form, specialty: e.target.value })} /></Field>
           <Field label="Contact"><input style={inputStyle} value={form.contact} onChange={(e) => setForm({ ...form, contact: e.target.value })} /></Field>
           <Field label="Web link">
             <div style={{ display: "flex", gap: 6 }}>
-              <input style={inputStyle} value={form.link} onChange={(e) => setForm({ ...form, link: e.target.value })} placeholder="https://…" />
+              <PrefillInput p={pre} field="link" value={form.link} onChange={(e) => setForm({ ...form, link: e.target.value })} placeholder="https://…" />
               <LinkButton url={form.link} small />
             </div>
           </Field>
-          <Field label="Notes"><textarea style={{ ...inputStyle, minHeight: 60 }} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field>
+          <Field label="Notes"><PrefillInput p={pre} field="notes" multiline style={{ minHeight: 60 }} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
             {editingVendor && canDelete(role, editingVendor, currentUser) ? (
               <Btn variant="danger" onClick={() => { remove(editingVendor); setModal(null); }}><Trash2 size={13} /> Delete</Btn>
@@ -4090,12 +4207,12 @@ const SHEET_SPECS = [
     // falls back to the built-in default catalogue (see
     // effectiveWizardCatalog above).
     key: "pmWizardCatalog", sheetName: "PM Wizard Catalog", idPrefix: "wc",
-    toRow: (w) => ({ id: w.id, title: w.title, description: w.description || "", frequencyValue: w.frequencyValue || "", frequencyUnit: w.frequencyUnit || "months", zones: w.zones === "all" ? "all" : (w.zones || []).join(", ") }),
+    toRow: (w) => ({ id: w.id, type: w.type || "", category: w.category || "", title: w.title, description: w.description || "", frequencyValue: w.frequencyValue || "", frequencyUnit: w.frequencyUnit || "months", zones: w.zones === "all" ? "all" : (w.zones || []).join(", ") }),
     fromRow: (r) => {
       const zonesRaw = String(r.zones || "").trim();
       const zones = (!zonesRaw || zonesRaw.toLowerCase() === "all") ? "all" : zonesRaw.split(",").map((s) => s.trim()).filter(Boolean);
       return {
-        id: r.id, title: String(r.title || ""), description: String(r.description || ""),
+        id: r.id, type: String(r.type || "").trim() || undefined, category: String(r.category || "").trim() || undefined, title: String(r.title || ""), description: String(r.description || ""),
         frequencyValue: r.frequencyValue !== "" && r.frequencyValue != null ? Number(r.frequencyValue) : 3,
         frequencyUnit: String(r.frequencyUnit || "months"), zones,
       };
@@ -4171,6 +4288,8 @@ function settingsToRows(cfg, logoDataUrl) {
     ...cfg.terms.locationLevels.map((l, i) => [`terms.level${i + 1}`, l]),
     ["terms.siteLevel", cfg.terms.siteLevelIndex + 1],
     ["features.homeAssistantAlarms", cfg.features.homeAssistantAlarms ? "yes" : "no"],
+    ["features.linkPrefill", cfg.features.linkPrefill === false ? "no" : "yes"],
+    ["features.linkPrefillAi", cfg.features.linkPrefillAi ? "yes" : "no"],
   ];
   const m = /^data:([^;]+);base64,(.*)$/s.exec(logoDataUrl || "");
   if (m) {
@@ -4221,6 +4340,8 @@ function rowsToSettings(rows) {
   }
   const features = {};
   if ("features.homeAssistantAlarms" in map) features.homeAssistantAlarms = isYes(map["features.homeAssistantAlarms"]);
+  if ("features.linkPrefill" in map) features.linkPrefill = isYes(map["features.linkPrefill"]);
+  if ("features.linkPrefillAi" in map) features.linkPrefillAi = isYes(map["features.linkPrefillAi"]);
   let logoDataUrl;
   const chunkKeys = Object.keys(map).filter((k) => /^logo\.chunk\d+$/.test(k)).sort();
   if (chunkKeys.length && map["logo.mime"]) {
@@ -5237,6 +5358,7 @@ function AlarmsView({ data, update, role, currentUser, onAlarmsChanged, features
   const [actionForm, setActionForm] = useState({});
   const [mapForm, setMapForm] = useState(null);
   const [manualForm, setManualForm] = useState(null);
+  const [locFilter, setLocFilter] = useState(null);
 
   const load = () => {
     setLoading(true);
@@ -5254,9 +5376,23 @@ function AlarmsView({ data, update, role, currentUser, onAlarmsChanged, features
 
   const SEVERITY_ORDER = { critical: 0, warning: 1, info: 2 };
   const SEVERITY_COLORS = { critical: C.rust, warning: C.orange, info: C.navy };
-  const openAlarms = alarms.filter((a) => a.status === "open")
+  // An alarm sits at its own location, or its asset's location if it has none.
+  const alarmLocId = (a) => a.locationId || (a.assetId ? (data.assets.find((x) => x.id === a.assetId) || {}).locationId : null) || null;
+  const allowedLocs = locFilter ? descendantIds(data.locations, locFilter) : null;
+  const inFilter = (a) => !allowedLocs || allowedLocs.has(alarmLocId(a));
+  // Beacons: every location holding an open alarm, plus all of its parents.
+  const beaconIds = new Set();
+  alarms.filter((a) => a.status === "open").forEach((a) => {
+    let id = alarmLocId(a), guard = 0;
+    while (id && !beaconIds.has(id) && guard++ < 50) {
+      beaconIds.add(id);
+      const loc = data.locations.find((l) => l.id === id);
+      id = loc ? loc.parentId : null;
+    }
+  });
+  const openAlarms = alarms.filter((a) => a.status === "open" && inFilter(a))
     .sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 1) - (SEVERITY_ORDER[b.severity] ?? 1) || (b.triggeredAt || "").localeCompare(a.triggeredAt || ""));
-  const historyAlarms = alarms.filter((a) => a.status !== "open")
+  const historyAlarms = alarms.filter((a) => a.status !== "open" && inFilter(a))
     .sort((a, b) => (b.resolvedAt || b.triggeredAt || "").localeCompare(a.resolvedAt || a.triggeredAt || ""));
   const shown = tab === "open" ? openAlarms : historyAlarms;
 
@@ -5354,7 +5490,7 @@ function AlarmsView({ data, update, role, currentUser, onAlarmsChanged, features
   return (
     <div>
       <SectionHeader
-        title="Alarm Dashboard"
+        title="Alarms"
         subtitle={
           haAlarmsEnabled
             ? "Everything that needs attention right now: sensor alerts from Home Assistant, out-of-spec PM checklist readings, and manually raised alarms."
@@ -5433,6 +5569,9 @@ function AlarmsView({ data, update, role, currentUser, onAlarmsChanged, features
         </Panel>
       )}
 
+      <div className="hk-grid-fixed2" style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 16 }}>
+      <LocationNavTree data={data} selectedId={locFilter} onSelect={setLocFilter} beaconIds={beaconIds} />
+      <div style={{ minWidth: 0 }}>
       <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
         <Btn small variant={tab === "open" ? "primary" : "ghost"} onClick={() => setTab("open")}>Open ({openAlarms.length})</Btn>
         <Btn small variant={tab === "history" ? "primary" : "ghost"} onClick={() => setTab("history")}>History</Btn>
@@ -5473,6 +5612,8 @@ function AlarmsView({ data, update, role, currentUser, onAlarmsChanged, features
           </div>
         ))}
       </Panel>
+      </div>
+      </div>
 
       {modal && modal.action === "false" && (
         <Modal title="Acknowledge as false alarm" onClose={() => setModal(null)}>
@@ -5602,14 +5743,21 @@ function PmWizardCatalogEditor({ data, update }) {
   const [form, setForm] = useState(null);
   const catalog = effectiveWizardCatalog(data);
   const ZONE_OPTIONS = CLIMATE_ZONES.filter((z) => z !== "Unknown");
+  const [fType, setFType] = useState("");
+  const [fCat, setFCat] = useState("");
+  const [fq, setFq] = useState("");
+  const typeOptions = uniqSorted(catalog.map(catType));
+  const catOptions = uniqSorted(catalog.filter((i) => !fType || catType(i) === fType).map(catCategory));
+  const visible = catalog.filter((i) => (!fType || catType(i) === fType) && (!fCat || catCategory(i) === fCat)
+    && (!fq.trim() || (i.title + " " + (i.description || "")).toLowerCase().includes(fq.trim().toLowerCase())));
 
   const openAdd = () => {
-    setForm({ title: "", description: "", frequencyValue: 12, frequencyUnit: "months", allZones: true, zones: [] });
+    setForm({ type: fType || "Home", category: fCat || "", title: "", description: "", frequencyValue: 12, frequencyUnit: "months", allZones: true, zones: [] });
     setModal("add");
   };
   const openEdit = (item) => {
     setForm({
-      id: item.id, title: item.title, description: item.description || "",
+      id: item.id, type: catType(item), category: item.category || "", title: item.title, description: item.description || "",
       frequencyValue: item.frequencyValue || 12, frequencyUnit: item.frequencyUnit || "months",
       allZones: item.zones === "all", zones: item.zones === "all" ? [] : (item.zones || []),
     });
@@ -5623,6 +5771,8 @@ function PmWizardCatalogEditor({ data, update }) {
     if (!form.title.trim()) { await dialog.alertMsg("A title is required."); return; }
     const entry = {
       id: form.id || uid("wc"),
+      type: form.type.trim() || "Home",
+      category: form.category.trim(),
       title: form.title.trim(),
       description: form.description.trim(),
       frequencyValue: Number(form.frequencyValue) || 1,
@@ -5668,12 +5818,26 @@ function PmWizardCatalogEditor({ data, update }) {
         </div>
       </div>
       {catalog.length === 0 && <Empty text="No starter-catalogue entries — the wizard will offer nothing to pick from until you add some." />}
-      {catalog.map((item) => (
+      {catalog.length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 8, margin: "10px 0 4px" }}>
+          <select style={inputStyle} value={fType} onChange={(e) => { setFType(e.target.value); setFCat(""); }}>
+            <option value="">All types</option>
+            {typeOptions.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <select style={inputStyle} value={fCat} onChange={(e) => setFCat(e.target.value)}>
+            <option value="">All sub types</option>
+            {catOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <input style={inputStyle} value={fq} onChange={(e) => setFq(e.target.value)} placeholder="Search…" />
+        </div>
+      )}
+      {catalog.length > 0 && <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginBottom: 4 }}>{visible.length} of {catalog.length} entries shown</div>}
+      {visible.map((item) => (
         <div key={item.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "10px 0", borderTop: `1px solid ${C.lineSoft}`, gap: 10 }}>
           <div>
             <div style={{ fontFamily: FONT_BODY, fontSize: 13, fontWeight: 600, color: C.ink }}>{item.title}</div>
             <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: 2 }}>
-              Every {item.frequencyValue} {item.frequencyUnit} · {item.zones === "all" ? "All climate zones" : (item.zones || []).join(", ") || "No zones selected"}
+              {catType(item)} · {catCategory(item)} · Every {item.frequencyValue} {item.frequencyUnit} · {item.zones === "all" ? "All climate zones" : (item.zones || []).join(", ") || "No zones selected"}
             </div>
             {item.description && <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: 2 }}>{item.description}</div>}
           </div>
@@ -5685,6 +5849,16 @@ function PmWizardCatalogEditor({ data, update }) {
       ))}
       {modal && form && (
         <Modal title={modal === "edit" ? "Edit starter-catalogue entry" : "Add starter-catalogue entry"} onClose={() => { setModal(null); setForm(null); }} wide>
+          <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <Field label="Type (Home, Facilities, …)">
+              <input style={inputStyle} list="pmcat-types" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} />
+              <datalist id="pmcat-types">{typeOptions.map((t) => <option key={t} value={t} />)}</datalist>
+            </Field>
+            <Field label="Sub type (HVAC, Lawn & garden, …)">
+              <input style={inputStyle} list="pmcat-cats" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} />
+              <datalist id="pmcat-cats">{uniqSorted(catalog.filter((i) => catType(i) === (form.type.trim() || "Home")).map(catCategory)).map((c) => <option key={c} value={c} />)}</datalist>
+            </Field>
+          </div>
           <Field label="Title" required><input style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} autoFocus /></Field>
           <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 60 }} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
           <div className="hk-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -5777,7 +5951,7 @@ function BrandingCard() {
       const resp = await api.saveSettings({
         brand: { name: f.name.trim(), shortName: f.shortName.trim(), tagline: f.tagline.trim(), topBarTitle: f.topBarTitle.trim(), colors: f.colors },
         terms: { orgNoun: f.orgNoun.trim(), locationLevels: trimmed, siteLevelIndex: Number(f.siteLevelIndex) },
-        features: { homeAssistantAlarms: SETTINGS.features.homeAssistantAlarms },
+        features: { ...SETTINGS.features },
       });
       onConfigChanged(resp);
       setMsg("Saved.");
@@ -5888,28 +6062,41 @@ function FeaturesCard() {
   const dialog = useDialog();
   const { onConfigChanged } = useContext(SettingsContext);
   const [busy, setBusy] = useState(false);
-  const toggleHa = async (on) => {
+  const setFeature = async (key, on) => {
     setBusy(true);
     try {
       const resp = await api.saveSettings({
         brand: { name: SETTINGS.brand.name, shortName: SETTINGS.brand.shortName, tagline: SETTINGS.brand.tagline, topBarTitle: SETTINGS.brand.topBarTitle, colors: SETTINGS.brand.colors },
         terms: { orgNoun: SETTINGS.terms.orgNoun, locationLevels: SETTINGS.terms.locationLevels, siteLevelIndex: SETTINGS.terms.siteLevelIndex },
-        features: { homeAssistantAlarms: on },
+        features: { ...SETTINGS.features, [key]: on },
       });
       onConfigChanged(resp);
     } catch (e) { await dialog.alertMsg(e.message); }
     finally { setBusy(false); }
   };
   const note = { fontFamily: FONT_BODY, fontSize: 12, color: C.inkSoft };
+  const row = { display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer", fontFamily: FONT_BODY, fontSize: 13.5, color: C.ink, marginBottom: 12 };
+  const hasKey = !!SETTINGS.geminiKeyDetected;
   return (
     <Panel style={{ padding: 18 }}>
       <div style={{ fontFamily: FONT_HEAD, fontSize: 15, fontWeight: 600, color: C.ink, marginBottom: 4 }}>Features</div>
       <div style={{ ...note, marginBottom: 12 }}>Turn optional parts of the app on or off. Takes effect immediately.</div>
-      <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer", fontFamily: FONT_BODY, fontSize: 13.5, color: C.ink }}>
-        <input type="checkbox" disabled={busy} checked={!!SETTINGS.features.homeAssistantAlarms} onChange={(e) => toggleHa(e.target.checked)} style={{ marginTop: 3 }} />
+      <label style={row}>
+        <input type="checkbox" disabled={busy} checked={!!SETTINGS.features.homeAssistantAlarms} onChange={(e) => setFeature("homeAssistantAlarms", e.target.checked)} style={{ marginTop: 3 }} />
         <span>Home Assistant alarms<div style={note}>Receive alarms from Home Assistant by webhook, map them to assets and locations, and show the Alarms page. Turning it off hides the page and refuses incoming alarms; existing alarm history is kept.</div></span>
       </label>
-      <div style={{ ...note, marginTop: 14 }}>
+      <label style={row}>
+        <input type="checkbox" disabled={busy} checked={SETTINGS.features.linkPrefill !== false} onChange={(e) => setFeature("linkPrefill", e.target.checked)} style={{ marginTop: 3 }} />
+        <span>Fill in from a link<div style={note}>On asset, vendor and part forms, paste a web link and the name, maker, model, description and price are filled in from the page. Without AI it reads the page's own product details.</div></span>
+      </label>
+      <label style={{ ...row, opacity: SETTINGS.features.linkPrefill === false ? 0.5 : 1, marginLeft: 22 }}>
+        <input type="checkbox" disabled={busy || !hasKey || SETTINGS.features.linkPrefill === false} checked={!!SETTINGS.features.linkPrefillAi} onChange={(e) => setFeature("linkPrefillAi", e.target.checked)} style={{ marginTop: 3 }} />
+        <span>Use AI (Gemini) to improve the results<div style={note}>
+          Gemini API key detected: <strong>{hasKey ? "yes" : "no"}</strong>.{" "}
+          {hasKey ? "When on, the link and the page's text are sent to Google's Gemini service for each look-up." : "Set GEMINI_API_KEY in the Docker environment to make this available."}
+        </div></span>
+      </label>
+      <div style={{ ...note, marginTop: 6 }}>
         Emailed password reset: {SETTINGS.passwordResetEmail ? "available (mail server and APP_URL are configured)." : "not available. Set SMTP_HOST and APP_URL in the Docker environment to enable the “Forgot password?” link."}
       </div>
     </Panel>

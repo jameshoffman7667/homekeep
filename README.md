@@ -8,6 +8,8 @@
 > names throughout this file. That's expected for now — only the product
 > name shown to users has changed.
 
+> **v2.3 note:** the PM setup wizard now draws on one combined catalogue (Type and sub type filters), the Alarms page has a location filter with flashing beacons, and asset/vendor/part forms can fill in from a pasted link (optional Gemini AI via `GEMINI_API_KEY`; Owner Tools → Features).
+>
 > **v2.2 note:** branding, location labels and optional features (such as
 > Home Assistant alarms) are now set by the Owner inside the app (Owner
 > Tools). The earlier "editions" and the `EDITION`/`BRAND_*`/`FEATURE_*`
@@ -64,7 +66,7 @@ The app starts in its original configuration. After you sign in as Owner,
   warning), the six location-level labels (each required, up to 15
   characters, all different), which level is the "site" level, and the word
   used instead of "household". "Reset to defaults" restores the originals.
-- **Features:** Home Assistant alarms on/off.
+- **Features:** Home Assistant alarms on/off; "Fill in from a link" on/off; and, if `GEMINI_API_KEY` is set in the Docker environment, a switch to use Gemini AI for it (the link and the page's text are then sent to Google).
 
 Location labels are display-only (stored data uses stable keys), so they can be
 changed at any time. All of this is included in the Excel backup (Settings sheet).
@@ -467,7 +469,7 @@ The database volume is untouched by any of the above.
   from before the upgrade, sync them (or go online and let them sync)
   **before** upgrading that device's app — a queue under the old name
   won't be picked up after the rename.
-- **Alarm Dashboard (v1.8)** — the PM-checklist-triggered and manual
+- **Alarms page (v1.8, renamed in v2.3)** — the PM-checklist-triggered and manual
   alarm paths are additive on top of v1.7's Home Assistant webhook;
   everything noted above about alarms not being included in the Excel
   backup/restore, and about the open-alarm badge being polled rather

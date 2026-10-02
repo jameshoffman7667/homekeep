@@ -10,6 +10,7 @@ const { hashPassword, verifyPassword, signToken, requireAuth, requireOwner, make
 const { startNotificationScheduler, mailEnabled, sendMail } = require("./notify");
 const { FEATURES } = require("./features");
 const settings = require("./settings");
+const prefill = require("./prefill");
 const { runMigrations } = require("./migrate");
 const backup = require("./backup");
 const crypto = require("crypto");
@@ -62,8 +63,11 @@ const COOKIE_OPTS = {
 // Public (pre-login) config: Owner-managed brand, colours, terminology and
 // feature toggles (v2.2), plus whether the emailed password reset is available.
 const passwordResetAvailable = () => mailEnabled() && !!(process.env.APP_URL || "").trim();
+// Extra public flags: password reset availability and whether a Gemini key is
+// configured (only yes/no, never the key itself).
+const configExtra = () => ({ passwordResetEmail: passwordResetAvailable(), geminiKeyDetected: prefill.geminiAvailable() });
 app.get("/api/config", (req, res) => {
-  res.json(settings.publicConfig({ passwordResetEmail: passwordResetAvailable() }));
+  res.json(settings.publicConfig(configExtra()));
 });
 
 app.get("/api/auth/setup-status", (req, res) => {
@@ -231,22 +235,22 @@ app.put("/api/settings", requireAuth, requireOwner, (req, res) => {
   const v = settings.validate(req.body || {});
   if (!v.ok) return res.status(400).json({ error: v.errors.join(". "), errors: v.errors });
   settings.save(v.settings);
-  res.json(settings.publicConfig({ passwordResetEmail: passwordResetAvailable() }));
+  res.json(settings.publicConfig(configExtra()));
 });
 app.post("/api/settings/reset", requireAuth, requireOwner, (req, res) => {
   settings.resetToDefaults();
-  res.json(settings.publicConfig({ passwordResetEmail: passwordResetAvailable() }));
+  res.json(settings.publicConfig(configExtra()));
 });
 app.put("/api/settings/logo", requireAuth, requireOwner, (req, res) => {
   const dataUrl = (req.body || {}).dataUrl;
   const v = settings.validateLogo(dataUrl);
   if (!v.ok) return res.status(400).json({ error: v.error });
   settings.setLogo(dataUrl);
-  res.json(settings.publicConfig({ passwordResetEmail: passwordResetAvailable() }));
+  res.json(settings.publicConfig(configExtra()));
 });
 app.delete("/api/settings/logo", requireAuth, requireOwner, (req, res) => {
   settings.clearLogo();
-  res.json(settings.publicConfig({ passwordResetEmail: passwordResetAvailable() }));
+  res.json(settings.publicConfig(configExtra()));
 });
 // Public: the logo is shown on the login screen. Served as an image only
 // (nosniff + a sandboxing CSP so an SVG can never run script).
@@ -258,6 +262,30 @@ app.get("/api/logo", (req, res) => {
   res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox");
   res.setHeader("Cache-Control", "public, max-age=3600");
   res.send(logo.buf);
+});
+
+/* -------------------------------------------------------------
+   Link pre-fill (v2.3): suggest asset / vendor / part fields from a web
+   page. Guests can't create records so they can't use it either.
+------------------------------------------------------------- */
+const prefillLimiter = makeLimiter({ max: 30, windowMs: 10 * 60 * 1000 });
+app.post("/api/prefill", requireAuth, async (req, res) => {
+  const cfg = settings.current();
+  if (!cfg.features.linkPrefill) return res.status(404).json({ error: "Link pre-fill is turned off" });
+  if (req.user.role === "Guest") return res.status(403).json({ error: "Guests can't use link pre-fill" });
+  const key = String(req.user.id);
+  const wait = prefillLimiter.check(key);
+  if (wait) return res.status(429).json({ error: `Too many link look-ups. Try again in ${Math.ceil(wait / 60)} minute(s).` });
+  prefillLimiter.fail(key);
+  const { url, kind } = req.body || {};
+  try {
+    const r = await prefill.prefill(url, kind, { useAi: !!cfg.features.linkPrefillAi });
+    res.json(r);
+  } catch (e) {
+    if (e && e.userFacing) return res.status(400).json({ error: e.message });
+    console.error("prefill failed:", e && e.message);
+    res.status(502).json({ error: "Couldn't read that page." });
+  }
 });
 
 /* -------------------------------------------------------------

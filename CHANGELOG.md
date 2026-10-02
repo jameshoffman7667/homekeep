@@ -19,6 +19,13 @@ the Git commit's summary line) and a **Commit extended description**
 
 ---
 
+## v2.3
+
+**Commit short description:** `v2.3: Catalogue types, alarm beacons, link fill`
+
+**Commit extended description:**
+v2.3 merges the Home and Facilities PM starter templates into one catalogue (about 300 entries) with a Type column and sub type (category); the PM wizard and the Owner editor filter by Type, sub type and search, and Type/category round-trip in the Excel sheet. Existing customised catalogues are untouched. "Alarm Dashboard" is renamed "Alarms" and gains the location tree filter, with red flashing beacons at each location holding an open alarm and at every parent above it. The left navigation bar now always uses the light-mode primary colour. Asset, vendor and part forms get "Fill in from a link": the server fetches the page (SSRF-protected: private/loopback/metadata addresses, redirects, size and time limits) and fills empty fields, each with a clear (x). Optional Gemini refinement needs `GEMINI_API_KEY` plus an Owner toggle. Owner Tools > Features gains both toggles; they are included in the Settings sheet. New env: GEMINI_API_KEY, GEMINI_MODEL. Not build-tested in the authoring sandbox.
+
 ## v2.2
 
 **Commit short description:** `v2.2: Workflow, settings, backup, passwords`

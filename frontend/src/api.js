@@ -76,6 +76,7 @@ export const api = {
   getConfig: () => request("/api/config"),
   // Owner-only settings edits (Owner Tools → Branding & Terminology / Features).
   saveSettings: (settings) => request("/api/settings", { method: "PUT", body: JSON.stringify(settings) }),
+  prefillFromLink: (url, kind) => request("/api/prefill", { method: "POST", body: JSON.stringify({ url, kind }) }),
   resetSettings: () => request("/api/settings/reset", { method: "POST" }),
   uploadLogo: (dataUrl) => request("/api/settings/logo", { method: "PUT", body: JSON.stringify({ dataUrl }) }),
   removeLogo: () => request("/api/settings/logo", { method: "DELETE" }),

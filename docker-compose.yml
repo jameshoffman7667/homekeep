@@ -41,6 +41,11 @@ services:
       # newest BACKUP_KEEP (default 7); set BACKUP_SNAPSHOTS=false to turn off.
       - BACKUP_KEEP=${BACKUP_KEEP:-7}
       - BACKUP_SNAPSHOTS=${BACKUP_SNAPSHOTS:-true}
+      # Optional: lets the Owner switch on AI-assisted "fill in from a link"
+      # (Owner Tools -> Features). Read by the server only, never sent to
+      # the browser. Blank = the plain page-details fallback is used.
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_MODEL=${GEMINI_MODEL:-}
       # Name, logo, colours, location labels and feature toggles are set
       # in the app by the Owner (Owner Tools), not here.
     volumes:
