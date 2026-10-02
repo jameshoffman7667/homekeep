@@ -3,6 +3,8 @@
 > **MaintEnhance** (short form "ME") is the product name used throughout.
 > (Versions before v1.8 were called HomeKeep; see CHANGELOG.md.)
 
+> **v2.5.1 note:** first-run setup now asks you to confirm the Owner password, and every password box has a show/hide (eye) button.
+>
 > **v2.5 note:** touch screens can now use the planning calendars (tap a card, tap where it goes), and storage is split into a fast `/data` volume (database) and a slower `/files` volume (photos, snapshots, temp files) — see §9 and `.env.example`.
 >
 > **v2.4 note:** the image, container, volume, repo and database file are now all named `maintenhance` — this is a **fresh-start** release (data from earlier versions is not carried over). Owner Tools is now **Tools** (cards depend on your role). Three optional Owner toggles under Tools → Features add execution-based scheduling and time keeping (Labour assignment with Month/Week/Day views, estimates, crews, hours worked), workforce scheduling (shift templates, schedule and PDF export) and hourly labour assignments. The in-app Help tab serves the training guides from `frontend/public/help/`, with Word copies alongside.

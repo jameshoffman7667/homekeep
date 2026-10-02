@@ -50,6 +50,7 @@ const FONT_HEAD = '"Space Grotesk", sans-serif';
 const FONT_BODY = '"Inter", sans-serif';
 
 const inputStyle = {
+  boxSizing: "border-box", // v2.5.1: padding no longer pushes fields wider than their box
   width: "100%",
   padding: "8px 10px",
   border: `1px solid ${C.line}`,
@@ -759,6 +760,23 @@ function pmBaseScheduleLabel(base, data) {
 /* ============================================================
    SMALL UI PRIMITIVES
 ============================================================ */
+/* v2.5.1 — password box with a show/hide (eye) button. Accepts the usual input props. */
+function PasswordInput({ style, ...rest }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div style={{ position: "relative" }}>
+      <input {...rest} type={show ? "text" : "password"} style={{ ...style, boxSizing: "border-box", paddingRight: 38 }} />
+      <button
+        type="button" onClick={() => setShow((v) => !v)} tabIndex={-1} data-pwtoggle
+        title={show ? "Hide password" : "Show password"} aria-label={show ? "Hide password" : "Show password"} aria-pressed={show}
+        style={{ position: "absolute", right: 4, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: C.inkSoft, padding: 6, display: "flex", alignItems: "center" }}
+      >
+        {show ? <EyeOff size={15} /> : <Eye size={15} />}
+      </button>
+    </div>
+  );
+}
+
 function Field({ label, required, children }) {
   return (
     <div style={{ marginBottom: 12 }}>
@@ -1404,7 +1422,7 @@ function Sidebar({ tab, setTab, open, role, counts, onNavigate }) {
         })}
       </div>
       <div style={{ padding: 14, borderTop: "1px solid rgba(255,255,255,0.12)", fontFamily: FONT_BODY, fontSize: 11, color: "#8FA0AF" }}>
-        v2.5 · matches the MaintEnhance functional spec
+        v2.5.1 · matches the MaintEnhance functional spec
       </div>
     </div>
   );
@@ -5165,7 +5183,7 @@ function MemberManagementInline({ currentUser }) {
       <div style={{ fontFamily: FONT_HEAD, fontSize: 13, fontWeight: 600, color: C.ink, margin: "16px 0 8px" }}>Add a member<InfoTip k="addMember" /></div>
       <div className="hk-grid-3" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
         <Field label="Username" required><input style={inputStyle} value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></Field>
-        <Field label="Temporary password" required><input type="password" style={inputStyle} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} autoComplete="new-password" /></Field>
+        <Field label="Temporary password" required><PasswordInput style={inputStyle} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} autoComplete="new-password" /></Field>
         <Field label="Role">
           <select style={inputStyle} value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
             {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
@@ -7441,6 +7459,7 @@ function AuthScreen({ onAuthed }) {
     try {
       if (mode === "setup") {
         if (password.length < MIN_PASSWORD) { setError(`The password must be at least ${MIN_PASSWORD} characters.`); return; }
+        if (password !== confirmPw) { setError("The two passwords do not match."); return; }
         onAuthed(await api.setup(username, password));
       } else if (mode === "login") {
         onAuthed(await api.login(username, password));
@@ -7496,13 +7515,13 @@ function AuthScreen({ onAuthed }) {
           )}
           {mode !== "forgot" && (
             <Field label={mode === "reset" ? "New password" : "Password"} required>
-              <input type="password" style={inputStyle} value={password} onChange={(e) => setPassword(e.target.value)} required autoFocus={mode === "reset"} autoComplete={mode === "login" ? "current-password" : "new-password"} />
+              <PasswordInput style={inputStyle} value={password} onChange={(e) => setPassword(e.target.value)} required autoFocus={mode === "reset"} autoComplete={mode === "login" ? "current-password" : "new-password"} />
             </Field>
           )}
-          {mode === "reset" && (
-            <Field label="Confirm new password" required><input type="password" style={inputStyle} value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} required autoComplete="new-password" /></Field>
+          {(mode === "reset" || mode === "setup") && (
+            <Field label={mode === "setup" ? "Confirm password" : "Confirm new password"} required><PasswordInput style={inputStyle} value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} required autoComplete="new-password" /></Field>
           )}
-          {(mode === "setup" || mode === "reset") && <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 12 }}>At least {MIN_PASSWORD} characters.{mode === "setup" ? " You can add member accounts later from Owner Tools." : ""}</div>}
+          {(mode === "setup" || mode === "reset") && <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 12 }}>At least {MIN_PASSWORD} characters.{mode === "setup" ? " You can add member accounts later from Tools." : ""}</div>}
           {error && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.rust, marginBottom: 12 }}>{error}</div>}
           <Btn type="submit" variant="primary" disabled={busy}>{busy ? "…" : { setup: "Create account & continue", login: "Sign in", forgot: "Email me a reset link", reset: "Set new password" }[mode]}</Btn>
           {mode === "login" && canReset && (
@@ -7542,9 +7561,9 @@ function ForcedPasswordChange({ user, onDone, onLogout }) {
         Your password was set or reset by the Owner, so it's temporary. Enter it below, then choose a password of your own to continue.
       </div>
       <form onSubmit={submit}>
-        <Field label="Temporary password" required><input type="password" style={inputStyle} value={current} onChange={(e) => setCurrent(e.target.value)} autoFocus required autoComplete="current-password" /></Field>
-        <Field label="New password" required><input type="password" style={inputStyle} value={next} onChange={(e) => setNext(e.target.value)} required autoComplete="new-password" /></Field>
-        <Field label="Confirm new password" required><input type="password" style={inputStyle} value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} required autoComplete="new-password" /></Field>
+        <Field label="Temporary password" required><PasswordInput style={inputStyle} value={current} onChange={(e) => setCurrent(e.target.value)} autoFocus required autoComplete="current-password" /></Field>
+        <Field label="New password" required><PasswordInput style={inputStyle} value={next} onChange={(e) => setNext(e.target.value)} required autoComplete="new-password" /></Field>
+        <Field label="Confirm new password" required><PasswordInput style={inputStyle} value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} required autoComplete="new-password" /></Field>
         <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 12 }}>At least {MIN_PASSWORD} characters, and different from the temporary one.</div>
         {error && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.rust, marginBottom: 12 }}>{error}</div>}
         <div style={{ display: "flex", gap: 8 }}>
@@ -7596,9 +7615,9 @@ function AccountModal({ user, onClose, onUserChanged }) {
       </div>
       <div style={{ borderTop: `1px solid ${C.lineSoft}`, paddingTop: 14 }}>
         <div style={sub}>Change password</div>
-        <Field label="Current password"><input type="password" style={inputStyle} value={current} onChange={(e) => setCurrent(e.target.value)} autoComplete="current-password" /></Field>
-        <Field label="New password"><input type="password" style={inputStyle} value={next} onChange={(e) => setNext(e.target.value)} autoComplete="new-password" /></Field>
-        <Field label="Confirm new password"><input type="password" style={inputStyle} value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} autoComplete="new-password" /></Field>
+        <Field label="Current password"><PasswordInput style={inputStyle} value={current} onChange={(e) => setCurrent(e.target.value)} autoComplete="current-password" /></Field>
+        <Field label="New password"><PasswordInput style={inputStyle} value={next} onChange={(e) => setNext(e.target.value)} autoComplete="new-password" /></Field>
+        <Field label="Confirm new password"><PasswordInput style={inputStyle} value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} autoComplete="new-password" /></Field>
         <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.inkFaint, marginTop: -6, marginBottom: 10 }}>At least {MIN_PASSWORD} characters, different from the current one.</div>
         {pwMsg.text && <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: pwMsg.bad ? C.rust : C.olive, marginBottom: 10 }}>{pwMsg.text}</div>}
         <Btn small variant="primary" onClick={changePw} disabled={busy || !current || !next}>Change password</Btn>

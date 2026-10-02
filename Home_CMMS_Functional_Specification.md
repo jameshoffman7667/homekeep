@@ -330,6 +330,11 @@ Three Owner toggles under Tools → Features, all default off. With all three of
 - **Touch (tap to pick up, tap to place):** on touch screens, tapping a work order card (calendar or side list) or a person's name card picks it up. The card is highlighted and a banner shows what is held, with Open (work orders) and Cancel. Tapping a drop target places it: a calendar day, a person's day cell, a week-number box, or an hour slot in the hourly grid, with the same results and validation as a mouse drop. Tapping the held card again, Cancel, Escape or changing the view puts it down. Touch devices open a work order from the banner's Open button (a tap picks up instead). Mouse behaviour is unchanged.
 - **Split storage:** `DATA_DIR` (default `/data`) holds the database and should be on fast local storage. `FILES_DIR` (default `/files` in the image; falls back to `DATA_DIR`) holds `attachments/`, `backups/` and `tmp/` and may be on slower storage. `ATTACH_DIR`, `BACKUP_DIR` and `TMP_DIR` override individual folders. `docker-compose.yml` mounts two volumes, selectable per host folder with `DATA_PATH` and `FILES_PATH`.
 
+### 3.20 Password entry (v2.5.1)
+- The first-run setup screen (shown when no accounts exist) asks for a username, a password (minimum 8 characters) and a **Confirm password**; the two must match before the Owner account is created.
+- Every password box (setup, sign-in, emailed reset, forced password change, My account, Owner add-member) has an eye button that toggles between hidden and visible text. The state is per box and is not remembered.
+- Form inputs are sized with border-box so they never exceed their container.
+
 ## 4. Non-Functional Requirements
 
 | Category | Requirement |

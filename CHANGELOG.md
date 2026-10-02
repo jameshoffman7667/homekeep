@@ -19,6 +19,13 @@ the Git commit's summary line) and a **Commit extended description**
 
 ---
 
+## v2.5.1
+
+**Commit short description:** `v2.5.1: Confirm password, show/hide password`
+
+**Commit extended description:**
+v2.5.1 improves password entry. The first-run screen that creates the Owner account now has a Confirm password box and refuses to continue unless the two entries match. Every password box now has an eye button to show or hide what was typed: first-run setup, sign-in, emailed-reset, the forced choose-your-own-password screen, My account, and the Owner's add-member form. All input boxes now size to their container (border-box), so they no longer stick out past the edge of their card. The hint on the setup screen now says Tools instead of Owner Tools. The Manager and Owner training guide gains a First-time setup page, and the sign-in, choose-your-own-password and My account pages mention the eye button. No data or setting changes. Tested in a browser harness only, not in a live deployment.
+
 ## v2.5
 
 **Commit short description:** `v2.5: Touch drag-and-drop, split storage`
